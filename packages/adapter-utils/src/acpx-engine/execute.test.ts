@@ -6184,6 +6184,47 @@ describe("ACPX engine sandbox bridge run-disposition seam (fail-closed)", () => 
     expect(closeCalls).toBe(0);
   });
 
+  it("places no remote close call from the settlement snapshot alone, even when the boundary re-read reports a healthy channel", async () => {
+    const sandbox = await setupRemoteSandbox();
+    let closeCalls = 0;
+    const runtime = runtimeWithControlledResult();
+    // A close call with no deadline of its own would hang forever on a dead
+    // channel. The test fails on a nonzero call count instead of timing out.
+    runtime.close = () => {
+      closeCalls += 1;
+      return new Promise(() => {});
+    };
+    // This bridge reports a lost channel only from `settleRunDisposition`,
+    // the method the settlement snapshot calls once at the terminal check.
+    // `readRunDisposition`, the method the end-session boundary re-reads,
+    // reports a healthy channel here. A real bridge never disagrees this
+    // way; the split proves that the settlement snapshot's own
+    // `skipRemoteClose` value, on its own, is what keeps the remote call
+    // from firing.
+    const bridge = {
+      env: {
+        PAPERCLIP_API_URL: "http://127.0.0.1:1",
+        PAPERCLIP_API_KEY: "bridge-token",
+        PAPERCLIP_API_BRIDGE_MODE: "http2_v1",
+      },
+      settleRunDisposition: vi.fn(() => ({ failed: true, lossReason: "provider_exit" })),
+      readRunDisposition: vi.fn(() => ({ failed: false, lossReason: null })),
+      markOrderlyCompletion: vi.fn(),
+      stop: vi.fn(async () => {}),
+    };
+
+    const result = await runRemote(bridge, runtime, sandbox);
+
+    // The settlement snapshot latched the loss from `settleRunDisposition`,
+    // so the terminal fails closed the same way it does when both clauses
+    // agree.
+    expect(result.errorCode).toBe("duplex_channel_lost");
+    // `skipRemoteClose` on the settlement plan is `true` on its own here, so
+    // the end-session step never places the remote close call, regardless
+    // of what the boundary re-read would have reported.
+    expect(closeCalls).toBe(0);
+  });
+
   it("ends a pending handshake with a closed transport-lost code when the duplex channel is lost before ensureSession settles", async () => {
     const sandbox = await setupRemoteSandbox();
     const fake = createFakeBridgeHandle();
