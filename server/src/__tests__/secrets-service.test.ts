@@ -286,6 +286,59 @@ describeEmbeddedPostgres("secretService", () => {
     expect(rows[0]?.companyId).toBe(companyA);
   });
 
+  it("replaceSecretRefsForInstanceTarget serializes two concurrent calls for the same target instead of leaving rows from both companies", async () => {
+    const companyA = await seedCompany("A");
+    const companyB = await seedCompany("B");
+    const svc = secretService(db);
+    const secretA = await svc.create(companyA, {
+      name: `concurrent-key-a-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "a",
+    });
+    const secretB = await svc.create(companyB, {
+      name: `concurrent-key-b-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "b",
+    });
+    const environmentId = randomUUID();
+
+    // Race two calls for the same target and config path, one per company.
+    // Without the transaction-scoped advisory lock, both calls' delete
+    // steps can run before either call's insert commits, so both inserts
+    // survive and leave one row per company behind.
+    await Promise.all([
+      svc.replaceSecretRefsForInstanceTarget(
+        { targetType: "environment", targetId: environmentId },
+        [{ secretId: secretA.id, configPath: "apiKey" }],
+      ),
+      svc.replaceSecretRefsForInstanceTarget(
+        { targetType: "environment", targetId: environmentId },
+        [{ secretId: secretB.id, configPath: "apiKey" }],
+      ),
+    ]);
+
+    const rows = await db
+      .select()
+      .from(companySecretBindings)
+      .where(
+        and(
+          eq(companySecretBindings.targetType, "environment"),
+          eq(companySecretBindings.targetId, environmentId),
+          eq(companySecretBindings.configPath, "apiKey"),
+        ),
+      );
+    expect(rows).toHaveLength(1);
+    expect([companyA, companyB]).toContain(rows[0]?.companyId);
+
+    const binding = await svc.getBindingForTarget({
+      targetType: "environment",
+      targetId: environmentId,
+      configPath: "apiKey",
+    });
+    expect(binding).not.toBeNull();
+    expect(binding?.companyId).toBe(rows[0]?.companyId);
+  });
+
   it("getBindingForTarget fails closed when a race leaves rows from two companies for the same target and config path", async () => {
     const companyA = await seedCompany("A");
     const companyB = await seedCompany("B");

@@ -4579,6 +4579,16 @@ export function secretService(db: Db) {
      * written, and the delete + insert run on one executor, so an invalid
      * ref (deleted or unknown secret) fails the whole call without leaving
      * the target half-bound.
+     *
+     * The delete step removes every row for the target across every
+     * company, then the insert step writes fresh rows under each ref's
+     * owning company. Two concurrent calls for the same target could
+     * otherwise interleave their delete and insert steps and leave one row
+     * per company behind, an ambiguous state `getBindingForTarget` cannot
+     * resolve. A transaction-scoped Postgres advisory lock keyed on the
+     * target serializes concurrent calls for the same target, so this
+     * state cannot occur. Calls for different targets still run
+     * concurrently.
      */
     replaceSecretRefsForInstanceTarget: async (
       target: { targetType: SecretBindingTargetType; targetId: string },
@@ -4591,7 +4601,10 @@ export function secretService(db: Db) {
         projectionClass?: SecretProjectionClass;
         projectionAllowlistKey?: string | null;
       }>,
-      options?: { db?: SecretBindingDb },
+      // The lock this function takes to serialize the delete + insert below
+      // (see the docstring) is transaction-scoped, so a caller-supplied
+      // executor must be a transaction, not a plain `Db`.
+      options?: { db?: DbTransaction },
     ) => {
       const normalizedRefs: Array<{
         companyId: string;
@@ -4633,7 +4646,13 @@ export function secretService(db: Db) {
         });
       }
 
-      const writeBindings = async (executor: SecretBindingDb) => {
+      const writeBindings = async (executor: DbTransaction) => {
+        // Hold this lock for the rest of the transaction so a concurrent
+        // call for the same target waits instead of interleaving its
+        // delete + insert with this one (see the docstring above).
+        await executor.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`secret-binding-target:${target.targetType}:${target.targetId}`}, 0))`,
+        );
         await executor
           .delete(companySecretBindings)
           .where(
