@@ -27,10 +27,8 @@ permissions:
 jobs:
   visual:
     name: Storybook visual regression
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'storybook-visual'))
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: runs-on/fleet=paperclip-public-pr-x64/env=public-ci
     timeout-minutes: 35
 
     steps:
