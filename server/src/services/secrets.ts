@@ -4730,18 +4730,26 @@ export function secretService(db: Db) {
         .then((rows) => [...new Set(rows.map((row) => row.companyId))]),
 
     /**
-     * Read the binding row for one target and one config path, with no known
-     * owning company. `replaceSecretRefsForInstanceTarget` deletes every row
-     * for a target before it writes fresh rows, so at most one row exists for
-     * a given target and config path. Returns null when no row exists, so a
-     * caller can fail closed instead of guessing an owner.
+     * Read the binding row for one target and one config path. The caller
+     * does not know the owning company in advance.
+     *
+     * `replaceSecretRefsForInstanceTarget` deletes every existing row for a
+     * target before it writes fresh rows. So exactly one row should exist
+     * for a given target and config path. A race between two concurrent
+     * replace calls can still leave more than one row behind: each call's
+     * delete step only removes rows that an earlier call had already
+     * committed.
+     *
+     * This function returns null when no row exists. It also returns null
+     * when more than one row exists, so the caller fails closed instead of
+     * guessing an owner among rows left by a race.
      */
     getBindingForTarget: async (input: {
       targetType: SecretBindingTargetType;
       targetId: string;
       configPath: string;
-    }): Promise<{ companyId: string; secretId: string } | null> =>
-      db
+    }): Promise<{ companyId: string; secretId: string } | null> => {
+      const rows = await db
         .select({ companyId: companySecretBindings.companyId, secretId: companySecretBindings.secretId })
         .from(companySecretBindings)
         .where(
@@ -4750,8 +4758,22 @@ export function secretService(db: Db) {
             eq(companySecretBindings.targetId, input.targetId),
             eq(companySecretBindings.configPath, input.configPath),
           ),
-        )
-        .then((rows) => rows[0] ?? null),
+        );
+      if (rows.length === 0) return null;
+      if (rows.length > 1) {
+        logger.warn(
+          {
+            targetType: input.targetType,
+            targetId: input.targetId,
+            configPath: input.configPath,
+            rowCount: rows.length,
+          },
+          "multiple owner rows found for one environment binding target and config path; failing closed",
+        );
+        return null;
+      }
+      return rows[0];
+    },
 
     syncEnvBindingsForTarget: async (
       companyId: string,
