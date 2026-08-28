@@ -52,3 +52,54 @@ export const capsuleHeroMotion = {
     opacity: { duration: 0.55, ease: STEP_EASE },
   },
 };
+
+/**
+ * The credential tag's swap between "Subscription" and "API" on the connect
+ * step's source tiles.
+ *
+ * Both labels share one clipped slot and cross inside it: the outgoing one
+ * always falls out of frame while the incoming one rises into place. Fixing the
+ * direction is the point — deriving it from which way the toggle moved would
+ * make one control produce two different animations, and at 10px the tag is far
+ * too small for that to read as anything but a flicker.
+ *
+ * The exit stays 80ms shorter than the enter so the slot has mostly cleared by
+ * the time the arriving label reaches the middle of it, rather than the two
+ * words being legible on top of each other. Both moved together when the swap
+ * was lengthened, which is what keeps that relationship: stretching only the
+ * enter would have opened the gap instead, and the swap would read as one label
+ * leaving and a separate one arriving.
+ *
+ * Eased in and out — the house material curve, mirroring
+ * `--motion-ease-standard` — rather than the arc's expo-out. Expo-out leaves at
+ * full speed from the first frame, which suits something arriving from
+ * offscreen; over 7px it just looked like the label snapped and then settled.
+ * Easing into the movement gives the swap a beginning.
+ */
+export const TAG_SWAP_TRAVEL = 7;
+export const TAG_SWAP_EASE = [0.4, 0, 0.2, 1] as const;
+export const TAG_SWAP_ENTER = { duration: 0.34, ease: TAG_SWAP_EASE } as const;
+export const TAG_SWAP_EXIT = { duration: 0.26, ease: TAG_SWAP_EASE } as const;
+
+/**
+ * The credential-mode link's own label swap, when that control is a line of
+ * text rather than a checkbox.
+ *
+ * A plain crossfade, with no travel — deliberately unlike the tag it triggers.
+ * The tag slides because it is being replaced inside a slot it shares with the
+ * label before it; the link is not replaced, it is one control renaming itself,
+ * and giving it the same movement would read as a second thing changing rather
+ * than the cause of the first.
+ *
+ * The old label leaves quickly and the new one starts once it is nearly gone,
+ * so the two are never both readable — two near-identical sentences at half
+ * opacity are unreadable in a way two single words are not. Even with the
+ * stagger it settles just inside the tag swap, so the sentence and the tags
+ * finish together.
+ */
+export const LINK_LABEL_FADE_OUT = { duration: 0.12, ease: TAG_SWAP_EASE } as const;
+export const LINK_LABEL_FADE_IN = {
+  duration: 0.22,
+  delay: 0.08,
+  ease: TAG_SWAP_EASE,
+} as const;
