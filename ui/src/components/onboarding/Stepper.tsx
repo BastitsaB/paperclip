@@ -23,6 +23,38 @@ export const AGENT_ARC_STEP_LABELS = [
 export const AGENT_ARC_WIZARD_STEPS = [3, 4, 5] as const;
 
 /**
+ * The full walk, for a run that started at the front door rather than partway
+ * into the arc.
+ *
+ * Step 2 is absent: onboarding no longer asks for the mission, so a segment for
+ * it would be one the run can never fill. The run still passes *through* step 2
+ * on the "grow" path, which is why position is counted rather than looked up —
+ * see `onboardingStepPositionFor`.
+ */
+export const ONBOARDING_WIZARD_STEPS = [1, 3, 4, 5] as const;
+
+/** Destinations for the full walk, in the same order. */
+export const ONBOARDING_STEP_LABELS = [
+  "Name your organization",
+  "Create your first agent",
+  "Connect a model",
+  "Review",
+] as const;
+
+/**
+ * Position in the full walk: how many of its steps are at or behind `step`.
+ *
+ * Counted rather than indexed because the wizard visits steps the strip does
+ * not draw. On the mission step there is no segment to be "on", and an index
+ * lookup would return nothing and light none of them — reporting no progress
+ * from a screen the customer reached by making progress. Counting keeps the
+ * strip on the last segment actually completed.
+ */
+export function onboardingStepPositionFor(step: number): number {
+  return ONBOARDING_WIZARD_STEPS.filter((entry) => entry <= step).length;
+}
+
+/**
  * Map a wizard step onto its position in the arc, or `null` when the step is
  * outside it.
  *
@@ -59,11 +91,19 @@ export function agentArcStepFor(wizardStep: number): number | null {
 export function Stepper({
   step,
   total = AGENT_ARC_TOTAL_STEPS,
+  labels = AGENT_ARC_STEP_LABELS,
   canJumpToStep,
   onJumpToStep,
 }: {
   step: number;
   total?: number;
+  /**
+   * What each segment goes to. Defaults to the arc's three; the full walk from
+   * the front door passes its own four, since the same strip serves both and a
+   * segment announcing "Create your first agent" on the organization step would
+   * be worse than a bare number.
+   */
+  labels?: readonly string[];
   canJumpToStep?: (target: number) => boolean;
   onJumpToStep?: (target: number) => void;
 }) {
@@ -75,7 +115,7 @@ export function Stepper({
           <button
             key={segment}
             type="button"
-            aria-label={AGENT_ARC_STEP_LABELS[segment - 1] ?? `Step ${segment}`}
+            aria-label={labels[segment - 1] ?? `Step ${segment}`}
             aria-current={segment === step ? "step" : undefined}
             disabled={!jumpable}
             onClick={() => jumpable && onJumpToStep?.(segment)}

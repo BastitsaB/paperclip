@@ -83,7 +83,14 @@ import {
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
 import { FrontDoor } from "./FrontDoor";
 import { PillGuy } from "./onboarding/PillGuy";
-import { AGENT_ARC_WIZARD_STEPS, Stepper, agentArcStepFor } from "./onboarding/Stepper";
+import {
+  AGENT_ARC_WIZARD_STEPS,
+  ONBOARDING_STEP_LABELS,
+  ONBOARDING_WIZARD_STEPS,
+  Stepper,
+  agentArcStepFor,
+  onboardingStepPositionFor,
+} from "./onboarding/Stepper";
 import { AgentPreview } from "./onboarding/AgentPreview";
 import { FooterNav } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
@@ -1773,13 +1780,19 @@ function OnboardingWizardInner({
           >
             <div
               className={cn(
+                // my-auto, not items-center on the column: they look identical
+                // until a step is taller than the window, where centring by
+                // alignment overflows in both directions and the top cannot be
+                // scrolled to. Auto margins collapse to zero with no free space.
                 "mx-auto my-auto shrink-0",
-                // The arc sits in the prototype's card frame; the earlier steps
-                // keep the split-panel layout they were designed for. One
-                // element styled two ways, not two wrappers, so the step
-                // content below renders exactly once.
+                // No card. The steps sit on the page ground rather than in a
+                // bordered, filled frame — the frame was drawing a box around
+                // content that is already the only thing on screen, and its
+                // edge competed with the tiles' own strokes. The two branches
+                // now differ only in measure. One element styled two ways, not
+                // two wrappers, so the step content below renders exactly once.
                 isAgentArcStep
-                  ? "w-(--sz-560px) max-w-full rounded-xl border border-border bg-card px-8 py-10 sm:px-10 sm:py-11"
+                  ? "w-(--sz-560px) max-w-full px-8 py-10 sm:px-10 sm:py-11"
                   : "w-full max-w-md px-8 py-12",
               )}
             >
@@ -1794,31 +1807,21 @@ function OnboardingWizardInner({
                   a segment for it would be one the run can never fill, and the
                   count would visibly skip from 1 to 3. */}
               {!showsAgentArcStepper && (
-              <div className="flex items-center gap-1.5 mb-8">
-                {([1, 3, 4, 5] as const).map((s) => {
-                  const filled = step >= s;
-                  const canJump = canJumpToOnboardingStep({
-                    targetStep: s,
-                    currentStep: step,
-                    entryStep,
-                  });
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      aria-label={`Step ${s}`}
-                      aria-current={s === step ? "step" : undefined}
-                      disabled={!canJump}
-                      onClick={() => canJump && setStep(s as Step)}
-                      className={cn(
-                        "h-1 flex-1 rounded-full transition-colors",
-                        filled ? "bg-foreground" : "bg-muted",
-                        canJump ? "cursor-pointer" : "cursor-default"
-                      )}
-                    />
-                  );
-                })}
-              </div>
+                <Stepper
+                  step={onboardingStepPositionFor(step)}
+                  total={ONBOARDING_WIZARD_STEPS.length}
+                  labels={ONBOARDING_STEP_LABELS}
+                  canJumpToStep={(target) =>
+                    canJumpToOnboardingStep({
+                      targetStep: ONBOARDING_WIZARD_STEPS[target - 1]!,
+                      currentStep: step,
+                      entryStep,
+                    })
+                  }
+                  onJumpToStep={(target) =>
+                    setStep(ONBOARDING_WIZARD_STEPS[target - 1]! as Step)
+                  }
+                />
               )}
 
               {/* The agent arc's progress strip. Numbered 1–3 over the wizard's
