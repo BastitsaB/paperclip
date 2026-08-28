@@ -334,12 +334,13 @@ describeEmbeddedPostgres("secretService", () => {
       targetType: "environment",
       targetId: environmentId,
       configPath: "apiKey",
+      secretId: rows[0]!.secretId,
     });
     expect(binding).not.toBeNull();
     expect(binding?.companyId).toBe(rows[0]?.companyId);
   });
 
-  it("getBindingForTarget fails closed when a race leaves rows from two companies for the same target and config path", async () => {
+  it("getBindingForTarget resolves a duplicate binding row by matching the exact secret id", async () => {
     const companyA = await seedCompany("A");
     const companyB = await seedCompany("B");
     const svc = secretService(db);
@@ -381,16 +382,41 @@ describeEmbeddedPostgres("secretService", () => {
       },
     ]);
 
-    const binding = await svc.getBindingForTarget({
+    // The stored config value picks which of the two leftover rows is the
+    // real owner. Filtering by that exact secret id resolves the row
+    // instead of failing closed on the duplicate.
+    const bindingA = await svc.getBindingForTarget({
       targetType: "environment",
       targetId: environmentId,
       configPath: "apiKey",
+      secretId: secretA.id,
     });
+    expect(bindingA).toEqual({ companyId: companyA, secretId: secretA.id });
 
-    expect(binding).toBeNull();
+    const bindingB = await svc.getBindingForTarget({
+      targetType: "environment",
+      targetId: environmentId,
+      configPath: "apiKey",
+      secretId: secretB.id,
+    });
+    expect(bindingB).toEqual({ companyId: companyB, secretId: secretB.id });
+
+    // A secret id that matches neither leftover row still fails closed.
+    const secretC = await svc.create(companyA, {
+      name: `race-key-c-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "c",
+    });
+    const bindingC = await svc.getBindingForTarget({
+      targetType: "environment",
+      targetId: environmentId,
+      configPath: "apiKey",
+      secretId: secretC.id,
+    });
+    expect(bindingC).toBeNull();
   });
 
-  it("getBindingForTarget returns the single row for a target and config path", async () => {
+  it("getBindingForTarget returns the single row for a target, config path, and secret id", async () => {
     const companyId = await seedCompany();
     const svc = secretService(db);
     const secret = await svc.create(companyId, {
@@ -411,6 +437,7 @@ describeEmbeddedPostgres("secretService", () => {
       targetType: "environment",
       targetId: environmentId,
       configPath: "apiKey",
+      secretId: secret.id,
     });
 
     expect(binding).toEqual({ companyId, secretId: secret.id });

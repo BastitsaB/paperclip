@@ -4584,11 +4584,11 @@ export function secretService(db: Db) {
      * company, then the insert step writes fresh rows under each ref's
      * owning company. Two concurrent calls for the same target could
      * otherwise interleave their delete and insert steps and leave one row
-     * per company behind, an ambiguous state `getBindingForTarget` cannot
-     * resolve. A transaction-scoped Postgres advisory lock keyed on the
-     * target serializes concurrent calls for the same target, so this
-     * state cannot occur. Calls for different targets still run
-     * concurrently.
+     * per company behind. `getBindingForTarget` resolves that leftover
+     * state by matching on the exact secret id, but this lock still stops
+     * new leftover rows: it serializes concurrent calls for the same
+     * target, so the state cannot occur going forward. Calls for different
+     * targets still run concurrently.
      */
     replaceSecretRefsForInstanceTarget: async (
       target: { targetType: SecretBindingTargetType; targetId: string },
@@ -4749,24 +4749,30 @@ export function secretService(db: Db) {
         .then((rows) => [...new Set(rows.map((row) => row.companyId))]),
 
     /**
-     * Read the binding row for one target and one config path. The caller
-     * does not know the owning company in advance.
+     * Read the binding row for one target, one config path, and the secret
+     * the caller's stored config currently references. The caller does not
+     * know the owning company in advance.
      *
      * `replaceSecretRefsForInstanceTarget` deletes every existing row for a
-     * target before it writes fresh rows. So exactly one row should exist
+     * target before it writes fresh rows, so exactly one row should exist
      * for a given target and config path. A race between two concurrent
-     * replace calls can still leave more than one row behind: each call's
-     * delete step only removes rows that an earlier call had already
-     * committed.
+     * replace calls (or an old row left over from before that function's
+     * advisory lock started serializing those calls) can still leave more
+     * than one row behind. Each surviving row belongs to a different
+     * secret, because the two calls' inserts each ran with a different ref.
+     * A secret belongs to exactly one company, so filtering by the exact
+     * secret id resolves that ambiguity: at most one row can match the
+     * target, the config path, and the secret id together.
      *
-     * This function returns null when no row exists. It also returns null
-     * when more than one row exists, so the caller fails closed instead of
-     * guessing an owner among rows left by a race.
+     * This function returns null when no row matches. It also returns null,
+     * and logs a warning, in the case the schema does not allow: two rows
+     * for the same secret id under different companies.
      */
     getBindingForTarget: async (input: {
       targetType: SecretBindingTargetType;
       targetId: string;
       configPath: string;
+      secretId: string;
     }): Promise<{ companyId: string; secretId: string } | null> => {
       const rows = await db
         .select({ companyId: companySecretBindings.companyId, secretId: companySecretBindings.secretId })
@@ -4776,6 +4782,7 @@ export function secretService(db: Db) {
             eq(companySecretBindings.targetType, input.targetType),
             eq(companySecretBindings.targetId, input.targetId),
             eq(companySecretBindings.configPath, input.configPath),
+            eq(companySecretBindings.secretId, input.secretId),
           ),
         );
       if (rows.length === 0) return null;
@@ -4785,9 +4792,10 @@ export function secretService(db: Db) {
             targetType: input.targetType,
             targetId: input.targetId,
             configPath: input.configPath,
+            secretId: input.secretId,
             rowCount: rows.length,
           },
-          "multiple owner rows found for one environment binding target and config path; failing closed",
+          "multiple owner rows found for one environment binding target, config path, and secret; failing closed",
         );
         return null;
       }

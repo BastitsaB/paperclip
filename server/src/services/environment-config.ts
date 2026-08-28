@@ -324,15 +324,19 @@ async function resolveConfigSecretRefsForRuntime(input: {
     // Resolve with the company that the environment's own binding row records
     // as the secret's owner, not with the requesting company, so a shared
     // environment's credential authorizes correctly for every company that
-    // leases it. A missing or mismatched binding row means the current config
-    // value carries no recorded owner, so resolution fails closed instead of
+    // leases it. The lookup is scoped to the exact secret this config path
+    // currently references, so a duplicate binding row left over from an
+    // old write race still resolves to the one owner that matches the
+    // stored value. A missing binding row means the current config value
+    // carries no recorded owner, so resolution fails closed instead of
     // falling back to the requesting company.
     const binding = await secrets.getBindingForTarget({
       targetType: "environment",
       targetId: input.context.consumerId,
       configPath: path,
+      secretId: trimmed,
     });
-    if (!binding || binding.secretId !== trimmed) {
+    if (!binding) {
       throw await environmentProviderCredentialUnavailableError({
         db: input.db,
         environmentId: input.context.consumerId,
