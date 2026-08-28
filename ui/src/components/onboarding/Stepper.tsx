@@ -11,7 +11,7 @@ export const AGENT_ARC_TOTAL_STEPS = 3;
  * What each segment goes to. These are the labels assistive tech reads, in
  * place of a bare number: the wizard has its own step numbering, and two
  * controls both announcing "Step 1" while meaning different steps is worse
- * than no number at all. The visible "Step N of 3" line carries the count.
+ * than no number at all. The strip's own "Step N of 3" line carries the count.
  */
 export const AGENT_ARC_STEP_LABELS = [
   "Create your first agent",
@@ -40,7 +40,14 @@ export function agentArcStepFor(wizardStep: number): number | null {
 }
 
 /**
- * Segmented progress strip with a "Step N of M" label.
+ * Segmented progress strip: three dots, centred over the step's own centred
+ * hero and heading.
+ *
+ * The "Step N of M" count is announced but not drawn. Three dots at this size
+ * are read in a glance — there is no counting to help with — so the line was
+ * spending a whole row, and the only left-aligned element on an otherwise
+ * centred step, to restate what the dots already say. Assistive tech has no
+ * glance, so the sentence stays in the accessibility tree.
  *
  * Segments double as the way back to a step already completed, which is the
  * affordance the wizard's full-length bar provides outside the arc. A segment
@@ -61,32 +68,32 @@ export function Stepper({
   onJumpToStep?: (target: number) => void;
 }) {
   return (
-    <div className="mb-7 flex flex-col items-start gap-3.5">
-      <div className="flex items-center gap-2">
-        {Array.from({ length: total }, (_, index) => index + 1).map((segment) => {
-          const jumpable = Boolean(canJumpToStep?.(segment) && onJumpToStep);
-          return (
-            <button
-              key={segment}
-              type="button"
-              aria-label={AGENT_ARC_STEP_LABELS[segment - 1] ?? `Step ${segment}`}
-              aria-current={segment === step ? "step" : undefined}
-              disabled={!jumpable}
-              onClick={() => jumpable && onJumpToStep?.(segment)}
-              className={cn(
-                // Dots, not bars: three of them, left-aligned, keeping the bar
-                // strip's gap so the rhythm is unchanged. A full-width bar implied
-                // a continuous quantity — how much of the arc is done — which three
-                // discrete steps do not have.
-                "size-(--sz-3px) shrink-0 rounded-full transition-colors",
-                segment <= step ? "bg-foreground" : "bg-border",
-                jumpable ? "cursor-pointer" : "cursor-default",
-              )}
-            />
-          );
-        })}
-      </div>
-      <span className="text-(length:--text-micro) font-medium uppercase tracking-widest text-muted-foreground">
+    <div className="mb-7 flex items-center justify-center gap-2">
+      {Array.from({ length: total }, (_, index) => index + 1).map((segment) => {
+        const jumpable = Boolean(canJumpToStep?.(segment) && onJumpToStep);
+        return (
+          <button
+            key={segment}
+            type="button"
+            aria-label={AGENT_ARC_STEP_LABELS[segment - 1] ?? `Step ${segment}`}
+            aria-current={segment === step ? "step" : undefined}
+            disabled={!jumpable}
+            onClick={() => jumpable && onJumpToStep?.(segment)}
+            className={cn(
+              // Dots, not bars: three of them, keeping the bar strip's gap so
+              // the rhythm is unchanged. A full-width bar implied a continuous
+              // quantity — how much of the arc is done — which three discrete
+              // steps do not have. At 6px they carry the row on their own now
+              // that no label sits under them.
+              "size-1.5 shrink-0 rounded-full transition-colors",
+              segment <= step ? "bg-foreground" : "bg-border",
+              jumpable ? "cursor-pointer" : "cursor-default",
+            )}
+          />
+        );
+      })}
+      {/* Out of flow, so it neither takes a row nor picks up the gap. */}
+      <span className="sr-only">
         Step {step} of {total}
       </span>
     </div>
