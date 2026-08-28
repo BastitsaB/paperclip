@@ -590,6 +590,14 @@ type SecretConsumerContext = {
   heartbeatRunId?: string | null;
   pluginId?: string | null;
   allowedBindingIds?: string[] | null;
+  /**
+   * The company that made this resolution request, when it can differ from
+   * the resolution `companyId` (the secret's owner). A shared, instance-scoped
+   * environment can resolve a provider credential another company owns; the
+   * access-event record then tags the requester as the credential subject, so
+   * the row shows which company used another company's credential.
+   */
+  requestingCompanyId?: string | null;
 };
 
 type SecretBindingContext = Omit<SecretConsumerContext, "consumerType"> & {
@@ -1309,6 +1317,13 @@ export function secretService(db: Db) {
   ): Promise<RuntimeSecretResolution> {
     const bindingContext = options?.bindingContext;
     const accessContext = options?.accessContext ?? bindingContext;
+    // A requester that differs from the resolution company used another
+    // company's credential. Record that requester as the credential subject,
+    // so the access event shows the cross-company use.
+    const crossCompanyRequesterId =
+      accessContext?.requestingCompanyId && accessContext.requestingCompanyId !== companyId
+        ? accessContext.requestingCompanyId
+        : null;
     const secret = await getById(secretId);
     if (!secret) throw notFound("Secret not found");
     if (secret.companyId !== companyId) throw unprocessable("Secret must belong to same company");
@@ -1366,8 +1381,8 @@ export function secretService(db: Db) {
           provider: providerId,
           context: accessContext,
           credentialOwnerUserId: secret.ownerUserId ?? null,
-          credentialSubjectType: secret.scope === "user" ? "user" : null,
-          credentialSubjectId: secret.ownerUserId ?? null,
+          credentialSubjectType: crossCompanyRequesterId ? "company" : secret.scope === "user" ? "user" : null,
+          credentialSubjectId: crossCompanyRequesterId ?? secret.ownerUserId ?? null,
           outcome: "success",
         }).catch(() => undefined),
       ]);
@@ -1396,8 +1411,8 @@ export function secretService(db: Db) {
         provider: providerId,
         context: accessContext,
         credentialOwnerUserId: secret.ownerUserId ?? null,
-        credentialSubjectType: secret.scope === "user" ? "user" : null,
-        credentialSubjectId: secret.ownerUserId ?? null,
+        credentialSubjectType: crossCompanyRequesterId ? "company" : secret.scope === "user" ? "user" : null,
+        credentialSubjectId: crossCompanyRequesterId ?? secret.ownerUserId ?? null,
         outcome: "failure",
         errorCode,
       }).catch(() => undefined);
@@ -4713,6 +4728,30 @@ export function secretService(db: Db) {
           ),
         )
         .then((rows) => [...new Set(rows.map((row) => row.companyId))]),
+
+    /**
+     * Read the binding row for one target and one config path, with no known
+     * owning company. `replaceSecretRefsForInstanceTarget` deletes every row
+     * for a target before it writes fresh rows, so at most one row exists for
+     * a given target and config path. Returns null when no row exists, so a
+     * caller can fail closed instead of guessing an owner.
+     */
+    getBindingForTarget: async (input: {
+      targetType: SecretBindingTargetType;
+      targetId: string;
+      configPath: string;
+    }): Promise<{ companyId: string; secretId: string } | null> =>
+      db
+        .select({ companyId: companySecretBindings.companyId, secretId: companySecretBindings.secretId })
+        .from(companySecretBindings)
+        .where(
+          and(
+            eq(companySecretBindings.targetType, input.targetType),
+            eq(companySecretBindings.targetId, input.targetId),
+            eq(companySecretBindings.configPath, input.configPath),
+          ),
+        )
+        .then((rows) => rows[0] ?? null),
 
     syncEnvBindingsForTarget: async (
       companyId: string,

@@ -305,6 +305,81 @@ describe("probeEnvironment", () => {
     expect(mockRuntimeReleaseRunLease).not.toHaveBeenCalled();
   });
 
+  it("boots a runtime lease for a second company on a shared unbound environment", async () => {
+    // The probe adds no company-specific gating of its own: it forwards
+    // `companyId` straight to the runtime and trusts the runtime's own
+    // mandatory binding check. An unbound (instance-global) environment
+    // succeeds for any company, including one that does not own it.
+    mockRuntimeAcquireRunLease.mockResolvedValue({
+      environment: {},
+      leaseContext: {
+        executionWorkspaceId: null,
+        executionWorkspaceMode: null,
+      },
+      lease: {
+        id: "lease-2",
+        companyId: "company-2",
+        environmentId: "env-sandbox-shared",
+        executionWorkspaceId: null,
+        issueId: null,
+        heartbeatRunId: null,
+        status: "active",
+        leasePolicy: "ephemeral",
+        provider: "daytona",
+        providerLeaseId: "sandbox-runtime-2",
+        acquiredAt: new Date(),
+        lastUsedAt: new Date(),
+        expiresAt: null,
+        releasedAt: null,
+        failureReason: null,
+        cleanupStatus: "pending",
+        metadata: {
+          provider: "daytona",
+          sandboxName: "paperclip-probe-shared",
+          reuseLease: false,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    const environment = {
+      id: "env-sandbox-shared",
+      companyId: "company-1",
+      name: "Shared Daytona",
+      description: null,
+      driver: "sandbox" as const,
+      status: "active" as const,
+      config: {
+        provider: "daytona",
+        image: "daytonaio/sandbox:0.8.0",
+        reuseLease: true,
+      },
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await probeEnvironment({} as any, environment, {
+      companyId: "company-2",
+      pluginWorkerManager: {} as any,
+      acquireSandboxRuntimeLease: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      driver: "sandbox",
+      summary: "Connected to daytona sandbox paperclip-probe-shared.",
+    });
+    expect(mockRuntimeAcquireRunLease).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-2",
+    }));
+    expect(mockRuntimeReleaseRunLease).toHaveBeenCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({ id: "lease-2" }),
+      status: "released",
+    }));
+  });
+
   it("routes plugin environment probes through the plugin worker host", async () => {
     mockProbePluginEnvironmentDriver.mockResolvedValue({
       ok: true,

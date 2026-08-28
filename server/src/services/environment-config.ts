@@ -16,6 +16,7 @@ import type {
 import { unprocessable } from "../errors.js";
 import { parseObject } from "../adapters/utils.js";
 import { secretService } from "./secrets.js";
+import { environmentService } from "./environments.js";
 import {
   resolvePluginSandboxProviderDriverByKey,
   validatePluginEnvironmentDriverConfig,
@@ -277,6 +278,26 @@ async function persistConfigSecretRefs(input: {
   return nextConfig;
 }
 
+/**
+ * Build the named, scrubbed error for an environment provider credential that
+ * cannot resolve. The message names the environment and a short reason. It
+ * never carries the secret id, the owning company id, the config path, or a
+ * stack trace, so an onboarding user in another company never sees another
+ * tenant's identifiers.
+ */
+async function environmentProviderCredentialUnavailableError(input: {
+  db: Db;
+  environmentId: string;
+  reason: string;
+}) {
+  const environment = await environmentService(input.db).getById(input.environmentId);
+  const label = environment?.name ?? input.environmentId;
+  return unprocessable(
+    `Environment "${label}" has no working provider credential: ${input.reason}.`,
+    { code: "environment_provider_credential_unavailable" },
+  );
+}
+
 async function resolveConfigSecretRefsForRuntime(input: {
   db: Db;
   companyId: string;
@@ -298,10 +319,29 @@ async function resolveConfigSecretRefsForRuntime(input: {
     if (!input.context.consumerId) {
       throw unprocessable("Runtime secret resolution requires an environment id");
     }
-    nextConfig = writeConfigValueAtPath(
-      nextConfig,
-      path,
-      await secrets.resolveSecretValue(input.companyId, trimmed, "latest", {
+    // The execution environment catalog is instance-scoped, so this config can
+    // serve a company that does not own the referenced provider credential.
+    // Resolve with the company that the environment's own binding row records
+    // as the secret's owner, not with the requesting company, so a shared
+    // environment's credential authorizes correctly for every company that
+    // leases it. A missing or mismatched binding row means the current config
+    // value carries no recorded owner, so resolution fails closed instead of
+    // falling back to the requesting company.
+    const binding = await secrets.getBindingForTarget({
+      targetType: "environment",
+      targetId: input.context.consumerId,
+      configPath: path,
+    });
+    if (!binding || binding.secretId !== trimmed) {
+      throw await environmentProviderCredentialUnavailableError({
+        db: input.db,
+        environmentId: input.context.consumerId,
+        reason: "no owner is recorded for this provider credential",
+      });
+    }
+    let resolvedValue: string;
+    try {
+      resolvedValue = await secrets.resolveSecretValue(binding.companyId, trimmed, "latest", {
         consumerType: "environment",
         consumerId: input.context.consumerId,
         actorType: "system",
@@ -309,8 +349,16 @@ async function resolveConfigSecretRefsForRuntime(input: {
         issueId: input.context.issueId ?? null,
         heartbeatRunId: input.context.heartbeatRunId ?? null,
         configPath: path,
-      }),
-    );
+        requestingCompanyId: input.companyId,
+      });
+    } catch {
+      throw await environmentProviderCredentialUnavailableError({
+        db: input.db,
+        environmentId: input.context.consumerId,
+        reason: "the provider credential could not be resolved",
+      });
+    }
+    nextConfig = writeConfigValueAtPath(nextConfig, path, resolvedValue);
   }
   return nextConfig;
 }
