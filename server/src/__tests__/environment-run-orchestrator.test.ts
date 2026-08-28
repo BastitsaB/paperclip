@@ -729,3 +729,45 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     expect(mockResolveEnvironmentExecutionTarget).not.toHaveBeenCalled();
   });
 });
+
+describe("environmentRunOrchestrator — acquireLease", () => {
+  const mockDb = {} as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("propagates a foreign-company binding rejection as lease_acquire_failed and holds no lease", async () => {
+    const mismatchError = Object.assign(new Error("The selected environment belongs to another company."), {
+      status: 403,
+      details: { code: "environment_company_mismatch" },
+    });
+    const runtime = makeMockRuntime({
+      acquireRunLease: vi.fn().mockRejectedValue(mismatchError),
+    });
+    const orchestrator = environmentRunOrchestrator(mockDb, { environmentRuntime: runtime });
+    const environment = makeEnvironment("sandbox");
+
+    await expect(
+      orchestrator.acquireLease({
+        companyId: "company-1",
+        environment,
+        issueId: null,
+        agentId: "agent-1",
+        heartbeatRunId: "run-1",
+        persistedExecutionWorkspace: null,
+        executionWorkspaceSettings: null,
+        adapterType: null,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof EnvironmentRunError &&
+        err.code === "lease_acquire_failed" &&
+        err.cause === mismatchError,
+    );
+
+    // The agent run path calls straight through to the runtime's mandatory
+    // company-binding check; it never bypasses or retries around it.
+    expect(runtime.acquireRunLease).toHaveBeenCalledOnce();
+  });
+});

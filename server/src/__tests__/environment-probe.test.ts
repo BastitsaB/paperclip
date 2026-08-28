@@ -263,6 +263,48 @@ describe("probeEnvironment", () => {
     }));
   });
 
+  it("fails closed and calls no provider when the lease acquire rejects a foreign-company binding", async () => {
+    const mismatchError = Object.assign(new Error("The selected environment belongs to another company."), {
+      status: 403,
+      details: { code: "environment_company_mismatch" },
+    });
+    mockRuntimeAcquireRunLease.mockRejectedValue(mismatchError);
+
+    const environment = {
+      id: "env-sandbox-foreign",
+      companyId: "company-1",
+      name: "Daytona",
+      description: null,
+      driver: "sandbox" as const,
+      status: "active" as const,
+      config: {
+        provider: "daytona",
+        image: "daytonaio/sandbox:0.8.0",
+        reuseLease: true,
+      },
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await probeEnvironment({} as any, environment, {
+      companyId: "company-2",
+      pluginWorkerManager: {} as any,
+      acquireSandboxRuntimeLease: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      driver: "sandbox",
+      details: expect.objectContaining({
+        error: "The selected environment belongs to another company.",
+      }),
+    });
+    // The rejected acquire holds no lease, so the probe releases nothing and
+    // makes no further provider call.
+    expect(mockRuntimeReleaseRunLease).not.toHaveBeenCalled();
+  });
+
   it("routes plugin environment probes through the plugin worker host", async () => {
     mockProbePluginEnvironmentDriver.mockResolvedValue({
       ok: true,

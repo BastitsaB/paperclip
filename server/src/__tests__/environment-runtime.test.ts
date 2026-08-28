@@ -647,7 +647,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({
         status: 403,
@@ -775,7 +774,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
         issueId: null,
         heartbeatRunId: runId,
         persistedExecutionWorkspace: null,
-        assertCompanyBinding: true,
       }),
     ).rejects.toMatchObject({
       status: 403,
@@ -844,7 +842,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -912,7 +909,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -988,7 +984,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1109,7 +1104,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
         issueId: null,
         heartbeatRunId: runId,
         persistedExecutionWorkspace: null,
-        assertCompanyBinding: true,
       }),
     ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -1188,7 +1182,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1303,7 +1296,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1400,7 +1392,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1523,7 +1514,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1654,7 +1644,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1746,7 +1735,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -1901,7 +1889,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         })
         .then(
           () => {
@@ -2006,7 +1993,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -2067,7 +2053,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -2140,7 +2125,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
           issueId: null,
           heartbeatRunId: runId,
           persistedExecutionWorkspace: null,
-          assertCompanyBinding: true,
         }),
       ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
@@ -2862,7 +2846,6 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
         issueId: null,
         heartbeatRunId: runId,
         persistedExecutionWorkspace: null,
-        assertCompanyBinding: true,
       }),
     ).rejects.toMatchObject({ status: 403, details: { code: "environment_company_mismatch" } });
 
