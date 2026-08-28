@@ -1,0 +1,17 @@
+name: AWS CI negative boundary
+
+on:
+  pull_request:
+    types: [reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  direct-fleet-request:
+    name: Direct Fleet request must be denied
+    runs-on: runs-on/fleet=paperclip-public-pr-x64/env=public-ci
+    timeout-minutes: 3
+    steps:
+      - name: Fail if an untrusted workflow reaches AWS
+        run: exit 1
