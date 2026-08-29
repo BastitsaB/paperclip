@@ -41,9 +41,16 @@ function isStateName(value: string | null): value is StateName {
 }
 
 /**
- * `?control=link` swaps the checkbox for the text-link alternate. Orthogonal to
- * `?state=`, so either control can be opened on any of the frames.
+ * Which mode switch the page opens with. Orthogonal to `?state=`, so either
+ * control can be opened on any of the frames.
+ *
+ * The text link is the default because it is the direction that was chosen; the
+ * Figma checkbox stays reachable at `?control=checkbox` for comparison. Sharing
+ * a bare link and landing on the option nobody picked is a worse failure than
+ * having to type a parameter to see the runner-up.
  */
+const DEFAULT_CONTROL: CredentialControl = "link";
+
 function isControl(value: string | null): value is CredentialControl {
   return value === "checkbox" || value === "link";
 }
@@ -71,7 +78,7 @@ createRoot(document.getElementById("root")!).render(
       <div className="my-auto">
         <ConnectModelPreview
           {...STATES[isStateName(requested) ? requested : "default"]}
-          control={isControl(control) ? control : "checkbox"}
+          control={isControl(control) ? control : DEFAULT_CONTROL}
         />
       </div>
     </div>
