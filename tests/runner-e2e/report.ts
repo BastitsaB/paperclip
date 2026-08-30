@@ -7,11 +7,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { runnerMatrix } from "./catalog.js";
-import {
-  aggregateCampaignBilling,
-  summarizeExecutionBilling,
-} from "./billing.js";
+import { summarizeExecutionBilling } from "./billing.js";
 import { renderRunnerE2EDashboard } from "./dashboard.js";
+import {
+  buildRunnerCampaign,
+  canonicalExecutionId,
+  upgradeRunnerResult,
+} from "./history.js";
 import type { RunnerE2EResult } from "./types.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -132,17 +134,18 @@ async function main() {
   const output = path.resolve(
     process.env.PAPERCLIP_RUNNER_E2E_REPORT_OUT ?? path.join(root, "merged"),
   );
-  const expected = JSON.parse(
+  const expectedInput = JSON.parse(
     process.env.PAPERCLIP_RUNNER_E2E_EXPECTED_IDS ?? "[]",
   ) as string[];
   if (
-    !Array.isArray(expected) ||
-    expected.some((value) => typeof value !== "string")
+    !Array.isArray(expectedInput) ||
+    expectedInput.some((value) => typeof value !== "string")
   ) {
     throw new Error(
       "PAPERCLIP_RUNNER_E2E_EXPECTED_IDS must be a JSON string array",
     );
   }
+  const expected = expectedInput.map(canonicalExecutionId);
   if (expected.length === 0 || new Set(expected).size !== expected.length) {
     throw new Error(
       "PAPERCLIP_RUNNER_E2E_EXPECTED_IDS must contain unique selected executions",
@@ -153,10 +156,15 @@ async function main() {
   );
   const candidates = new Map<string, AggregatedResult[]>();
   for (const resultFile of resultFiles) {
-    const result = JSON.parse(
+    const parsed = JSON.parse(
       await readFile(resultFile, "utf8"),
     ) as RunnerE2EResult;
-    if (result.schema !== "paperclip.runner-e2e.result/v1") continue;
+    if (
+      parsed.schema !== "paperclip.runner-e2e.result/v1" &&
+      parsed.schema !== "paperclip.runner-e2e.result/v2"
+    )
+      continue;
+    const result = upgradeRunnerResult(parsed);
     const directory = path.dirname(resultFile);
     const evidence = await readFile(
       path.join(directory, "evidence-manifest.json"),
@@ -195,19 +203,24 @@ async function main() {
     });
     if (attempts.length === 0) {
       const now = new Date().toISOString();
+      const execution = runnerMatrix.find(
+        (candidate) => candidate.id === executionId,
+      );
       const missing: RunnerE2EResult = {
-        schema: "paperclip.runner-e2e.result/v1",
+        schema: "paperclip.runner-e2e.result/v2",
         executionId,
+        suiteId: execution?.suite.id ?? "core-compatibility",
+        suiteDefinitionHash: execution?.suiteDefinitionHash,
         attempt: 0,
         status: "failed",
         failureClass: "permanent_infrastructure",
         error: "No result artifact was uploaded",
-        profileId: executionId.split(".")[0] ?? "unknown",
-        environmentId: executionId.includes(".daytona.") ? "daytona" : "local",
-        caseId: executionId.split(".").at(-1) ?? "unknown",
-        provider: "unknown",
-        model: "unknown",
-        runtimeMode: executionId.startsWith("legacy-") ? "legacy" : "native",
+        profileId: execution?.profile.id ?? "unknown",
+        environmentId: execution?.environment.id ?? "local",
+        caseId: execution?.task.id ?? "unknown",
+        provider: execution?.profile.provider ?? "unknown",
+        model: execution?.profile.model ?? "unknown",
+        runtimeMode: execution?.profile.expectedRuntimeMode ?? "native",
         startedAt: now,
         finishedAt: now,
         durationMs: 0,
@@ -232,19 +245,25 @@ async function main() {
   ]);
   const resolvedResults = selected.map((entry) => ({
     ...entry.result,
+    status: entry.valid ? entry.result.status : ("failed" as const),
     billing: summarizeExecutionBilling(entry.result),
   }));
-  const billing = aggregateCampaignBilling(resolvedResults);
-  const normalized = {
-    schema: "paperclip.runner-e2e.campaign/v1",
-    generatedAt: new Date().toISOString(),
+  const generatedAt = new Date().toISOString();
+  const campaign = buildRunnerCampaign({
+    campaignId:
+      process.env.PAPERCLIP_E2E_CAMPAIGN_ID ??
+      (process.env.GITHUB_RUN_ID
+        ? `gha-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+        : `report-${generatedAt.replace(/[:.]/g, "-")}`),
+    generatedAt,
     expected,
-    passed: selected.filter((entry) => entry.valid).length,
-    failed: selected.filter((entry) => !entry.valid).length,
-    billing,
+    results: resolvedResults,
+  });
+  const billing = campaign.billing;
+  const normalized = {
+    ...campaign,
     results: selected.map((entry, index) => ({
       ...resolvedResults[index]!,
-      evidenceDirectory: entry.directory,
       evidenceValid: entry.valid,
       evidenceErrors: entry.errors,
     })),
@@ -265,6 +284,7 @@ async function main() {
       evidenceBaseHref: stagedEvidence.get(entry.result.executionId)?.baseHref,
       evidenceFiles: stagedEvidence.get(entry.result.executionId)?.files,
     })),
+    campaign,
   });
   await Promise.all([
     writeFile(path.join(output, "dashboard.html"), dashboard, "utf8"),

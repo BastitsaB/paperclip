@@ -1,4 +1,10 @@
-import type { MatrixExecution, RunnerE2EResult } from "./types.js";
+import type {
+  MatrixExecution,
+  RunnerE2ECampaign,
+  RunnerE2EHistoryIndex,
+  RunnerE2EResult,
+  RunnerE2ESuiteSummary,
+} from "./types.js";
 import {
   aggregateCampaignBilling,
   summarizeExecutionBilling,
@@ -18,6 +24,8 @@ export interface RunnerDashboardInput {
   expected: readonly string[];
   catalog: readonly MatrixExecution[];
   entries: readonly RunnerDashboardEntry[];
+  campaign?: RunnerE2ECampaign;
+  history?: RunnerE2EHistoryIndex;
 }
 
 interface ResolvedScreenshot {
@@ -168,6 +176,15 @@ function renderCase(
             data-gallery-href="${html(item.href)}"
             data-gallery-label="${html(item.label)}"
             data-gallery-execution="${html(execution.id)}"
+            data-gallery-case="${html(execution.task.label)}"
+            data-gallery-profile="${html(execution.profile.label)}"
+            data-gallery-generation="${html(execution.profile.generation)}"
+            data-gallery-provider="${html(execution.profile.provider)}"
+            data-gallery-model="${html(execution.profile.model)}"
+            data-gallery-environment="${html(execution.environment.label)}"
+            data-gallery-environment-provider="${html(execution.environment.provider)}"
+            data-gallery-execution-target="${html(execution.environment.expectedExecutionTarget.kind)}"
+            data-gallery-runtime="${html(entry?.result.runtimeMode ?? execution.profile.expectedRuntimeMode)}"
             aria-label="Open ${html(item.label)} for ${html(execution.id)} in gallery"
           >
             <span class="screenshot-frame"><img src="${html(item.href)}" loading="lazy" alt="${html(item.label)} for ${html(execution.id)}"></span>
@@ -215,14 +232,235 @@ function renderCase(
   </article>`;
 }
 
-export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
-  const expected = new Set(input.expected);
-  const entryById = new Map(
-    input.entries.map((entry) => [entry.result.executionId, entry]),
+function renderTrendChart(input: {
+  history: RunnerE2EHistoryIndex;
+  label: string;
+  value(campaign: RunnerE2EHistoryIndex["campaigns"][number]): number;
+  format(value: number): string;
+  include?(campaign: RunnerE2EHistoryIndex["campaigns"][number]): boolean;
+  fingerprint?(campaign: RunnerE2EHistoryIndex["campaigns"][number]): string;
+}) {
+  const campaigns = input.history.campaigns
+    .filter(input.include ?? ((campaign) => campaign.complete))
+    .slice(0, 20)
+    .reverse();
+  if (campaigns.length === 0) {
+    return `<article class="trend-card"><span>${html(input.label)}</span><strong>No complete campaigns</strong></article>`;
+  }
+  const values = campaigns.map(input.value);
+  const maximum = Math.max(...values, 1);
+  const pointRows = values.map((value, index) => {
+    const x =
+      campaigns.length === 1 ? 50 : (index / (campaigns.length - 1)) * 100;
+    const y = 96 - (value / maximum) * 88;
+    return {
+      point: `${x.toFixed(2)},${y.toFixed(2)}`,
+      x,
+      y,
+      fingerprint: input.fingerprint?.(campaigns[index]!) ?? "stable",
+    };
+  });
+  const segments = pointRows.reduce<Array<typeof pointRows>>(
+    (groups, point) => {
+      const current = groups.at(-1);
+      if (!current || current.at(-1)?.fingerprint !== point.fingerprint) {
+        groups.push([point]);
+      } else {
+        current.push(point);
+      }
+      return groups;
+    },
+    [],
   );
+  const definitionCount = new Set(pointRows.map((point) => point.fingerprint))
+    .size;
+  const latest = values.at(-1) ?? 0;
+  return `<article class="trend-card">
+    <span>${html(input.label)}</span>
+    <strong>${html(input.format(latest))}</strong>
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${html(input.label)} across ${campaigns.length} complete campaign(s)">
+      ${segments.map((segment) => `<polyline points="${segment.map((point) => point.point).join(" ")}" fill="none" vector-effect="non-scaling-stroke" />`).join("")}
+      ${pointRows.map((point) => `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="1.3" vector-effect="non-scaling-stroke" />`).join("")}
+    </svg>
+    <small>${campaigns.length} complete campaign${campaigns.length === 1 ? "" : "s"} · ${definitionCount} definition${definitionCount === 1 ? "" : "s"}</small>
+  </article>`;
+}
+
+function suiteSummaryFor(
+  campaign: RunnerE2EHistoryIndex["campaigns"][number],
+  suiteId: string,
+) {
+  return campaign.suites.find((suite) => suite.suiteId === suiteId);
+}
+
+function renderHistory(history: RunnerE2EHistoryIndex | undefined) {
+  if (!history || history.campaigns.length === 0) {
+    return `<section class="history-section" id="history"><div class="section-heading"><div><p class="eyebrow">History</p><h2>Campaign trends</h2></div><p>No historical campaigns have been published yet.</p></div></section>`;
+  }
+  const suiteIds = [
+    ...new Set(
+      history.campaigns.flatMap((campaign) =>
+        campaign.suites.map((suite) => suite.suiteId),
+      ),
+    ),
+  ];
+  const charts = [
+    renderTrendChart({
+      history,
+      label: "Observed + estimated cost",
+      value: (campaign) => campaign.billing.observedAndEstimatedCostUsd,
+      format: usdLabel,
+      fingerprint: (campaign) =>
+        campaign.suites
+          .map((suite) => `${suite.suiteId}:${suite.suiteDefinitionHash}`)
+          .sort()
+          .join("|"),
+    }),
+    renderTrendChart({
+      history,
+      label: "Total tokens",
+      value: (campaign) => campaign.billing.llm.totalTokens,
+      format: tokenLabel,
+      fingerprint: (campaign) =>
+        campaign.suites
+          .map((suite) => `${suite.suiteId}:${suite.suiteDefinitionHash}`)
+          .sort()
+          .join("|"),
+    }),
+    renderTrendChart({
+      history,
+      label: "Agent execution time",
+      value: (campaign) => campaign.billing.agentRunDurationMs,
+      format: durationLabel,
+      fingerprint: (campaign) =>
+        campaign.suites
+          .map((suite) => `${suite.suiteId}:${suite.suiteDefinitionHash}`)
+          .sort()
+          .join("|"),
+    }),
+    renderTrendChart({
+      history,
+      label: "Daytona lease time",
+      value: (campaign) => campaign.billing.leaseDurationMs,
+      format: durationLabel,
+      fingerprint: (campaign) =>
+        campaign.suites
+          .map((suite) => `${suite.suiteId}:${suite.suiteDefinitionHash}`)
+          .sort()
+          .join("|"),
+    }),
+    renderTrendChart({
+      history,
+      label: "Pass rate",
+      value: (campaign) =>
+        campaign.selected > 0 ? (campaign.passed / campaign.selected) * 100 : 0,
+      format: (value) => `${value.toFixed(1)}%`,
+      fingerprint: (campaign) =>
+        campaign.suites
+          .map((suite) => `${suite.suiteId}:${suite.suiteDefinitionHash}`)
+          .sort()
+          .join("|"),
+    }),
+  ].join("");
+  const suiteCharts = suiteIds
+    .map((suiteId) => {
+      const include = (campaign: RunnerE2EHistoryIndex["campaigns"][number]) =>
+        suiteSummaryFor(campaign, suiteId)?.complete === true;
+      const value = (
+        campaign: RunnerE2EHistoryIndex["campaigns"][number],
+        metric: "cost" | "tokens" | "agent" | "lease" | "passRate",
+      ) => {
+        const suite = suiteSummaryFor(campaign, suiteId);
+        if (!suite) return 0;
+        if (metric === "cost") return suite.billing.observedAndEstimatedCostUsd;
+        if (metric === "tokens") return suite.billing.llm.totalTokens;
+        if (metric === "agent") return suite.billing.agentRunDurationMs;
+        if (metric === "lease") return suite.billing.leaseDurationMs;
+        return suite.selected > 0 ? (suite.passed / suite.selected) * 100 : 0;
+      };
+      const fingerprint = (
+        campaign: RunnerE2EHistoryIndex["campaigns"][number],
+      ) => suiteSummaryFor(campaign, suiteId)?.suiteDefinitionHash ?? "unknown";
+      return `<section class="suite-trends" data-history-suite-trends="${html(suiteId)}">
+        <div class="suite-trends-heading"><h3>${html(suiteId)}</h3><span>Complete suite selections only; lines break at definition changes.</span></div>
+        <div class="trend-grid">
+          ${renderTrendChart({ history, label: "Suite cost", value: (campaign) => value(campaign, "cost"), format: usdLabel, include, fingerprint })}
+          ${renderTrendChart({ history, label: "Suite tokens", value: (campaign) => value(campaign, "tokens"), format: tokenLabel, include, fingerprint })}
+          ${renderTrendChart({ history, label: "Suite agent time", value: (campaign) => value(campaign, "agent"), format: durationLabel, include, fingerprint })}
+          ${renderTrendChart({ history, label: "Suite lease time", value: (campaign) => value(campaign, "lease"), format: durationLabel, include, fingerprint })}
+          ${renderTrendChart({ history, label: "Suite pass rate", value: (campaign) => value(campaign, "passRate"), format: (metric) => `${metric.toFixed(1)}%`, include, fingerprint })}
+        </div>
+      </section>`;
+    })
+    .join("");
+  const rows = history.campaigns
+    .map((campaign) => {
+      const status = campaign.failed === 0 ? "passed" : "failed";
+      const sha = campaign.source.sha;
+      const searchable = [
+        campaign.campaignId,
+        sha,
+        campaign.source.ref,
+        ...campaign.executions.flatMap((execution) => [
+          execution.suiteId,
+          execution.profileId,
+          execution.model,
+          execution.environmentId,
+          execution.caseId,
+          execution.status,
+        ]),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return `<tr data-history-campaign data-history-date="${html(campaign.generatedAt.slice(0, 10))}" data-history-status="${status}" data-history-complete="${campaign.complete}" data-history-suites="${html(campaign.suites.map((suite) => suite.suiteId).join(" "))}" data-history-search="${html(searchable)}">
+        <td><a href="${html(campaign.publicUrl)}">${html(campaign.campaignId)}</a><small>${html(new Date(campaign.generatedAt).toLocaleString("en-US", { timeZone: "UTC" }))} UTC</small></td>
+        <td>${sha ? `<code>${html(sha.slice(0, 10))}</code>` : "Unknown"}<small>${html(campaign.source.ref ?? "unknown ref")}</small></td>
+        <td><span class="status history-${status}">${status}</span><small>${campaign.passed}/${campaign.passed + campaign.failed} passed · ${campaign.complete ? "complete" : "partial"}</small></td>
+        <td>${html(tokenLabel(campaign.billing.llm.inputTokens))} / ${html(tokenLabel(campaign.billing.llm.outputTokens))}<small>input / output · ${html(tokenLabel(campaign.billing.llm.cachedInputTokens))} cached</small></td>
+        <td>${html(usdLabel(campaign.billing.reportedLlmCostUsd))}<small>${html(usdLabel(campaign.billing.estimatedRuntimeCostUsd))} runtime estimate</small></td>
+        <td>${html(durationLabel(campaign.billing.agentRunDurationMs))}<small>${html(durationLabel(campaign.billing.leaseDurationMs))} lease</small></td>
+      </tr>`;
+    })
+    .join("");
+  const latest = history.campaigns.find(
+    (campaign) => campaign.campaignId === history.latestCampaignId,
+  );
+  const latestGreen = history.campaigns.find(
+    (campaign) => campaign.campaignId === history.latestGreenCampaignId,
+  );
+  return `<section class="history-section" id="history">
+    <div class="section-heading"><div><p class="eyebrow">History</p><h2>Campaign trends</h2></div><p>Complete campaigns are compared by default. Partial smoke runs remain searchable and are labeled explicitly.</p></div>
+    <nav class="history-pointers" aria-label="Campaign pointers">
+      ${latest ? `<a href="${html(latest.publicUrl)}"><span>Latest run</span><strong>${html(latest.campaignId)}</strong></a>` : ""}
+      ${latestGreen ? `<a href="${html(latestGreen.publicUrl)}"><span>Latest green</span><strong>${html(latestGreen.campaignId)}</strong></a>` : ""}
+    </nav>
+    <div class="trend-grid">${charts}</div>
+    ${suiteCharts}
+    <div class="history-filters">
+      <label>Search <input type="search" data-history-query placeholder="SHA, model, profile, case"></label>
+      <label>Suite <select data-history-suite><option value="">All suites</option>${suiteIds.map((suiteId) => `<option value="${html(suiteId)}">${html(suiteId)}</option>`).join("")}</select></label>
+      <label>Status <select data-history-status><option value="">All statuses</option><option value="passed">Passed</option><option value="failed">Failed</option></select></label>
+      <label>From <input type="date" data-history-from></label>
+      <label>Through <input type="date" data-history-through></label>
+      <label class="history-checkbox"><input type="checkbox" data-history-partial> Include partial campaigns</label>
+    </div>
+    <div class="history-table-wrap"><table class="history-table"><thead><tr><th>Campaign</th><th>Paperclip SHA</th><th>Result</th><th>Tokens</th><th>Cost</th><th>Execution</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="history-empty" data-history-empty hidden>No campaigns match these filters.</p>
+  </section>`;
+}
+
+function renderSuiteMatrix(input: {
+  suiteCatalog: readonly MatrixExecution[];
+  expected: ReadonlySet<string>;
+  entryById: ReadonlyMap<string, RunnerDashboardEntry>;
+  summary?: RunnerE2ESuiteSummary;
+}) {
+  const suite = input.suiteCatalog[0]?.suite;
+  if (!suite) return "";
   const profiles = [
     ...new Map(
-      input.catalog.map((execution) => [
+      input.suiteCatalog.map((execution) => [
         execution.profile.id,
         execution.profile,
       ]),
@@ -230,12 +468,65 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
   ];
   const environments = [
     ...new Map(
-      input.catalog.map((execution) => [
+      input.suiteCatalog.map((execution) => [
         execution.environment.id,
         execution.environment,
       ]),
     ).values(),
   ];
+  const rows = profiles
+    .map((profile, profileIndex) => {
+      const columns = environments
+        .map((environment) => {
+          const executions = input.suiteCatalog.filter(
+            (execution) =>
+              execution.profile.id === profile.id &&
+              execution.environment.id === environment.id,
+          );
+          return `<td>
+            <div class="mobile-environment-header"><strong>${html(environment.label)}</strong><span>${html(environment.provider)} · ${html(environment.expectedExecutionTarget.kind)}</span></div>
+            <div class="case-stack">${executions.map((execution) => renderCase(execution, input.expected, input.entryById)).join("")}</div>
+          </td>`;
+        })
+        .join("");
+      return `<tr><th scope="row" class="profile-cell"><div class="profile-sticky">
+        <span class="agent-capsule agent-${(profileIndex % 10) + 1}" aria-hidden="true"></span>
+        <span class="profile-copy"><span><strong>${html(profile.label)}</strong><span class="generation">${html(profile.generation)}</span></span><small>${html(profile.provider)} · ${html(profile.model)}</small></span>
+      </div></th>${columns}</tr>`;
+    })
+    .join("");
+  const environmentHeaders = environments
+    .map(
+      (environment) =>
+        `<th scope="col"><span class="environment-label">${html(environment.label)}</span><small>${html(environment.provider)} · ${html(environment.expectedExecutionTarget.kind)}</small></th>`,
+    )
+    .join("");
+  const selected = input.suiteCatalog.filter((execution) =>
+    input.expected.has(execution.id),
+  ).length;
+  const summary = input.summary;
+  const summaryHtml = summary
+    ? `<div class="suite-summary" aria-label="${html(suite.label)} current campaign summary">
+        <div><span>Pass rate</span><strong>${summary.selected > 0 ? ((summary.passed / summary.selected) * 100).toFixed(1) : "0.0"}%</strong><small>${summary.passed}/${summary.selected} passed</small></div>
+        <div><span>Tokens</span><strong>${html(tokenLabel(summary.billing.llm.totalTokens))}</strong><small>${html(tokenLabel(summary.billing.llm.inputTokens))} input · ${html(tokenLabel(summary.billing.llm.outputTokens))} output</small></div>
+        <div><span>Cost</span><strong>${html(usdLabel(summary.billing.observedAndEstimatedCostUsd))}</strong><small>reported LLM + runtime estimate</small></div>
+        <div><span>Agent time</span><strong>${html(durationLabel(summary.billing.agentRunDurationMs))}</strong><small>${html(durationLabel(summary.billing.leaseDurationMs))} lease</small></div>
+        <div><span>Execution</span><strong>${summary.executed}/${summary.selected}</strong><small>${summary.retries} retries · cleanup ${summary.cleanupPassed ? "passed" : "failed"}</small></div>
+      </div>`
+    : "";
+  return `<section class="suite-section" id="suite-${html(suite.id)}">
+    <div class="section-heading"><div><p class="eyebrow">Test suite</p><h2>${html(suite.label)}</h2></div><p>${html(suite.description)}</p></div>
+    ${summaryHtml}
+    <div class="table-kicker"><strong>Configuration matrix</strong><span>${profiles.length} profiles · ${environments.length} environments · ${selected} selected</span></div>
+    <div class="table-wrap"><table class="matrix"><thead><tr><th scope="col">Agent profile</th>${environmentHeaders}</tr></thead><tbody>${rows}</tbody></table></div>
+  </section>`;
+}
+
+export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
+  const expected = new Set(input.expected);
+  const entryById = new Map(
+    input.entries.map((entry) => [entry.result.executionId, entry]),
+  );
   const selectedEntries = input.entries.filter((entry) =>
     expected.has(entry.result.executionId),
   );
@@ -252,38 +543,26 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
   const campaignBilling = aggregateCampaignBilling(
     selectedEntries.map((entry) => entry.result),
   );
-  const rows = profiles
-    .map((profile, profileIndex) => {
-      const columns = environments
-        .map((environment) => {
-          const executions = input.catalog.filter(
-            (execution) =>
-              execution.profile.id === profile.id &&
-              execution.environment.id === environment.id,
-          );
-          return `<td><div class="case-stack">${executions
-            .map((execution) => renderCase(execution, expected, entryById))
-            .join("")}</div></td>`;
-        })
-        .join("");
-      return `<tr>
-        <th scope="row" class="profile-cell">
-          <span class="agent-capsule agent-${(profileIndex % 10) + 1}" aria-hidden="true"></span>
-          <span class="profile-copy">
-            <span><strong>${html(profile.label)}</strong><span class="generation">${html(profile.generation)}</span></span>
-            <small>${html(profile.provider)} · ${html(profile.model)}</small>
-          </span>
-        </th>
-        ${columns}
-      </tr>`;
-    })
-    .join("");
-  const environmentHeaders = environments
-    .map(
-      (environment) =>
-        `<th scope="col"><span class="environment-label">${html(environment.label)}</span><small>${html(environment.provider)} · ${html(environment.expectedExecutionTarget.kind)}</small></th>`,
+  const suites = [
+    ...new Map(
+      input.catalog.map((execution) => [execution.suite.id, execution.suite]),
+    ).values(),
+  ];
+  const suiteSections = suites
+    .map((suite) =>
+      renderSuiteMatrix({
+        suiteCatalog: input.catalog.filter(
+          (execution) => execution.suite.id === suite.id,
+        ),
+        expected,
+        entryById,
+        summary: input.campaign?.suites.find(
+          (summary) => summary.suiteId === suite.id,
+        ),
+      }),
     )
     .join("");
+  const historySection = renderHistory(input.history);
 
   return `<!doctype html>
 <html lang="en">
@@ -382,7 +661,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     .table-kicker { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid var(--border); color: var(--muted-foreground); }
     .table-kicker strong { color: var(--foreground); font-weight: 600; }
     .table-kicker span { font: 11px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; }
-    .table-wrap { overflow: auto; max-height: calc(100vh - 120px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+    .table-wrap { overflow: visible; }
     .matrix { width: 100%; min-width: 1120px; border-collapse: separate; border-spacing: 0; }
     .matrix th, .matrix td { padding: 16px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); vertical-align: top; text-align: left; }
     .matrix tr:last-child th, .matrix tr:last-child td { border-bottom: 0; }
@@ -391,9 +670,11 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     .matrix thead th:first-child { left: 0; z-index: 6; width: 260px; }
     .matrix thead small, .matrix tbody th small { display: block; margin-top: 4px; color: var(--muted-foreground); font-weight: 400; }
     .environment-label { font-size: 15px; font-weight: 650; }
+    .mobile-environment-header { display: none; }
     .profile-cell { position: sticky; left: 0; z-index: 3; width: 260px; background: var(--card); }
     .profile-cell { display: table-cell; }
-    .profile-cell > .agent-capsule { float: left; margin: 2px 12px 18px 0; }
+    .profile-sticky { position: sticky; top: 76px; display: flex; align-items: flex-start; min-width: 0; }
+    .profile-sticky > .agent-capsule { flex: none; margin: 2px 12px 18px 0; }
     .profile-copy { display: block; min-width: 0; }
     .profile-copy strong { font-size: 14px; }
     .profile-copy small { overflow-wrap: anywhere; }
@@ -450,12 +731,60 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     .billing-strip span, .billing-strip small { display: block; color: var(--muted-foreground); font-size: 9px; }
     .billing-strip span { letter-spacing: .06em; text-transform: uppercase; }
     .billing-strip strong { display: block; margin: 3px 0 1px; overflow-wrap: anywhere; font: 550 11px/1.35 var(--font-mono); font-variant-numeric: tabular-nums; }
-    .billing-overview { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0 0 32px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
-    .billing-metric { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--border); }
-    .billing-metric:last-child { border-right: 0; }
+    .billing-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 32px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+    .billing-metric { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .billing-metric:nth-child(4n) { border-right: 0; }
+    .billing-metric:nth-child(n + 5) { border-bottom: 0; }
     .billing-metric strong { display: block; overflow-wrap: anywhere; font: 550 17px/1.25 var(--font-mono); font-variant-numeric: tabular-nums; }
     .billing-metric span { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
     .billing-note { grid-column: 1 / -1; margin: 0; padding: 11px 16px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 11px; }
+    .suite-nav { position: sticky; top: 0; z-index: 12; display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 40px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--background); }
+    .suite-nav a { padding: 7px 10px; border-radius: calc(var(--radius) * .8); color: var(--muted-foreground); font-size: 12px; font-weight: 600; text-decoration: none; }
+    .suite-nav a:hover { background: var(--raised); color: var(--foreground); }
+    .suite-section, .history-section { scroll-margin-top: 72px; margin-top: 64px; }
+    .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 520px); align-items: end; gap: 32px; margin-bottom: 24px; }
+    .section-heading h2 { margin: 0; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; letter-spacing: -.035em; }
+    .section-heading > p { margin: 0; color: var(--muted-foreground); }
+    .suite-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 0 24px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .suite-summary > div { min-width: 0; padding: 12px 14px; border-right: 1px solid var(--border); }
+    .suite-summary > div:last-child { border-right: 0; }
+    .suite-summary span, .suite-summary strong, .suite-summary small { display: block; }
+    .suite-summary span, .suite-summary small { color: var(--muted-foreground); font-size: 9px; }
+    .suite-summary span { letter-spacing: .06em; text-transform: uppercase; }
+    .suite-summary strong { margin: 3px 0 1px; font: 550 15px/1.3 var(--font-mono); }
+    .history-pointers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .history-pointers a { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); text-decoration: none; }
+    .history-pointers span, .history-pointers strong { display: block; }
+    .history-pointers span { color: var(--muted-foreground); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+    .history-pointers strong { margin-top: 4px; font: 550 12px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+    .trend-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .trend-card { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+    .trend-card > span, .trend-card > strong, .trend-card > small { display: block; }
+    .trend-card > span, .trend-card > small { color: var(--muted-foreground); font-size: 10px; }
+    .trend-card > span { letter-spacing: .06em; text-transform: uppercase; }
+    .trend-card > strong { margin-top: 4px; font: 550 17px/1.3 var(--font-mono); }
+    .trend-card svg { width: 100%; height: 72px; margin: 10px 0 4px; overflow: visible; }
+    .trend-card polyline { stroke: var(--foreground); stroke-width: 1.6; }
+    .trend-card circle { fill: var(--background); stroke: var(--foreground); stroke-width: 1; }
+    .suite-trends { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .suite-trends-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .suite-trends-heading h3 { margin: 0; font: 600 14px/1.4 var(--font-mono); }
+    .suite-trends-heading span { color: var(--muted-foreground); font-size: 10px; }
+    .history-filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(130px, 180px)) auto; align-items: end; gap: 12px; margin: 24px 0 12px; }
+    .history-filters label { display: grid; gap: 5px; color: var(--muted-foreground); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+    .history-filters input, .history-filters select { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: calc(var(--radius) * .8); background: var(--background); color: var(--foreground); }
+    .history-filters .history-checkbox { display: flex; align-items: center; min-height: 38px; padding-bottom: 7px; white-space: nowrap; }
+    .history-checkbox input { width: 16px; min-height: 16px; }
+    .history-table-wrap { overflow-x: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .history-table { width: 100%; min-width: 1020px; border-collapse: collapse; }
+    .history-table th, .history-table td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    .history-table tr:last-child td { border-bottom: 0; }
+    .history-table th { background: var(--raised); color: var(--muted-foreground); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+    .history-table td small { display: block; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
+    .history-table .status { margin-bottom: 2px; }
+    .history-passed { border-color: var(--pass-border); background: var(--pass-bg); color: var(--pass-text); }
+    .history-failed { border-color: var(--fail-border); background: var(--fail-bg); color: var(--fail-text); }
+    .history-empty { padding: 24px 0; color: var(--muted-foreground); text-align: center; }
     .case-context > summary, .usage > summary { width: fit-content; cursor: pointer; color: var(--foreground); font-size: 12px; font-weight: 600; }
     pre { max-height: 240px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: calc(var(--radius) * .8); background: var(--raised); color: var(--foreground); font-size: 10px; white-space: pre-wrap; }
     footer { display: flex; justify-content: space-between; gap: 16px; padding-top: 16px; color: var(--muted-foreground); font: 11px/1.4 var(--font-mono); }
@@ -466,22 +795,49 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     .gallery-toolbar { border-bottom: 1px solid rgb(255 255 255 / 18%); }
     .gallery-footer { border-top: 1px solid rgb(255 255 255 / 18%); }
     .gallery-meta { min-width: 0; }
-    .gallery-meta strong, .gallery-meta span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .gallery-meta strong { font-size: 14px; }
-    .gallery-meta span { margin-top: 2px; color: #b8b8b5; font: 11px/1.4 var(--font-mono); }
+    .gallery-meta > strong, .gallery-execution { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gallery-meta > strong { font-size: 14px; }
+    .gallery-context { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 5px; }
+    .gallery-context span { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+    .gallery-context strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .gallery-context em { color: #b8b8b5; font: 10px/1.4 var(--font-mono); font-style: normal; white-space: nowrap; }
+    .gallery-execution { margin-top: 3px; color: #b8b8b5; font: 10px/1.4 var(--font-mono); }
     .gallery-close, .gallery-control { min-height: 38px; padding: 8px 12px; border-color: rgb(255 255 255 / 32%); background: transparent; color: #fafafa; }
-    .gallery-stage { display: grid; place-items: center; min-height: 0; padding: 24px; overflow: hidden; touch-action: pan-y; }
+    .gallery-stage { position: relative; display: grid; place-items: center; min-height: 0; padding: 24px 88px; overflow: hidden; touch-action: pan-y; }
     .gallery-stage img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid rgb(255 255 255 / 18%); background: #0a0a0a; }
-    .gallery-controls { display: flex; gap: 8px; }
+    .gallery-control { position: absolute; top: 50%; z-index: 2; width: 48px; height: 64px; padding: 0; transform: translateY(-50%); font-size: 22px; }
+    .gallery-previous { left: 24px; }
+    .gallery-next { right: 24px; }
     .gallery-position { color: #b8b8b5; font: 12px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; }
+    @media (max-width: 1180px) {
+      .matrix { display: block; min-width: 0; }
+      .matrix thead { display: none; }
+      .matrix tbody { display: grid; gap: 40px; }
+      .matrix tbody, .matrix tr, .matrix th, .matrix td { width: 100%; }
+      .matrix tr, .matrix th, .matrix td { display: block; }
+      .matrix th, .matrix td { padding: 0; border: 0; }
+      .profile-cell { position: static; width: auto; padding: 12px 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--raised); }
+      .profile-sticky { position: static; }
+      .matrix td { padding-top: 18px; }
+      .mobile-environment-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 9px 12px; background: var(--raised); }
+      .mobile-environment-header strong { font-size: 14px; }
+      .mobile-environment-header span { color: var(--muted-foreground); font: 10px/1.4 var(--font-mono); }
+    }
     @media (max-width: 980px) {
       main { width: min(100% - 32px, 1560px); margin-top: 32px; }
       .report-header { grid-template-columns: 1fr; gap: 24px; }
       .report-actions { flex-wrap: wrap; }
-      .billing-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .billing-metric:nth-child(3) { border-right: 0; }
-      .billing-metric:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
-      .table-wrap { max-height: none; }
+      .billing-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .suite-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .suite-summary > div { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+      .suite-summary > div:nth-child(even) { border-right: 0; }
+      .suite-summary > div:last-child { border-bottom: 0; }
+      .billing-metric, .billing-metric:nth-child(4n) { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+      .billing-metric:nth-child(even) { border-right: 0; }
+      .billing-metric:nth-child(n + 7) { border-bottom: 0; }
+      .section-heading { grid-template-columns: 1fr; gap: 12px; }
+      .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 640px) {
       .brand-bar { min-height: 56px; padding: 0 16px; }
@@ -493,16 +849,21 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       .metric { min-width: 0; flex: 1; padding: 11px; }
       .metric strong { font-size: 16px; }
       .gallery-launch { width: 100%; }
-      .billing-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .billing-metric, .billing-metric:nth-child(3) { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-      .billing-metric:nth-child(even) { border-right: 0; }
       .billing-strip { grid-template-columns: 1fr; }
       .billing-strip > div { border-right: 0; border-bottom: 1px solid var(--border); }
       .billing-strip > div:last-child { border-bottom: 0; }
       .gallery-toolbar, .gallery-footer { padding: 12px; }
-      .gallery-stage { padding: 12px; }
-      .gallery-footer { align-items: stretch; flex-direction: column; }
-      .gallery-controls { display: grid; grid-template-columns: 1fr 1fr; }
+      .gallery-stage { padding: 12px 56px; }
+      .gallery-control { width: 40px; height: 56px; }
+      .gallery-previous { left: 8px; }
+      .gallery-next { right: 8px; }
+      .suite-nav { top: 0; overflow-x: auto; flex-wrap: nowrap; }
+      .suite-nav a { white-space: nowrap; }
+      .history-pointers, .trend-grid, .history-filters { grid-template-columns: 1fr; }
+      .suite-summary { grid-template-columns: 1fr; }
+      .suite-summary > div, .suite-summary > div:nth-child(even) { border-right: 0; border-bottom: 1px solid var(--border); }
+      .suite-summary > div:last-child { border-bottom: 0; }
+      .suite-trends-heading { display: block; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 100ms !important; }
@@ -511,7 +872,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       .brand-bar, .gallery-launch, dialog { display: none; }
       main { width: 100%; margin: 0; }
       .table-wrap { max-height: none; overflow: visible; }
-      .matrix thead th, .profile-cell { position: static; }
+      .matrix thead th, .profile-cell, .profile-sticky { position: static; }
     }
   </style>
 </head>
@@ -523,7 +884,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     </a>
     <span class="brand-context">Quality engineering · Runner acceptance</span>
   </div>
-  <main>
+  <main id="overview">
     <header class="report-header">
       <div>
         <p class="eyebrow">Full-stack acceptance campaign</p>
@@ -545,16 +906,18 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       <div class="billing-metric"><strong>${html(tokenLabel(campaignBilling.llm.cachedInputTokens))}</strong><span>Cached tokens</span></div>
       <div class="billing-metric"><strong>${html(usdLabel(campaignBilling.reportedLlmCostUsd))}</strong><span>LLM reported subtotal</span></div>
       <div class="billing-metric"><strong>${html(usdLabel(campaignBilling.estimatedRuntimeCostUsd))}</strong><span>Daytona list estimate</span></div>
+      <div class="billing-metric"><strong>${html(durationLabel(campaignBilling.agentRunDurationMs))}</strong><span>Agent execution time</span></div>
+      <div class="billing-metric"><strong>${html(durationLabel(campaignBilling.leaseDurationMs))}</strong><span>Daytona lease time</span></div>
       <div class="billing-metric"><strong>${campaignBilling.llm.runsWithReportedCost}/${campaignBilling.llm.runCount}</strong><span>Runs provider-priced</span></div>
       <p class="billing-note">Model spend is the provider-reported subtotal; unpriced or unavailable runs are excluded, never counted as free. Daytona runtime is a public-list-price estimate from captured lease time and pinned resources, before credits, discounts, storage allowance, or invoice adjustments. Local execution has no external runtime meter.</p>
     </section>
-    <div class="table-kicker"><strong>Configuration matrix</strong><span>${profiles.length} profiles · ${environments.length} environments · ${input.expected.length} selected</span></div>
-    <div class="table-wrap">
-      <table class="matrix">
-        <thead><tr><th scope="col">Agent profile</th>${environmentHeaders}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
+    <nav class="suite-nav" aria-label="Report sections">
+      <a href="#overview">Overview</a>
+      ${suites.map((suite) => `<a href="#suite-${html(suite.id)}">${html(suite.label)}</a>`).join("")}
+      <a href="#history">History</a>
+    </nav>
+    ${suiteSections}
+    ${historySection}
     <footer><span>Generated ${html(input.generatedAt)}</span><span>${input.catalog.length} catalog executions</span></footer>
   </main>
   <dialog class="gallery-dialog" data-gallery-dialog aria-labelledby="gallery-title">
@@ -562,19 +925,22 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       <div class="gallery-toolbar">
         <div class="gallery-meta">
           <strong id="gallery-title" data-gallery-title>Screenshot evidence</strong>
-          <span data-gallery-execution></span>
+          <div class="gallery-context">
+            <span><strong data-gallery-profile></strong><em data-gallery-profile-detail></em></span>
+            <span><strong data-gallery-environment></strong><em data-gallery-environment-detail></em></span>
+            <span><strong data-gallery-case></strong><em data-gallery-runtime></em></span>
+          </div>
+          <code class="gallery-execution" data-gallery-execution></code>
         </div>
         <button class="gallery-close" type="button" data-gallery-close>Close</button>
       </div>
       <div class="gallery-stage" data-gallery-stage>
+        <button class="gallery-control gallery-previous" type="button" data-gallery-previous aria-label="Previous">&#8592;</button>
         <img data-gallery-image alt="">
+        <button class="gallery-control gallery-next" type="button" data-gallery-next aria-label="Next">&#8594;</button>
       </div>
       <div class="gallery-footer">
         <span class="gallery-position" data-gallery-position aria-live="polite"></span>
-        <div class="gallery-controls">
-          <button class="gallery-control" type="button" data-gallery-previous>Previous</button>
-          <button class="gallery-control" type="button" data-gallery-next>Next</button>
-        </div>
       </div>
     </div>
   </dialog>
@@ -586,6 +952,12 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       const image = dialog.querySelector("[data-gallery-image]");
       const title = dialog.querySelector("[data-gallery-title]");
       const execution = dialog.querySelector("[data-gallery-execution]");
+      const profile = dialog.querySelector("[data-gallery-profile]");
+      const profileDetail = dialog.querySelector("[data-gallery-profile-detail]");
+      const environment = dialog.querySelector("[data-gallery-environment]");
+      const environmentDetail = dialog.querySelector("[data-gallery-environment-detail]");
+      const caseLabel = dialog.querySelector("[data-gallery-case]");
+      const runtime = dialog.querySelector("[data-gallery-runtime]");
       const position = dialog.querySelector("[data-gallery-position]");
       const stage = dialog.querySelector("[data-gallery-stage]");
       let activeIndex = 0;
@@ -597,6 +969,12 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
         image.alt = item.dataset.galleryLabel + " for " + item.dataset.galleryExecution;
         title.textContent = item.dataset.galleryLabel;
         execution.textContent = item.dataset.galleryExecution;
+        profile.textContent = item.dataset.galleryProfile;
+        profileDetail.textContent = item.dataset.galleryGeneration + " · " + item.dataset.galleryProvider + " · " + item.dataset.galleryModel;
+        environment.textContent = item.dataset.galleryEnvironment;
+        environmentDetail.textContent = item.dataset.galleryEnvironmentProvider + " · " + item.dataset.galleryExecutionTarget;
+        caseLabel.textContent = item.dataset.galleryCase;
+        runtime.textContent = item.dataset.galleryRuntime + " runtime";
         position.textContent = "Image " + (activeIndex + 1) + " of " + items.length;
       };
       const move = (amount) => {
@@ -633,6 +1011,46 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
         move(distance > 0 ? -1 : 1);
       });
       stage.addEventListener("pointercancel", () => { pointerStartX = null; });
+    })();
+  </script>
+  <script>
+    (() => {
+      const rows = Array.from(document.querySelectorAll("[data-history-campaign]"));
+      if (rows.length === 0) return;
+      const query = document.querySelector("[data-history-query]");
+      const suite = document.querySelector("[data-history-suite]");
+      const status = document.querySelector("[data-history-status]");
+      const from = document.querySelector("[data-history-from]");
+      const through = document.querySelector("[data-history-through]");
+      const partial = document.querySelector("[data-history-partial]");
+      const empty = document.querySelector("[data-history-empty]");
+      const suiteTrends = [...document.querySelectorAll("[data-history-suite-trends]")];
+      const apply = () => {
+        const search = query.value.trim().toLowerCase();
+        let visible = 0;
+        rows.forEach((row) => {
+          const matches =
+            (!search || row.dataset.historySearch.includes(search)) &&
+            (!suite.value || row.dataset.historySuites.split(" ").includes(suite.value)) &&
+            (!status.value || row.dataset.historyStatus === status.value) &&
+            (!from.value || row.dataset.historyDate >= from.value) &&
+            (!through.value || row.dataset.historyDate <= through.value) &&
+            (partial.checked || row.dataset.historyComplete === "true");
+          row.hidden = !matches;
+          if (matches) visible += 1;
+        });
+        suiteTrends.forEach((section) => {
+          section.hidden = Boolean(suite.value) && section.dataset.historySuiteTrends !== suite.value;
+        });
+        empty.hidden = visible !== 0;
+      };
+      query.addEventListener("input", apply);
+      suite.addEventListener("change", apply);
+      status.addEventListener("change", apply);
+      from.addEventListener("change", apply);
+      through.addEventListener("change", apply);
+      partial.addEventListener("change", apply);
+      apply();
     })();
   </script>
 </body>

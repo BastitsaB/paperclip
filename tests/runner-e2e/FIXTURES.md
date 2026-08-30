@@ -3,6 +3,20 @@
 The fixture catalog is executable production-contract data. Keep it small,
 typed, deterministic, and free of raw credentials.
 
+## Suites and matrices
+
+A `RunnerSuiteFixture` declares one durable testing purpose: stable ID, label,
+description, profiles, environments, cases, expected size, and definition or
+ranking metadata. Its execution IDs are globally prefixed as
+`<suite>.<profile>.<environment>.<case>`. Add a new suite when the testing
+purpose or desired cross-product differs; do not inflate an existing suite with
+unrelated dimensions.
+
+The suite definition fingerprint is historical comparison metadata. Any
+profile, model qualification, environment, task, or ranking-snapshot change
+must change that fingerprint automatically so the dashboard can annotate the
+boundary instead of silently joining unlike totals.
+
 ## Agent profiles
 
 Add `RunnerProfileFixture` entries in `catalog.ts`. A profile declares:
@@ -20,6 +34,13 @@ artifact rules. Codex profiles import `DEFAULT_CODEX_LOCAL_MODEL`, OpenCode
 profiles import `QUALIFIED_OPENCODE_MODEL`, and ACPX profiles import
 `QUALIFIED_ACPX_PROFILES`. Add or qualify models at their owning production
 source first.
+
+OpenRouter breadth profiles are generated from `openrouter-models.json`, not
+written by hand. That reviewed snapshot must contain exactly five unique,
+available, tool-capable models with rank, canonical ID, display name, supported
+parameters, source URL, capture time, and verified content hash. Refresh it
+manually with `pnpm test:e2e:runner:models:update`; nightly campaigns never
+change fixture definitions.
 
 Agent `adapterConfig.env` values must be `{type:"secret_ref", secretId,
 version:"latest"}` objects supplied to the factory. A fixture source containing
@@ -68,7 +89,11 @@ nonce-based title/prompt/marker factories, per-environment attempt deadlines,
 deterministic matchers, and expected terminal state. Single-turn prompts should
 make one bounded request with observable output and no nondeterministic judging.
 The `plan_revision_acceptance` flow must also provide revision-request and Plan
-marker factories.
+marker factories. `question_resume_completion` must define the deterministic
+browser answer and prove exactly two successful runs with no pending
+interaction. `plan_approval_completion` must target the exact two-step
+canonical Plan revision, capture its pending UI, approve in the browser, and
+prove exactly two successful runs.
 
 Every selected case runs in its own isolated Paperclip process, and independent
 cases may run concurrently. Follow-up turns inside one case retain their shared
@@ -85,9 +110,9 @@ runtime, and environment assertions; the plan flow additionally verifies
 canonical document revision IDs, bodies, step counts, interaction targets, and
 visible previews. Add matcher behavior and credential-free tests together.
 
-Adding a task expands the matrix. Update the catalog's intentional matrix-size
-assertion and its unit test in the same change. Paid tests never silently skip
-a missing credential or unsupported artifact.
+Adding a task expands its suite's matrix. Update the suite's intentional size,
+the complete-catalog size, and credential-free unit tests in the same change.
+Paid tests never silently skip a missing credential or unsupported artifact.
 
 ## New Paperclip object fixtures
 

@@ -6,6 +6,7 @@ export interface RunnerSelectorOptions {
   list: boolean;
   matrixJson: boolean;
   ids: string[];
+  suites: string[];
   groups: string[];
   profiles: string[];
   environments: string[];
@@ -34,6 +35,7 @@ export function parseRunnerSelectors(
     list: false,
     matrixJson: false,
     ids: [],
+    suites: [],
     groups: [],
     profiles: [],
     environments: [],
@@ -56,11 +58,19 @@ export function parseRunnerSelectors(
       index += 1;
       options.maxParallel = Number(value);
     } else if (
-      ["--id", "--group", "--profile", "--environment", "--case"].includes(flag)
+      [
+        "--id",
+        "--suite",
+        "--group",
+        "--profile",
+        "--environment",
+        "--case",
+      ].includes(flag)
     ) {
       const value = valueFor(args, index, flag);
       index += 1;
       if (flag === "--id") options.ids.push(value);
+      else if (flag === "--suite") options.suites.push(value);
       else if (flag === "--group") options.groups.push(value);
       else if (flag === "--profile") options.profiles.push(value);
       else if (flag === "--environment") options.environments.push(value);
@@ -75,7 +85,8 @@ export function parseRunnerSelectors(
   }
 
   const hasDimensions =
-    options.groups.length +
+    options.suites.length +
+      options.groups.length +
       options.profiles.length +
       options.environments.length +
       options.cases.length >
@@ -117,6 +128,11 @@ export function selectRunnerExecutions(
   matrix: readonly MatrixExecution[] = runnerMatrix,
 ): MatrixExecution[] {
   const knownGroups = new Set(matrix.flatMap((execution) => execution.groups));
+  assertKnown(
+    "suite",
+    options.suites,
+    new Set(matrix.map((execution) => execution.suite.id)),
+  );
   assertKnown("group", options.groups, knownGroups);
   assertKnown(
     "profile",
@@ -145,12 +161,15 @@ export function selectRunnerExecutions(
       options.all ||
       (options.list &&
         options.groups.length === 0 &&
+        options.suites.length === 0 &&
         options.profiles.length === 0 &&
         options.environments.length === 0 &&
         options.cases.length === 0)
     )
       return true;
     return (
+      (options.suites.length === 0 ||
+        options.suites.includes(execution.suite.id)) &&
       options.groups.every((group) => execution.groups.includes(group)) &&
       (options.profiles.length === 0 ||
         options.profiles.includes(execution.profile.id)) &&
@@ -172,6 +191,7 @@ export function buildMatrixJobs(
   return executions
     .map((execution) => ({
       executionId: execution.id,
+      suiteId: execution.suite.id,
       profileId: execution.profile.id,
       environmentId: execution.environment.id,
       caseId: execution.task.id,

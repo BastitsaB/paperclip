@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   runnerEnvironments,
   runnerMatrix,
+  openRouterBreadthProfiles,
+  openRouterBreadthTasks,
   runnerProfiles,
+  runnerSuites,
   runnerTasks,
   isImmutableDaytonaImage,
   validateRunnerCatalog,
@@ -15,12 +18,62 @@ import {
 } from "./selectors.js";
 
 describe("runner E2E catalog", () => {
-  it("validates the eight by two by three acceptance matrix", () => {
+  it("validates the 48-cell core and 15-cell breadth suites", () => {
     expect(runnerProfiles).toHaveLength(8);
+    expect(openRouterBreadthProfiles).toHaveLength(5);
     expect(runnerEnvironments).toHaveLength(2);
     expect(runnerTasks).toHaveLength(3);
-    expect(validateRunnerCatalog()).toHaveLength(48);
-    expect(new Set(runnerMatrix.map((entry) => entry.id)).size).toBe(48);
+    expect(openRouterBreadthTasks).toHaveLength(3);
+    expect(runnerSuites.map((suite) => suite.expectedMatrixSize)).toEqual([
+      48, 15,
+    ]);
+    expect(validateRunnerCatalog()).toHaveLength(63);
+    expect(new Set(runnerMatrix.map((entry) => entry.id)).size).toBe(63);
+    expect(
+      runnerMatrix.filter((entry) => entry.suite.id === "core-compatibility"),
+    ).toHaveLength(48);
+    expect(
+      runnerMatrix.filter(
+        (entry) => entry.suite.id === "openrouter-model-breadth",
+      ),
+    ).toHaveLength(15);
+  });
+
+  it("derives five local native OpenCode profiles from the ranked snapshot", () => {
+    expect(
+      openRouterBreadthProfiles.map((profile) => profile.ranking?.rank),
+    ).toEqual([1, 2, 3, 4, 5]);
+    expect(
+      openRouterBreadthProfiles.every(
+        (profile) =>
+          profile.adapterType === "paperclip_runner" &&
+          profile.provider === "opencode" &&
+          profile.model.startsWith("openrouter/") &&
+          profile.supportedEnvironments.join(",") === "local" &&
+          profile.modelQualification.source === "openrouter_rankings_snapshot",
+      ),
+    ).toBe(true);
+  });
+
+  it("defines deterministic two-run question and plan state machines", () => {
+    const question = openRouterBreadthTasks.find(
+      (task) => task.id === "question-resume-complete",
+    );
+    const plan = openRouterBreadthTasks.find(
+      (task) => task.id === "plan-approve-complete",
+    );
+    expect(question).toMatchObject({
+      flow: "question_resume_completion",
+      expectedRunCount: 2,
+    });
+    expect(question?.buildQuestionAnswer?.("nonce")).toMatchObject({
+      optionLabel: "Cobalt",
+    });
+    expect(plan).toMatchObject({
+      flow: "plan_approval_completion",
+      expectedRunCount: 2,
+    });
+    expect(plan?.buildPrompt("nonce")).toContain("exactly two numbered steps");
   });
 
   it("uses only declared secret references in generated payloads", () => {
@@ -66,7 +119,8 @@ describe("runner E2E catalog", () => {
 
   it("binds native Codex automation auth to the encrypted OpenAI secret", () => {
     const execution = runnerMatrix.find(
-      (candidate) => candidate.id === "runner-codex.local.message-marker",
+      (candidate) =>
+        candidate.id === "core-compatibility.runner-codex.local.message-marker",
     );
     expect(execution).toBeDefined();
     const secretRef = {
@@ -157,13 +211,27 @@ describe("runner E2E selectors", () => {
       "local",
     ]);
     expect(selectRunnerExecutions(options).map((entry) => entry.id)).toEqual([
-      "legacy-codex.local.message-marker",
-      "legacy-codex.local.plan-revise-accept",
-      "legacy-codex.local.ask-question",
-      "runner-codex.local.message-marker",
-      "runner-codex.local.plan-revise-accept",
-      "runner-codex.local.ask-question",
+      "core-compatibility.legacy-codex.local.message-marker",
+      "core-compatibility.legacy-codex.local.plan-revise-accept",
+      "core-compatibility.legacy-codex.local.ask-question",
+      "core-compatibility.runner-codex.local.message-marker",
+      "core-compatibility.runner-codex.local.plan-revise-accept",
+      "core-compatibility.runner-codex.local.ask-question",
     ]);
+  });
+
+  it("selects a suite without exploding its environment matrix", () => {
+    const selected = selectRunnerExecutions(
+      parseRunnerSelectors(["--suite", "openrouter-model-breadth"]),
+    );
+    expect(selected).toHaveLength(15);
+    expect(
+      selected.every(
+        (entry) =>
+          entry.suite.id === "openrouter-model-breadth" &&
+          entry.environment.id === "local",
+      ),
+    ).toBe(true);
   });
 
   it("combines repeated groups with AND semantics", () => {
@@ -193,9 +261,9 @@ describe("runner E2E selectors", () => {
     const jobs = buildMatrixJobs(
       selectRunnerExecutions(parseRunnerSelectors(["--all"])),
     );
-    expect(jobs).toHaveLength(48);
+    expect(jobs).toHaveLength(63);
     expect(jobs.filter((job) => job.needsDaytona)).toHaveLength(24);
-    expect(new Set(jobs.map((job) => job.executionId)).size).toBe(48);
+    expect(new Set(jobs.map((job) => job.executionId)).size).toBe(63);
   });
 
   it("validates bounded local parallelism", () => {

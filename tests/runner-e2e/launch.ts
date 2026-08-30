@@ -21,6 +21,7 @@ import { isImmutableDaytonaImage, runnerMatrix } from "./catalog.js";
 import { renderRunnerE2EDashboard } from "./dashboard.js";
 import { packageEvidence } from "./evidence.js";
 import { classifyFailure, shouldRetryFailure } from "./failure-classifier.js";
+import { buildRunnerCampaign } from "./history.js";
 import { assertEmbeddedDatabaseIsolation } from "./instance-isolation.js";
 import {
   assertSecretFree,
@@ -286,8 +287,23 @@ function syntheticResult(
 ): RunnerE2EResult {
   const finishedAtMs = Date.now();
   return {
-    schema: "paperclip.runner-e2e.result/v1",
+    schema: "paperclip.runner-e2e.result/v2",
     executionId: execution.id,
+    suiteId: execution.suite.id,
+    suiteDefinitionHash: execution.suiteDefinitionHash,
+    source: {
+      sha: process.env.GITHUB_SHA ?? null,
+      ref: process.env.GITHUB_REF ?? null,
+      workflowRunUrl:
+        process.env.GITHUB_SERVER_URL &&
+        process.env.GITHUB_REPOSITORY &&
+        process.env.GITHUB_RUN_ID
+          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : null,
+    },
+    ...(execution.profile.ranking
+      ? { rankingSnapshot: execution.profile.ranking }
+      : {}),
     attempt,
     status: "failed",
     failureClass,
@@ -601,6 +617,7 @@ async function runAttempt(input: {
       const uploadDir = path.join(
         resultsRoot,
         campaignId,
+        candidate.suite.id,
         candidate.profile.id,
         candidate.environment.id,
         candidate.task.id,
@@ -709,11 +726,12 @@ async function runAttempt(input: {
 }
 
 function printList(executions: readonly MatrixExecution[]) {
-  console.log("ID\tGENERATION\tPROVIDER\tMODEL\tCREDENTIALS");
+  console.log("ID\tSUITE\tGENERATION\tPROVIDER\tMODEL\tCREDENTIALS");
   for (const execution of executions) {
     console.log(
       [
         execution.id,
+        execution.suite.id,
         execution.profile.generation,
         execution.profile.provider,
         execution.profile.model,
@@ -844,28 +862,32 @@ async function main() {
     (execution) => runExecutionWithRetry({ execution, campaignId, options }),
   );
 
-  const summary = {
+  const generatedAt = new Date().toISOString();
+  const campaign = buildRunnerCampaign({
     campaignId,
-    selected: finalResults.length,
-    passed: finalResults.filter((result) => result.status === "passed").length,
-    failed: finalResults.filter((result) => result.status === "failed").length,
+    generatedAt,
+    expected: executions.map((execution) => execution.id),
     results: finalResults,
-  };
+  });
   const summaryDir = path.join(resultsRoot, campaignId);
   await mkdir(summaryDir, { recursive: true });
   const campaignSecrets = normalizedSecrets(
     CREDENTIAL_NAMES.map((name) => process.env[name]),
   );
-  const safeSummary = sanitizeJson(summary, campaignSecrets) as typeof summary;
-  const campaignText = `${JSON.stringify(safeSummary, null, 2)}\n`;
+  const safeCampaign = sanitizeJson(
+    campaign,
+    campaignSecrets,
+  ) as typeof campaign;
+  const campaignText = `${JSON.stringify(safeCampaign, null, 2)}\n`;
   assertSecretFree(campaignText, campaignSecrets, "campaign.json");
   await writeFile(path.join(summaryDir, "campaign.json"), campaignText, "utf8");
   const dashboard = renderRunnerE2EDashboard({
     title: `Runner E2E · ${campaignId}`,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     expected: executions.map((execution) => execution.id),
     catalog: runnerMatrix,
-    entries: safeSummary.results.map((result) => ({
+    campaign: safeCampaign,
+    entries: safeCampaign.results.map((result) => ({
       result,
       valid: result.status === "passed" && result.cleanup === "passed",
       errors:
@@ -877,6 +899,7 @@ async function main() {
                 `cleanup=${result.cleanup}`,
             ],
       evidenceBaseHref: [
+        result.suiteId ?? "core-compatibility",
         result.profileId,
         result.environmentId,
         result.caseId,
@@ -887,9 +910,9 @@ async function main() {
   assertSecretFree(dashboard, campaignSecrets, "dashboard.html");
   await writeFile(path.join(summaryDir, "dashboard.html"), dashboard, "utf8");
   console.log(
-    `Campaign ${campaignId}: ${summary.passed}/${summary.selected} passed`,
+    `Campaign ${campaignId}: ${safeCampaign.passed}/${safeCampaign.selected} passed`,
   );
-  if (summary.failed > 0) process.exitCode = 1;
+  if (safeCampaign.failed > 0) process.exitCode = 1;
 }
 
 await main().catch((error) => {

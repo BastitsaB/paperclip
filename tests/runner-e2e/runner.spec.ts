@@ -89,6 +89,13 @@ interface InteractionRecord {
       revisionId?: string;
       revisionNumber?: number;
     };
+    questions?: Array<{
+      id: string;
+      prompt: string;
+      selectionMode: "single" | "multi";
+      required?: boolean;
+      options: Array<{ id: string; label: string }>;
+    }>;
   };
 }
 interface IssueDocumentRecord {
@@ -264,6 +271,14 @@ function isPendingPlanConfirmation(interaction: InteractionRecord) {
     interaction.payload?.target?.type === "issue_document" &&
     interaction.payload.target.key === "plan" &&
     typeof interaction.payload.target.revisionId === "string"
+  );
+}
+
+function isPendingQuestion(interaction: InteractionRecord) {
+  return (
+    interaction.kind === "ask_user_questions" &&
+    interaction.status === "pending" &&
+    Boolean(interaction.payload?.questions?.length)
   );
 }
 
@@ -564,6 +579,7 @@ for (const execution of executions) {
       };
 
       let planLifecycleEvidence: Record<string, unknown> | null = null;
+      let questionLifecycleEvidence: Record<string, unknown> | null = null;
       if (execution.task.flow === "plan_revision_acceptance") {
         const planMarkers = execution.task.buildPlanMarkers?.(nonce);
         const revisionRequest = execution.task.buildRevisionRequest?.(nonce);
@@ -710,6 +726,119 @@ for (const execution of executions) {
           revisedPlan,
           revisionRequest,
         };
+      } else if (execution.task.flow === "question_resume_completion") {
+        const expectedAnswer = execution.task.buildQuestionAnswer?.(nonce);
+        if (!expectedAnswer) {
+          throw new Error(
+            `Question fixture ${execution.task.id} is missing its answer factory`,
+          );
+        }
+        const pendingState = await pollUntil({
+          label: `pending user question for issue ${issue.id}`,
+          deadlineAt,
+          load: loadTaskState,
+          accept: ({ taskRuns, interactions }) =>
+            taskRuns.length >= 1 &&
+            taskRuns.every((run) => TERMINAL_RUN_STATUSES.has(run.status)) &&
+            interactions.some(isPendingQuestion),
+          reject: ({ taskRuns }) => definitiveRunFailure(taskRuns),
+        });
+        const questionInteraction =
+          pendingState.interactions.find(isPendingQuestion)!;
+        const labels =
+          questionInteraction.payload?.questions?.flatMap((question) =>
+            question.options.map((option) => option.label),
+          ) ?? [];
+        if (!labels.includes(expectedAnswer.optionLabel)) {
+          throw new Error(
+            `Question interaction omitted ${expectedAnswer.optionLabel}`,
+          );
+        }
+        await page.goto(
+          `/${encodeURIComponent(issuePrefix)}/issues/${encodeURIComponent(issue.identifier ?? issue.id)}`,
+          { waitUntil: "domcontentloaded" },
+        );
+        await expect(
+          page
+            .getByRole("button", {
+              name: expectedAnswer.optionLabel,
+              exact: true,
+            })
+            .last(),
+        ).toBeVisible({ timeout: 30_000 });
+        await captureScreenshot(
+          "question-pending",
+          "Structured question awaiting an answer",
+          "question-pending.png",
+        );
+        await page
+          .getByRole("button", {
+            name: expectedAnswer.optionLabel,
+            exact: true,
+          })
+          .last()
+          .click();
+        await page
+          .getByRole("button", { name: "Submit answers", exact: true })
+          .last()
+          .click();
+        questionLifecycleEvidence = {
+          interaction: questionInteraction,
+          answer: expectedAnswer.optionLabel,
+          expectedMarker: expectedAnswer.expectedMarker,
+        };
+      } else if (execution.task.flow === "plan_approval_completion") {
+        const planMarkers = execution.task.buildPlanMarkers?.(nonce);
+        if (!planMarkers) {
+          throw new Error(
+            `Plan fixture ${execution.task.id} is missing its marker factory`,
+          );
+        }
+        const pendingState = await pollUntil({
+          label: `pending plan approval for issue ${issue.id}`,
+          deadlineAt,
+          load: loadTaskState,
+          accept: ({ taskRuns, interactions }) =>
+            taskRuns.length >= 1 &&
+            taskRuns.every((run) => TERMINAL_RUN_STATUSES.has(run.status)) &&
+            interactions.some(isPendingPlanConfirmation),
+          reject: ({ taskRuns }) => definitiveRunFailure(taskRuns),
+        });
+        const interaction = pendingState.interactions.find(
+          isPendingPlanConfirmation,
+        )!;
+        const plan = await api.get<IssueDocumentRecord>(
+          `/api/issues/${issue.id}/documents/plan`,
+        );
+        if (!normalizePlanMarkdown(plan.body).includes(planMarkers.draft)) {
+          throw new Error(`Plan document did not contain ${planMarkers.draft}`);
+        }
+        if (numberedPlanStepCount(plan.body) !== 2) {
+          throw new Error("Plan must contain exactly two numbered steps");
+        }
+        if (interaction.payload?.target?.revisionId !== plan.latestRevisionId) {
+          throw new Error(
+            "Plan confirmation did not target the latest Plan revision",
+          );
+        }
+        await page.goto(
+          `/${encodeURIComponent(issuePrefix)}/issues/${encodeURIComponent(issue.identifier ?? issue.id)}`,
+          { waitUntil: "domcontentloaded" },
+        );
+        await expectPlanStageMarkerVisible(page, planMarkers.draft);
+        await captureScreenshot(
+          "plan-pending",
+          "Plan awaiting approval",
+          "plan-pending.png",
+        );
+        await page
+          .getByRole("button", {
+            name: interaction.payload?.acceptLabel ?? "Approve",
+            exact: true,
+          })
+          .last()
+          .click();
+        planLifecycleEvidence = { interaction, plan };
       }
 
       const terminal = await pollUntil({
@@ -790,22 +919,13 @@ for (const execution of executions) {
             (candidate) => comment.createdByRunId === candidate.id,
           ),
       );
-      // A native run can reach its terminal status just before the accepted
-      // semantic result is projected into the issue comment list. The task UI
-      // already renders that accepted result immediately, so include its
-      // public run-detail summary in the message matcher input and retain the
-      // separate browser assertion below as the visible-source-of-truth check.
-      const semanticSummaries = selectedRuns.flatMap((candidate) => {
-        const profile = record(candidate.runnerProfileJson);
-        const checkpoint = record(profile.sessionCheckpoint);
-        const semanticResult = record(checkpoint.semanticResult);
-        return typeof semanticResult.summary === "string"
-          ? [semanticResult.summary]
-          : [];
-      });
+      // Message matchers intentionally use persisted agent comments only.
+      // A semantic finish summary can differ from the actual user-facing text;
+      // accepting it here would let backend metadata mask a truncated UI
+      // response. The browser assertion below remains the visible source of
+      // truth after the comment projection has settled.
       const message = agentComments
         .map((comment) => comment.body ?? "")
-        .concat(semanticSummaries)
         .join("\n");
       const pendingInteractions = terminal.interactions.filter(
         (interaction) => interaction.status === "pending",
@@ -962,6 +1082,7 @@ for (const execution of executions) {
           comments: terminal.comments,
           interactions: terminal.interactions,
           planLifecycleEvidence,
+          questionLifecycleEvidence,
           matcherResults,
           invariantFailures,
           runEvents,
@@ -1117,8 +1238,23 @@ for (const execution of executions) {
         fallbackFinishedAt: new Date(finishedAtMs),
       });
       const resultWithoutBilling: RunnerE2EResult = {
-        schema: "paperclip.runner-e2e.result/v1",
+        schema: "paperclip.runner-e2e.result/v2",
         executionId: execution.id,
+        suiteId: execution.suite.id,
+        suiteDefinitionHash: execution.suiteDefinitionHash,
+        source: {
+          sha: process.env.GITHUB_SHA ?? null,
+          ref: process.env.GITHUB_REF ?? null,
+          workflowRunUrl:
+            process.env.GITHUB_SERVER_URL &&
+            process.env.GITHUB_REPOSITORY &&
+            process.env.GITHUB_RUN_ID
+              ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+              : null,
+        },
+        ...(execution.profile.ranking
+          ? { rankingSnapshot: execution.profile.ranking }
+          : {}),
         attempt,
         status: primaryError ? "failed" : "passed",
         ...(primaryError

@@ -44,7 +44,8 @@ describe("live runner fixtures", () => {
     } as unknown as RunnerApi;
     const execution = runnerMatrix.find(
       (candidate) =>
-        candidate.id === "legacy-codex.daytona.message-marker",
+        candidate.id ===
+        "core-compatibility.legacy-codex.daytona.message-marker",
     );
     expect(execution).toBeDefined();
 
@@ -57,7 +58,8 @@ describe("live runner fixtures", () => {
         OPENAI_API_KEY: "openai-test-value",
         DAYTONA_API_KEY: "daytona-test-value",
       },
-      daytonaImage: "ghcr.io/paperclip/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      daytonaImage:
+        "ghcr.io/paperclip/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     });
 
     expect(calls.indexOf("POST /api/plugins/install")).toBeLessThan(

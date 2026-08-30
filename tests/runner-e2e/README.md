@@ -1,9 +1,15 @@
 # Paid runner full-stack E2E
 
-This is the billable browser acceptance suite for Paperclip runner profiles. It
-is deliberately separate from `tests/e2e`: every profile/environment cell gets
+This is the billable browser acceptance campaign system for Paperclip runner
+profiles. It is deliberately separate from `tests/e2e`: every independently
+scheduled execution gets
 a fresh Paperclip home, embedded Postgres database, instance configuration,
 port, workspace, company, encrypted secrets, environment, and agent.
+
+The vocabulary is: a **campaign** is one workflow invocation against one SHA; a
+**suite** is a durable testing purpose; a **matrix** is that suite's profiles ×
+environments × cases; an **execution/cell** is one parallel job; and an
+**attempt** is one isolated harness run, including an infrastructure retry.
 
 The browser creates and assigns the task. The harness does not call a private
 runner hook or write fixtures directly to the database.
@@ -56,7 +62,8 @@ pnpm test:e2e:runner -- --list
 Examples of explicit billable runs:
 
 ```bash
-pnpm test:e2e:runner -- --id legacy-codex.local.message-marker --headed
+pnpm test:e2e:runner -- --id core-compatibility.legacy-codex.local.message-marker --headed
+pnpm test:e2e:runner -- --suite openrouter-model-breadth --case hello-complete
 pnpm test:e2e:runner -- --group native --environment local
 pnpm test:e2e:runner -- --profile runner-codex --case message-marker
 pnpm test:e2e:runner -- --case plan-revise-accept --group local
@@ -64,18 +71,30 @@ pnpm test:e2e:runner -- --case ask-question --group native
 pnpm test:e2e:runner -- --all
 ```
 
-The catalog contains three cases for every profile/environment pair:
+The catalog contains two suites. `core-compatibility` (**Core Runner
+Compatibility**) is the existing eight major runner profiles × local/Daytona ×
+three workflows: 48 cells. Its cases are:
 
 - `message-marker`: one basic visible response and Done transition;
 - `plan-revise-accept`: an initial Plan, a browser-requested revision on the
   same Plan, browser acceptance of the new revision, and verified execution;
 - `ask-question`: a direct answer from a task created in Ask mode.
 
-The full matrix is 48 executions. The plan case has three agent turns, so a
-complete campaign performs 80 paid turns. Narrow selectors are strongly
-recommended while developing fixtures.
+`openrouter-model-breadth` (**OpenRouter Model Breadth**) is five models from
+the tracked weekly tool-capable ranking snapshot × native OpenCode × local ×
+three workflows: 15 cells. Its cases are:
 
-`--group`, `--profile`, `--environment`, and `--case` are repeatable. Repeated
+- `hello-complete`: a basic nonce response and explicit Done transition;
+- `question-resume-complete`: one structured question, browser selection of
+  “Cobalt,” then a resumed completion on the same task; and
+- `plan-approve-complete`: one exact two-step Plan, browser approval of that
+  revision, then a resumed completion on the same task.
+
+The complete catalog is 63 cells and 105 expected paid agent turns. Follow-up
+steps remain ordered within their cell; all other cells are independent.
+Narrow selectors are strongly recommended while developing fixtures.
+
+`--suite`, `--group`, `--profile`, `--environment`, and `--case` are repeatable. Repeated
 values in one dimension use OR semantics; dimensions and repeated groups use
 AND semantics. `--id` is exclusive with dimension selectors and `--all`.
 `--headed`, `--ui`, and `--debug` are forwarded to Playwright. An unknown
@@ -96,6 +115,14 @@ Credential-free checks are:
 ```bash
 pnpm test:e2e:runner:unit
 pnpm test:e2e:runner:typecheck
+```
+
+The OpenRouter ranking snapshot is tracked in `openrouter-models.json`; nightly
+runs never mutate it. Refresh it deliberately, review the source/capture/hash
+diff, and rerun credential-free checks:
+
+```bash
+pnpm test:e2e:runner:models:update
 ```
 
 ## Daytona image
@@ -172,9 +199,30 @@ Each result contains raw sanitized `usage`, normalized `billing`, and
   Credits, discounts, the storage allowance, and delayed billing adjustments
   can make the eventual Daytona charge lower.
 
-`normalized-results.json` includes the per-test summaries and a campaign-level
-`billing` rollup. `summary.md` carries the same totals for the GitHub Actions
-job summary.
+`normalized-results.json` uses the v2 campaign schema and includes per-test,
+per-suite, and overall billing. The compact `history.json` index retains the
+same metrics per campaign/suite/execution, source SHA/ref, definition
+fingerprints, completeness, retries, and cleanup. Trend charts compare only
+complete campaigns by default; partial/manual selections remain browsable.
+`summary.md` carries the current totals into the GitHub Actions job summary.
+
+### Iterate on a published dashboard without rerunning paid tests
+
+Download and extract the `github-pages` artifact from an existing workflow run,
+then regenerate only its HTML from the retained `normalized-results.json` and
+evidence files:
+
+```bash
+gh run download <run-id> --repo paperclipai/paperclip --name github-pages --dir /tmp/runner-e2e-pages
+mkdir /tmp/runner-e2e-site
+tar -xf /tmp/runner-e2e-pages/artifact.tar -C /tmp/runner-e2e-site
+pnpm test:e2e:runner:dashboard -- /tmp/runner-e2e-site
+# Optionally use a downloaded history index:
+pnpm test:e2e:runner:dashboard -- /tmp/runner-e2e-site --history /tmp/history.json
+```
+
+Serve that directory with any static file server. This path does not start
+Paperclip, invoke an agent, create a Daytona lease, or consume provider tokens.
 
 Before publication, the launcher:
 
@@ -194,23 +242,67 @@ auto-stop/archive/delete values remain as cancellation backstops.
 ## GitHub Actions
 
 `Runner Full-Stack E2E` has only `schedule` and `workflow_dispatch` triggers; it
-never runs for a pull request or ordinary push. Configure these repository
-secrets with the exact names above. Manual inputs accept comma-separated values
-for repeatable dimensions.
+never runs for a pull request or ordinary push. Because this repository is
+public, manual campaigns fail before checkout unless they run from the default
+branch and both the original actor and rerun actor have numeric GitHub user IDs
+in the non-empty JSON-array repository variable
+`RUNNER_E2E_ALLOWED_ACTOR_IDS`. Usernames are intentionally not trusted.
+The first scheduled attempt is trusted automation; any human rerun of a
+scheduled campaign must pass the triggering-actor allowlist.
+
+Create a protected `runner-e2e-paid` GitHub environment, restrict it to the
+default branch, limit environment administration to trusted maintainers, and
+store the four provider secrets there. This is a second authorization boundary:
+the pre-check prevents unauthorized scheduling, while the environment prevents
+secret release if the workflow gate is accidentally weakened. Also restrict
+Actions to approved actions and require review of `.github/workflows/**` and
+`tests/runner-e2e/**` through CODEOWNERS and branch protection. Manual inputs
+accept comma-separated values for repeatable dimensions.
 
 The nightly cron is `08:47 UTC`, but scheduled execution is intentionally gated
 by the repository variable `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true`. Set it
 only after the live acceptance ladder in the architecture plan is green.
-Artifacts and merged HTML/JUnit/normalized reports are retained for 30 days.
+Set `RUNNER_E2E_MAX_PARALLEL` to an integer from 1–63 (default 32). Paid cells
+run on `ubuntu-latest-m`; multi-turn steps are sequential inside their cell
+while independent cells overlap. Artifacts and merged HTML/JUnit/normalized
+reports are retained for 30 days.
 
-GitHub Actions artifacts are the private, durable audit copy and download as an
-archive; they are not interactive web hosting. To publish the latest green
-screenshot dashboard as a browsable site, enable GitHub Pages with GitHub
-Actions as its source and set repository variable
-`RUNNER_FULL_STACK_E2E_PUBLISH_PAGES=true`. The workflow uses its short-lived
-`GITHUB_TOKEN`/OIDC permissions, so no S3 bucket or S3 token is required. Review
-the repository's Pages visibility before enabling this because task prompts,
-model output, and screenshots may be visible to site readers.
+Restrict the `ubuntu-latest-m` runner group to this workflow and the selected
+repository. Do not let pull-request or fork-triggered workflows target that
+group, do not mix it with untrusted workloads, and use ephemeral/reimaged
+runners so one paid cell cannot leave state for the next. These runner-group
+controls are external GitHub settings and are as important as the workflow
+checks in a public repository.
+
+GitHub Actions artifacts are 30-day operational copies, not the permanent
+history. Create a second protected `runner-e2e-history` environment, restricted
+to the default branch and trusted environment administrators, then configure these repository
+variables:
+
+- `RUNNER_E2E_HISTORY_AWS_ROLE_ARN`
+- `RUNNER_E2E_HISTORY_AWS_REGION`
+- `RUNNER_E2E_HISTORY_S3_BUCKET`
+- `RUNNER_E2E_HISTORY_PUBLIC_BASE_URL`
+- optional `RUNNER_E2E_HISTORY_PREFIX` (default `runner-e2e`)
+
+The job exchanges GitHub OIDC for short-lived AWS credentials; never add AWS
+access-key secrets. Its IAM role must trust only
+`repo:paperclipai/paperclip:environment:runner-e2e-history`, and permit only
+Get/List/Put under the configured prefix—never Delete. Enable S3 versioning and
+Block Public Access. CloudFront reads the private bucket through Origin Access
+Control. Immutable campaign bundles live under `campaigns/<run-id>-<attempt>/`;
+mutable `history.json`, `latest.json`, and `latest-green.json` are updated by a
+globally serialized publisher. An existing campaign key with a different
+bundle digest fails closed.
+
+GitHub Pages remains the stable latest dashboard. Enable Pages with GitHub
+Actions as its source and set `RUNNER_FULL_STACK_E2E_PUBLISH_PAGES=true`.
+Historical screenshots and model output are publicly readable through
+CloudFront by design, so publication still uses a narrow file allowlist and
+secret scan; databases, Paperclip homes, workspaces, raw logs, and credentials
+are never published.
 
 See [FIXTURES.md](./FIXTURES.md) before adding or changing a profile,
 environment, task, matcher, or future Paperclip object fixture.
+See [SECURITY.md](./SECURITY.md) before enabling paid dispatch, the runner
+group, or permanent public history in this public repository.

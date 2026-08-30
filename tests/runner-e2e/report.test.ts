@@ -129,7 +129,15 @@ describe("runner E2E report aggregation", () => {
     const normalized = JSON.parse(
       await readFile(path.join(output, "normalized-results.json"), "utf8"),
     );
-    expect(normalized).toMatchObject({ passed: 1, failed: 0 });
+    expect(normalized).toMatchObject({
+      schema: "paperclip.runner-e2e.campaign/v2",
+      selected: 1,
+      executed: 1,
+      passed: 1,
+      failed: 0,
+      retries: 1,
+      cleanupPassed: true,
+    });
     expect(normalized.billing).toMatchObject({
       reportedLlmCostUsd: 0.0125,
       llm: {
@@ -149,7 +157,9 @@ describe("runner E2E report aggregation", () => {
     expect(dashboard).toContain("Runner Full-Stack E2E");
     expect(dashboard).toContain(executionId);
     expect(dashboard).toContain("case-passed");
-    expect(dashboard).toContain("runner-acpx-codex.daytona.message-marker");
+    expect(dashboard).toContain(
+      "core-compatibility.runner-acpx-codex.daytona.message-marker",
+    );
     expect(dashboard).toContain("case-not-selected");
     expect(dashboard).toContain("<img");
     expect(dashboard).toContain('class="brand-lockup"');
@@ -161,9 +171,19 @@ describe("runner E2E report aggregation", () => {
     expect(dashboard).toContain("Matchers and test context");
     expect(dashboard).toContain("Campaign billing summary");
     expect(dashboard).toContain("LLM reported subtotal");
+    expect(dashboard).toContain("Agent execution time");
+    expect(dashboard).toContain("Daytona lease time");
     expect(dashboard).toContain("1,250 in · 75 out");
     expect(dashboard).toContain("$0.0125");
     expect(dashboard).toContain("unpriced or unavailable runs are excluded");
+    expect(dashboard).toContain('class="profile-sticky"');
+    expect(dashboard).toContain('class="mobile-environment-header"');
+    expect(dashboard).toContain("data-gallery-profile=");
+    expect(dashboard).toContain("data-gallery-environment=");
+    expect(dashboard).toContain('aria-label="Previous"');
+    expect(dashboard).toContain('aria-label="Next"');
+    expect(dashboard).not.toContain("overflow: auto; max-height: calc(100vh");
+    expect(dashboard).toContain("@media (max-width: 1180px)");
     expect(
       await readFile(path.join(output, "assets", "favicon.svg"), "utf8"),
     ).toContain("<svg");
@@ -175,7 +195,7 @@ describe("runner E2E report aggregation", () => {
         path.join(
           output,
           "evidence",
-          executionId,
+          `core-compatibility.${executionId}`,
           "attempt-2",
           "final-state.png",
         ),

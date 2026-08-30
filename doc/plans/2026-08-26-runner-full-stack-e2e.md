@@ -9,10 +9,14 @@ configure an agent, create and assign a task through the UI, run that task in a
 real local or Daytona execution environment, render the final answer, and
 persist the correct task/run/runtime state.
 
-The acceptance matrix is eight production-owned runner profiles by two
-environments by three deterministic task cases: 48 executions and 80 paid
-agent turns. It is independent of the general E2E suite and never runs on pull
-requests or ordinary pushes.
+The system now has two durable suites. **Core Runner Compatibility** preserves
+the eight production-owned runner profiles × two environments × three
+deterministic workflows: 48 cells and 80 expected paid agent turns.
+**OpenRouter Model Breadth** adds five ranked, tool-capable OpenRouter models ×
+native local OpenCode × three workflows: 15 cells and 25 expected turns. A
+complete campaign is 63 independently scheduled cells and 105 expected turns.
+It is independent of the general E2E suite and never runs on pull requests or
+ordinary pushes.
 
 ## Implemented architecture
 
@@ -66,7 +70,7 @@ the resolved configuration.
 
 No production endpoint/schema was added and direct database writes are absent.
 
-## Catalog and deterministic task
+## Suites, catalog, and deterministic tasks
 
 `catalog.ts` imports production model/qualification constants. It defines the
 legacy Codex, Claude, and OpenCode profiles and native Codex, OpenCode, ACPX Pi,
@@ -74,7 +78,9 @@ ACPX Claude, and ACPX Codex profiles. Each is crossed with local and Daytona.
 
 Catalog startup validates unique IDs, shared agent/environment schemas,
 declared credentials, supported combinations, raw secret-looking values,
-known selectors, and exactly 48 executions. Interfaces are in `types.ts`;
+known selectors, exact suite sizes of 48 and 15, and exactly 63 total
+executions. Globally unique IDs are
+`<suite>.<profile>.<environment>.<case>`. Interfaces are in `types.ts`;
 fixture dependency management is in `fixture-registry.ts`; deterministic
 matcher behavior is in `matchers.ts`.
 
@@ -88,6 +94,20 @@ accepts it through the browser, and verifies the final implementation marker,
 three successful runs, and Done. `message_contains` is normalized rather than
 exact to tolerate harmless provider framing. Plan markers also normalize
 provider-added Markdown underscore escaping.
+
+The OpenRouter suite generates its five profiles from the reviewed
+`openrouter-models.json` weekly tool-capable ranking snapshot. Rank, canonical
+ID, display name, supported parameters, source URL, capture time, and content
+hash are preserved as definition metadata; rankings are usage/adoption signals,
+not quality claims. Nightly campaigns never mutate the snapshot. The manual
+update command fetches `sort=top-weekly&supported_parameters=tools`, validates
+exactly five unique available models, and rewrites the snapshot for review.
+
+Its `hello-complete` case verifies a basic visible response and Done.
+`question-resume-complete` captures the pending structured question, selects
+“Cobalt” in the browser, and proves the second run consumed it and completed.
+`plan-approve-complete` captures the pending exact two-step canonical Plan,
+approves that revision in the browser, and proves the second run completed.
 
 ## Failure, retry, and cleanup policy
 
@@ -132,10 +152,12 @@ screenshot-first campaign dashboard.
 ## CI campaign
 
 `.github/workflows/runner-full-stack-e2e.yml` has a `08:47 UTC` cron and manual
-dispatch inputs mirroring local selectors. The catalog job emits 48 independently
-schedulable profile/environment/case jobs for a full run. The paid matrix uses
-`fail-fast:false`, `max-parallel:16`, and 25-minute local or 40-minute Daytona
-job limits that cover the scenario deadline plus one fresh-harness retry.
+dispatch inputs mirroring local selectors, including repeatable suite selection.
+The catalog job emits 63 independently schedulable jobs for a full run. The
+paid matrix uses `ubuntu-latest-m`, `fail-fast:false`, a validated
+`RUNNER_E2E_MAX_PARALLEL` default of 32, and 25-minute local or 40-minute
+Daytona job limits that cover the scenario deadline plus one fresh-harness
+retry. Multi-turn steps stay sequential only within their own cell.
 
 When Daytona is selected, one image job computes an audited content ID from the
 `linux/amd64` platform, Dockerfile, root package/lock/build configuration,
@@ -152,12 +174,34 @@ Every execution uploads a 30-day sanitized bundle. The final job always download
 evidence, merges Playwright blob reports into HTML/JUnit, stages the sanitized
 screenshots, and emits a screenshot grid whose expandable cards contain matcher
 results and execution context. It fails unless every selected latest attempt
-passed with cleanup and required evidence. The report always remains a GitHub
-Actions artifact. If `RUNNER_FULL_STACK_E2E_PUBLISH_PAGES=true`, the latest
-green report is also deployed with GitHub Pages; this uses GitHub's OIDC-backed
-Pages permissions and requires no S3 credential. The workflow follows
+passed with cleanup and required evidence. Result/campaign v2 schemas retain
+suite-definition fingerprints, source SHA/ref/run URL, overall and per-suite
+tokens/cost/runtime/lease time, and per-execution evidence.
+
+The report remains a 30-day GitHub Actions operational artifact. A globally
+serialized publisher exchanges GitHub OIDC for short-lived AWS credentials,
+writes an immutable content-digested campaign bundle to private, versioned S3,
+and updates compact `history.json`, `latest.json`, and `latest-green.json`
+pointers. The role has Get/List/Put only below one prefix and no Delete. S3
+Block Public Access stays enabled; CloudFront reads through Origin Access
+Control. Pages remains the stable current landing URL with the compact history
+embedded, while immutable CloudFront URLs preserve every green or red campaign.
+The workflow follows
 [Playwright blob report merging](https://playwright.dev/docs/test-sharding#merge-reports)
 and [GitHub dynamic matrix outputs](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs).
+
+Because the repository is public, a dedicated authorization job runs before
+checkout. It requires the default branch and, for manual dispatches and reruns,
+requires both GitHub actor contexts to resolve to numeric IDs present in the
+non-empty `RUNNER_E2E_ALLOWED_ACTOR_IDS` JSON array. The paid secret-bearing
+jobs and OIDC publisher also use separate protected environments restricted to
+the default branch. Branch protection/CODEOWNERS protect workflow and harness
+changes; environment secrets never reach authorization, catalog, image, report,
+or publishing jobs. A first scheduled attempt is trusted automation; a human
+rerun of a scheduled campaign must have an allowlisted triggering actor. The
+`ubuntu-latest-m` runner group is restricted to this repository and workflow,
+is unavailable to PR/fork workflows, and uses ephemeral/reimaged workers rather
+than sharing persistent state with untrusted jobs.
 
 The cron is present but billable scheduled execution requires repository
 variable `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true`. This enforces the launch
@@ -170,8 +214,10 @@ Run in order, recording the produced campaign artifacts:
 1. headed `legacy-codex.local.message-marker`;
 2. headless one local legacy and one local native cell;
 3. one Daytona legacy and one Daytona native cell, confirming lease cleanup;
-4. one manually dispatched complete 48-execution campaign; and
-5. set `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true` only after step 4 is green.
+4. all 15 OpenRouter breadth cells;
+5. one manually dispatched complete 63-execution campaign, verifying private
+   S3/CloudFront history and Pages navigation; and
+6. set `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true` only after step 5 is green.
 
 For every cell verify UI ownership/assignment, visible marker, `done` issue,
 the expected successful heartbeat run count, correct legacy/native mode, correct local or

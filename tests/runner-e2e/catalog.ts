@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createAgentSchema } from "../../packages/shared/src/validators/agent.js";
 import { createEnvironmentSchema } from "../../packages/shared/src/validators/environment.js";
 import { DEFAULT_CODEX_LOCAL_MODEL } from "../../packages/adapters/codex-local/src/index.js";
@@ -5,6 +6,10 @@ import { modelProfiles as claudeModelProfiles } from "../../packages/adapters/cl
 import { QUALIFIED_ACPX_PROFILES } from "../../packages/paperclip-runner/src/drivers/acpx/qualified-profiles.js";
 import { QUALIFIED_OPENCODE_MODEL } from "../../packages/paperclip-runner/src/drivers/opencode/opencode-server-driver.js";
 import { CREDENTIAL_NAMES } from "./types.js";
+import {
+  openRouterProfileId,
+  openRouterRankingSnapshot,
+} from "./openrouter-ranking.js";
 import type {
   AgentFixtureBuildInput,
   EnvironmentFixture,
@@ -12,11 +17,19 @@ import type {
   MatrixExecution,
   RunnerProfileFixture,
   RunnerTaskFixture,
+  RunnerSuiteFixture,
   SecretReference,
 } from "./types.js";
 
 const ENVIRONMENT_IDS = ["local", "daytona"] as const;
-const SELECTABLE_GROUPS = ["legacy", "native", "local", "daytona"] as const;
+const SELECTABLE_GROUPS = [
+  "legacy",
+  "native",
+  "local",
+  "daytona",
+  "core",
+  "breadth",
+] as const;
 const SAMPLE_UUID = "11111111-1111-4111-8111-111111111111";
 
 export function isImmutableDaytonaImage(value: string | undefined) {
@@ -120,15 +133,18 @@ function nativeProfile(input: {
   model: string;
   credential: RunnerProfileFixture["credential"];
   acpxAgent?: "pi" | "claude" | "codex";
+  supportedEnvironments?: readonly (typeof ENVIRONMENT_IDS)[number][];
+  modelQualification?: RunnerProfileFixture["modelQualification"];
+  ranking?: RunnerProfileFixture["ranking"];
 }): RunnerProfileFixture {
   return {
     ...input,
     adapterType: "paperclip_runner",
     generation: "native",
     groups: ["native"],
-    supportedEnvironments: ENVIRONMENT_IDS,
+    supportedEnvironments: input.supportedEnvironments ?? ENVIRONMENT_IDS,
     expectedRuntimeMode: "native",
-    modelQualification: {
+    modelQualification: input.modelQualification ?? {
       source:
         input.provider === "acpx"
           ? "qualified_runner_profile"
@@ -138,6 +154,7 @@ function nativeProfile(input: {
           ? `acpx:${input.acpxAgent}`
           : `${input.provider}:qualified-model`,
     },
+    ...(input.ranking ? { ranking: input.ranking } : {}),
     expectedRuntimeMetadata: {
       adapterType: "paperclip_runner",
       provider: input.provider,
@@ -255,6 +272,29 @@ export const runnerProfiles: readonly RunnerProfileFixture[] = [
     credential: "OPENAI_API_KEY",
   }),
 ] as const;
+
+export const openRouterBreadthProfiles: readonly RunnerProfileFixture[] =
+  openRouterRankingSnapshot.models.map((rankedModel) =>
+    nativeProfile({
+      id: openRouterProfileId(rankedModel.id),
+      label: `#${rankedModel.rank} ${rankedModel.name}`,
+      provider: "opencode",
+      model: `openrouter/${rankedModel.id}`,
+      credential: "OPENROUTER_API_KEY",
+      supportedEnvironments: ["local"],
+      modelQualification: {
+        source: "openrouter_rankings_snapshot",
+        qualificationId: `${openRouterRankingSnapshot.snapshotId}:${rankedModel.rank}`,
+      },
+      ranking: {
+        rank: rankedModel.rank,
+        canonicalModelId: rankedModel.id,
+        snapshotId: openRouterRankingSnapshot.snapshotId,
+        capturedAt: openRouterRankingSnapshot.capturedAt,
+        sourceUrl: openRouterRankingSnapshot.sourceUrl,
+      },
+    }),
+  );
 
 function requiredDaytonaSecret(input: EnvironmentFixtureBuildInput) {
   const apiKey = input.secretRefs.DAYTONA_API_KEY;
@@ -486,31 +526,194 @@ export const runnerTasks: readonly RunnerTaskFixture[] = [
   },
 ] as const;
 
-export function buildRunnerMatrix(): MatrixExecution[] {
-  return runnerProfiles.flatMap((profile) =>
-    runnerEnvironments
-      .filter((environment) =>
-        profile.supportedEnvironments.includes(environment.id),
-      )
-      .flatMap((environment) =>
-        runnerTasks.map((task) => ({
-          id: `${profile.id}.${environment.id}.${task.id}`,
-          profile,
-          environment,
-          task,
-          groups: [
-            ...new Set([
-              ...profile.groups,
-              ...environment.groups,
-              ...task.groups,
-            ]),
-          ],
-          requiredCredentials: [
-            profile.credential,
-            ...(environment.credential ? [environment.credential] : []),
-          ],
+function terminalMatchers(
+  nonceMarker: string,
+  execution: MatrixExecution,
+): readonly ReturnType<RunnerTaskFixture["buildMatchers"]>[number][] {
+  return [
+    { kind: "message_contains", expected: nonceMarker },
+    {
+      kind: "issue_status",
+      expected: execution.task.expectedTerminalState.issue,
+    },
+    { kind: "run_status", expected: execution.task.expectedTerminalState.run },
+    { kind: "runtime_mode", expected: execution.profile.expectedRuntimeMode },
+    { kind: "environment", expected: execution.environment.id },
+  ];
+}
+
+function breadthMarker(phase: "H" | "Q_C" | "P_READY" | "P_OK", nonce: string) {
+  // Keep the complete visible marker comfortably below the shortest output
+  // fragments observed across ranked models while retaining the attempt nonce.
+  return `PC_${phase}_${nonce}`;
+}
+
+export const openRouterBreadthTasks: readonly RunnerTaskFixture[] = [
+  {
+    id: "hello-complete",
+    label: "Hello and complete",
+    groups: [],
+    workMode: "standard",
+    flow: "single_turn",
+    expectedRunCount: 1,
+    attemptTimeoutMs: { local: 8 * 60_000, daytona: 8 * 60_000 },
+    expectedTerminalState: { issue: "done", run: "succeeded" },
+    buildTitle: (nonce) => `OpenRouter breadth hello ${nonce}`,
+    buildVisibleMarker: (nonce) => breadthMarker("H", nonce),
+    buildPrompt: (nonce) =>
+      [
+        "Complete this deterministic hello task in one turn.",
+        `Return ${breadthMarker("H", nonce)} as the complete visible response.`,
+        `Call paperclip_finish with ${breadthMarker("H", nonce)} as its summary and mark the task Done.`,
+        "Do not create files, plans, interactions, or additional work.",
+      ].join("\n"),
+    buildMatchers: (nonce, execution) =>
+      terminalMatchers(breadthMarker("H", nonce), execution),
+  },
+  {
+    id: "question-resume-complete",
+    label: "Ask, answer, resume",
+    groups: [],
+    workMode: "standard",
+    flow: "question_resume_completion",
+    expectedRunCount: 2,
+    attemptTimeoutMs: { local: 12 * 60_000, daytona: 12 * 60_000 },
+    expectedTerminalState: { issue: "done", run: "succeeded" },
+    buildTitle: (nonce) => `OpenRouter breadth question ${nonce}`,
+    buildVisibleMarker: (nonce) => breadthMarker("Q_C", nonce),
+    buildQuestionAnswer: (nonce) => ({
+      optionLabel: "Cobalt",
+      expectedMarker: breadthMarker("Q_C", nonce),
+    }),
+    buildPrompt: (nonce) =>
+      [
+        "Ask the user one structured question before completing this task.",
+        "Call request_human_input exactly once with interactionKind `questions`, title `Verification word`, prompt `Choose the verification word`, continuationPolicy `wake_assignee`, and payload {version:1,questions:[{id:`verification-word`,prompt:`Choose the verification word.`,selectionMode:`single`,required:true,options:[{id:`cobalt`,label:`Cobalt`},{id:`amber`,label:`Amber`}]}]}.",
+        "Do not call paperclip_finish while the question is pending.",
+        `After the answer arrives, if it is Cobalt, return ${breadthMarker("Q_C", nonce)} visibly and call paperclip_finish with that marker as the summary.`,
+        "Do not create files, plans, or additional work.",
+      ].join("\n"),
+    buildMatchers: (nonce, execution) =>
+      terminalMatchers(breadthMarker("Q_C", nonce), execution),
+  },
+  {
+    id: "plan-approve-complete",
+    label: "Plan, approve, complete",
+    groups: [],
+    workMode: "planning",
+    flow: "plan_approval_completion",
+    expectedRunCount: 2,
+    attemptTimeoutMs: { local: 15 * 60_000, daytona: 15 * 60_000 },
+    expectedTerminalState: { issue: "done", run: "succeeded" },
+    buildTitle: (nonce) => `OpenRouter breadth plan ${nonce}`,
+    buildVisibleMarker: (nonce) => breadthMarker("P_OK", nonce),
+    buildPlanMarkers: (nonce) => ({
+      draft: breadthMarker("P_READY", nonce),
+      revised: breadthMarker("P_OK", nonce),
+    }),
+    buildPrompt: (nonce) =>
+      [
+        "Create a canonical Plan with exactly two numbered steps and request approval; do not implement before approval.",
+        `The Plan body must contain ${breadthMarker("P_READY", nonce)}.`,
+        "Call write_document for key `plan`, then call request_human_input exactly once with interactionKind `confirmation`, targetRevisionId set to the returned latest Plan revision, and continuationPolicy `wake_assignee`.",
+        "Do not call paperclip_finish while confirmation is pending.",
+        `After that exact Plan revision is accepted, return ${breadthMarker("P_OK", nonce)} visibly and call paperclip_finish with that marker as the summary.`,
+        "Do not create files, child tasks, or unrelated work.",
+      ].join("\n"),
+    buildMatchers: (nonce, execution) =>
+      terminalMatchers(breadthMarker("P_OK", nonce), execution),
+  },
+] as const;
+
+const localEnvironment = runnerEnvironments.find(
+  (environment) => environment.id === "local",
+)!;
+
+export const runnerSuites: readonly RunnerSuiteFixture[] = [
+  {
+    id: "core-compatibility",
+    label: "Core Runner Compatibility",
+    description:
+      "Major provider, runtime generation, and execution-environment compatibility.",
+    groups: ["core"],
+    profiles: runnerProfiles,
+    environments: runnerEnvironments,
+    tasks: runnerTasks,
+    expectedMatrixSize: 48,
+  },
+  {
+    id: "openrouter-model-breadth",
+    label: "OpenRouter Model Breadth",
+    description:
+      "Weekly-ranked tool-capable OpenRouter models through native OpenCode on isolated local workspaces.",
+    groups: ["breadth"],
+    profiles: openRouterBreadthProfiles,
+    environments: [localEnvironment],
+    tasks: openRouterBreadthTasks,
+    expectedMatrixSize: 15,
+    definitionMetadata: {
+      rankingSnapshotId: openRouterRankingSnapshot.snapshotId,
+      rankingContentHash: openRouterRankingSnapshot.contentHash,
+      rankingCapturedAt: openRouterRankingSnapshot.capturedAt,
+      rankingSourceUrl: openRouterRankingSnapshot.sourceUrl,
+    },
+  },
+] as const;
+
+export function suiteDefinitionHash(suite: RunnerSuiteFixture) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: suite.id,
+        profiles: suite.profiles.map((profile) => ({
+          id: profile.id,
+          model: profile.model,
+          qualification: profile.modelQualification,
         })),
-      ),
+        environments: suite.environments.map((environment) => environment.id),
+        tasks: suite.tasks.map((task) => ({
+          id: task.id,
+          flow: task.flow,
+          expectedRunCount: task.expectedRunCount,
+        })),
+        metadata: suite.definitionMetadata ?? null,
+      }),
+    )
+    .digest("hex");
+}
+
+export function buildRunnerMatrix(
+  suites: readonly RunnerSuiteFixture[] = runnerSuites,
+): MatrixExecution[] {
+  return suites.flatMap((suite) =>
+    suite.profiles.flatMap((profile) =>
+      suite.environments
+        .filter((environment) =>
+          profile.supportedEnvironments.includes(environment.id),
+        )
+        .flatMap((environment) =>
+          suite.tasks.map((task) => ({
+            id: `${suite.id}.${profile.id}.${environment.id}.${task.id}`,
+            suite,
+            suiteDefinitionHash: suiteDefinitionHash(suite),
+            profile,
+            environment,
+            task,
+            groups: [
+              ...new Set([
+                ...suite.groups,
+                ...profile.groups,
+                ...environment.groups,
+                ...task.groups,
+              ]),
+            ],
+            requiredCredentials: [
+              profile.credential,
+              ...(environment.credential ? [environment.credential] : []),
+            ],
+          })),
+        ),
+    ),
   );
 }
 
@@ -551,10 +754,13 @@ function assertNoRawSecretValues(value: unknown, label: string) {
 }
 
 export function validateRunnerCatalog(): MatrixExecution[] {
+  const allProfiles = [...runnerProfiles, ...openRouterBreadthProfiles];
+  const allTasks = [...runnerTasks, ...openRouterBreadthTasks];
   for (const [label, values] of [
-    ["profile", runnerProfiles],
+    ["suite", runnerSuites],
+    ["profile", allProfiles],
     ["environment", runnerEnvironments],
-    ["task", runnerTasks],
+    ["task", allTasks],
   ] as const) {
     const duplicates = duplicateIds(values);
     if (duplicates.length > 0)
@@ -565,9 +771,10 @@ export function validateRunnerCatalog(): MatrixExecution[] {
 
   const selectableGroups = new Set<string>(SELECTABLE_GROUPS);
   for (const fixture of [
-    ...runnerProfiles,
+    ...runnerSuites,
+    ...allProfiles,
     ...runnerEnvironments,
-    ...runnerTasks,
+    ...allTasks,
   ]) {
     const unknownGroups = fixture.groups.filter(
       (group) => !selectableGroups.has(group),
@@ -605,7 +812,7 @@ export function validateRunnerCatalog(): MatrixExecution[] {
     createEnvironmentSchema.parse(payload);
     assertNoRawSecretValues(payload, `environment ${environment.id}`);
   }
-  for (const profile of runnerProfiles) {
+  for (const profile of allProfiles) {
     if (!CREDENTIAL_NAMES.includes(profile.credential)) {
       throw new Error(
         `Profile ${profile.id} declares unknown credential ${profile.credential}`,
@@ -637,8 +844,18 @@ export function validateRunnerCatalog(): MatrixExecution[] {
       `Duplicate matrix execution ids: ${duplicateMatrixIds.join(", ")}`,
     );
   }
-  if (matrix.length !== 48)
-    throw new Error(`Expected 48 runner executions; received ${matrix.length}`);
+  for (const suite of runnerSuites) {
+    const suiteSize = matrix.filter(
+      (execution) => execution.suite.id === suite.id,
+    ).length;
+    if (suiteSize !== suite.expectedMatrixSize) {
+      throw new Error(
+        `Expected ${suite.expectedMatrixSize} ${suite.id} executions; received ${suiteSize}`,
+      );
+    }
+  }
+  if (matrix.length !== 63)
+    throw new Error(`Expected 63 runner executions; received ${matrix.length}`);
   return matrix;
 }
 
