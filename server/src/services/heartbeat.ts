@@ -20408,39 +20408,50 @@ export function heartbeatService(
                 endedAtMs: nativeDispatchAtMs,
               },
             );
-            adapterResult = await executePaperclipNativeSession({
-              db,
-              execution: nativeExecution,
-              runnerInstanceId: nativeRunnerInstanceId,
-              leaseOwner: runOptions.nativeLeaseOwner,
-              backend: options.nativeSessionBackendFactory?.(nativeExecution),
-              useRunnerd: agent.adapterType === "paperclip_runner",
-              onLog,
-              onEvent: onAdapterEvent,
-              preparationSpans: nativeRunnerPreparationSpans,
-              // Bootstrap the provider with executable/home discovery while
-              // keeping the agent's configured provider values authoritative.
-              runnerEnvironment: {
-                ...buildNativeProviderEnvironment(adapterEnv),
-                ...(nativeMcpServer ? {
-                  PAPERCLIP_NATIVE_MCP_NAME: nativeMcpServer.name,
-                  PAPERCLIP_NATIVE_MCP_URL: nativeMcpServer.url,
-                  PAPERCLIP_NATIVE_MCP_TOKEN: nativeMcpServer.token,
-                } : {}),
-                ...(providerTraceCapture
-                  ? {
-                      PAPERCLIP_PROVIDER_TRACE_PATH: providerTraceCapture.path,
-                      PAPERCLIP_PROVIDER_TRACE_MAX_BYTES: String(
-                        PROVIDER_TRACE_MAX_BYTES,
-                      ),
-                    }
-                  : {}),
-              },
-              enqueueWakeup,
-              onSpawn: async (meta) => {
-                await persistRunProcessMetadata(run.id, meta);
-              },
-            });
+            const guardedDispatch =
+              await dispatchResolvedInteractionContinuationWithAtomicGate(
+                (markDispatchStarted) =>
+                  executePaperclipNativeSession({
+                    db,
+                    execution: nativeExecution,
+                    runnerInstanceId: nativeRunnerInstanceId,
+                    leaseOwner: runOptions.nativeLeaseOwner,
+                    backend:
+                      options.nativeSessionBackendFactory?.(nativeExecution),
+                    useRunnerd: agent.adapterType === "paperclip_runner",
+                    onLog,
+                    onEvent: onAdapterEvent,
+                    preparationSpans: nativeRunnerPreparationSpans,
+                    // Bootstrap the provider with executable/home discovery while
+                    // keeping the agent's configured provider values authoritative.
+                    runnerEnvironment: {
+                      ...buildNativeProviderEnvironment(adapterEnv),
+                      ...(nativeMcpServer
+                        ? {
+                            PAPERCLIP_NATIVE_MCP_NAME: nativeMcpServer.name,
+                            PAPERCLIP_NATIVE_MCP_URL: nativeMcpServer.url,
+                            PAPERCLIP_NATIVE_MCP_TOKEN: nativeMcpServer.token,
+                          }
+                        : {}),
+                      ...(providerTraceCapture
+                        ? {
+                            PAPERCLIP_PROVIDER_TRACE_PATH:
+                              providerTraceCapture.path,
+                            PAPERCLIP_PROVIDER_TRACE_MAX_BYTES: String(
+                              PROVIDER_TRACE_MAX_BYTES,
+                            ),
+                          }
+                        : {}),
+                    },
+                    enqueueWakeup,
+                    onSpawn: async (meta) => {
+                      markDispatchStarted();
+                      await persistRunProcessMetadata(run.id, meta);
+                    },
+                  }),
+              );
+            if (!guardedDispatch.dispatched) return;
+            adapterResult = await guardedDispatch.resultPromise;
           } else {
             const interactionId = readNonEmptyString(context.interactionId);
             const legacyQuestionResponse =
@@ -20472,12 +20483,44 @@ export function heartbeatService(
                   }
                 : {}),
             };
+            const runtimeTools = createAdapterRuntimeToolAccess({
+              agentId: agent.id,
+              companyId: agent.companyId,
+              runId: run.id,
+              responsibleUserId: run.responsibleUserId,
+            });
+            if (!runtimeTools) {
+              logger.warn(
+                {
+                  companyId: agent.companyId,
+                  agentId: agent.id,
+                  runId: run.id,
+                },
+                "runtime connection tools could not be delivered",
+              );
+            }
             const runtimeMcpServers = await buildPaperclipRuntimeMcpServers({
               db,
               agent,
               runId: run.id,
             });
+            const runtimeToolDelivery =
+              adapter.runtimeToolDelivery ?? "invocation_context";
+            if (runtimeTools && runtimeToolDelivery === "native_mcp") {
+              runtimeMcpServers.unshift({
+                name: "Paperclip connections",
+                url: runtimeTools.mcpEndpoint,
+                token: runtimeTools.bearerToken,
+                connectionId: "paperclip-runtime-tools",
+              });
+            }
             const runtimeMcp = createAdapterRuntimeMcpAccess(runtimeMcpServers);
+            if (
+              runtimeTools &&
+              runtimeToolDelivery === "invocation_context"
+            ) {
+              adapterContext.paperclipRuntimeTools = runtimeTools;
+            }
             const managedMcpConfig = await createManagedMcpRunConfig({
               db,
               agent,
@@ -20489,48 +20532,58 @@ export function heartbeatService(
             if (managedMcpConfig) {
               adapterContext.paperclipManagedMcp = managedMcpConfig;
             }
-            adapterResult = await adapter.execute({
-              runId: run.id,
-              agent,
-              runtime: runtimeForAdapter,
-              config: runtimeConfig,
-              context: adapterContext,
-              runtimeCommandSpec:
-                adapter.getRuntimeCommandSpec?.(runtimeConfig) ?? null,
-              executionTarget,
-              executionTransport: remoteExecution
-                ? {
-                    remoteExecution: remoteExecution as unknown as Record<
-                      string,
-                      unknown
-                    >,
-                  }
-                : undefined,
-              runtimeMcp,
-              onLog,
-              onMeta: onAdapterMeta,
-              onEvent: onAdapterEvent,
-              startupTraceContext: getStartupTraceContext(),
-              onRuntimeProgress: async (progress) => {
-                await recordCurrentHeartbeatRunRuntimeProgress(
-                  run,
-                  progress,
-                  issueId,
-                );
-              },
-              onSpawn: async (meta) => {
-                await persistRunProcessMetadata(run.id, {
-                  pid: meta.pid,
-                  processGroupId:
-                    "processGroupId" in meta &&
-                    typeof meta.processGroupId === "number"
-                      ? meta.processGroupId
-                      : null,
-                  startedAt: meta.startedAt,
-                });
-              },
-              authToken: authToken ?? undefined,
-            });
+            const guardedDispatch =
+              await dispatchResolvedInteractionContinuationWithAtomicGate(
+                (markDispatchStarted) =>
+                  adapter.execute({
+                    runId: run.id,
+                    agent,
+                    runtime: runtimeForAdapter,
+                    config: runtimeConfig,
+                    context: adapterContext,
+                    runtimeCommandSpec:
+                      adapter.getRuntimeCommandSpec?.(runtimeConfig) ?? null,
+                    executionTarget,
+                    executionTransport: remoteExecution
+                      ? {
+                          remoteExecution:
+                            remoteExecution as unknown as Record<
+                              string,
+                              unknown
+                            >,
+                        }
+                      : undefined,
+                    runtimeMcp,
+                    runtimeTools,
+                    onLog,
+                    onMeta: onAdapterMeta,
+                    onEvent: onAdapterEvent,
+                    startupTraceContext: getStartupTraceContext(),
+                    onRuntimeProgress: async (progress) => {
+                      await recordCurrentHeartbeatRunRuntimeProgress(
+                        run,
+                        progress,
+                        issueId,
+                      );
+                    },
+                    onDispatch: markDispatchStarted,
+                    onSpawn: async (meta) => {
+                      markDispatchStarted();
+                      await persistRunProcessMetadata(run.id, {
+                        pid: meta.pid,
+                        processGroupId:
+                          "processGroupId" in meta &&
+                          typeof meta.processGroupId === "number"
+                            ? meta.processGroupId
+                            : null,
+                        startedAt: meta.startedAt,
+                      });
+                    },
+                    authToken: authToken ?? undefined,
+                  }),
+              );
+            if (!guardedDispatch.dispatched) return;
+            adapterResult = await guardedDispatch.resultPromise;
           }
           // Adapter returned cleanly, which means its workspace-restore finally
           // block also ran without throwing. Record the workspace_finalize

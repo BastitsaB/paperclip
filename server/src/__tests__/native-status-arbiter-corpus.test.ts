@@ -446,6 +446,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
       status: initialRunStatus(fixture),
       runtimeMode: "native",
       runtimeModeResolvedAt: new Date(),
+      nativeIssueId: issueId,
       contextSnapshot: { issueId, fixtureId: fixture.id },
       completionContractId: contractId,
       completionContractSha256: `contract:${fixture.id}`,
