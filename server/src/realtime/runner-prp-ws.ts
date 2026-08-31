@@ -1,7 +1,10 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 
-import type { DurablePrpControlPlane } from "../vendor/paperclip-runner/index.js";
+import type {
+  DurablePrpControlPlane,
+  HarnessRuntimeRequestResolution,
+} from "../vendor/paperclip-runner/index.js";
 
 import { logger } from "../middleware/logger.js";
 
@@ -13,6 +16,10 @@ interface RegisteredAuthority {
   readonly companyId: string;
   readonly authority: DurablePrpControlPlane;
   readonly generation: symbol;
+  readonly runtimeRequestResolutions: Map<
+    string,
+    { readonly fingerprint: string; readonly commandId: string }
+  >;
 }
 
 interface RunnerPrpUpgradeRequest extends IncomingMessage {
@@ -105,6 +112,7 @@ export async function registerRunnerPrpAuthority(input: {
     companyId: input.companyId,
     authority: input.authority,
     generation,
+    runtimeRequestResolutions: new Map(),
   });
   return {
     connectUrl: `${loopbackOrigin}${CONNECT_PATH_PREFIX}${input.runId}`,
@@ -114,6 +122,67 @@ export async function registerRunnerPrpAuthority(input: {
       }
     },
   };
+}
+
+export class RunnerPrpRuntimeRequestResolutionError extends Error {
+  constructor(
+    readonly code:
+      | "runner_prp_authority_not_active"
+      | "runtime_request_resolution_conflict",
+  ) {
+    super(code);
+    this.name = "RunnerPrpRuntimeRequestResolutionError";
+  }
+}
+
+/**
+ * Queue one turn-bound runtime response on the active durable PRP authority.
+ * Identical browser retries reuse the original command; a different answer for
+ * the same request fails closed instead of answering the provider twice.
+ */
+export function queueRunnerPrpRuntimeRequestResolution(input: {
+  readonly companyId: string;
+  readonly runId: string;
+  readonly requestId: string;
+  readonly turnId: string;
+  readonly resolution: HarnessRuntimeRequestResolution;
+}): { readonly commandId: string } {
+  const registration = registrations.get(input.runId);
+  if (!registration || registration.companyId !== input.companyId) {
+    throw new RunnerPrpRuntimeRequestResolutionError(
+      "runner_prp_authority_not_active",
+    );
+  }
+
+  const fingerprint = JSON.stringify({
+    turnId: input.turnId,
+    resolution: input.resolution,
+  });
+  const previous = registration.runtimeRequestResolutions.get(input.requestId);
+  if (previous) {
+    if (previous.fingerprint !== fingerprint) {
+      throw new RunnerPrpRuntimeRequestResolutionError(
+        "runtime_request_resolution_conflict",
+      );
+    }
+    return { commandId: previous.commandId };
+  }
+
+  const command = registration.authority.queueCommand(
+    "request.resolve",
+    {
+      requestId: input.requestId,
+      turnId: input.turnId,
+      resolution: input.resolution,
+    },
+    undefined,
+    true,
+  );
+  registration.runtimeRequestResolutions.set(input.requestId, {
+    fingerprint,
+    commandId: command.commandId,
+  });
+  return { commandId: command.commandId };
 }
 
 export const runnerPrpWebSocketInternals = {

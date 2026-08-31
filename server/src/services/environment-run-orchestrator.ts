@@ -31,6 +31,7 @@ import {
   buildEnvironmentLeaseContext,
   type EnvironmentRuntimeLeaseRecord,
   type EnvironmentRuntimeService,
+  type ProviderResourceDisposition,
 } from "./environment-runtime.js";
 import { ENVIRONMENT_DRIVER_TRAITS } from "./environment-driver-traits.js";
 import {
@@ -51,6 +52,7 @@ import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
 import type { RealizedExecutionWorkspace } from "./workspace-runtime.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { getStartupTracer } from "../instrumentation.js";
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -583,9 +585,35 @@ export function environmentRunOrchestrator(
     agentId: string;
     status?: Extract<EnvironmentLeaseStatus, "released" | "expired" | "failed">;
     failureReason?: string;
+    /** Explicit paperclip_runner resource lifecycle. Omitted for legacy adapters. */
+    providerResourceDisposition?: ProviderResourceDisposition;
+    nativeLifecycleTelemetry?: {
+      provider: string;
+      harness: string;
+      lifecycleMode: "per_turn" | "warm";
+      sandboxResource: "keep_running" | "stop_and_reuse" | "destroy_after_turn";
+    };
   }): Promise<EnvironmentReleaseResult> {
     const status = input.status ?? "released";
     const result: EnvironmentReleaseResult = { released: [], errors: [] };
+    const lifecycleSpan = input.providerResourceDisposition === "stop_and_retain"
+      ? getStartupTracer("paperclip.environment-lifecycle").startSpan(
+          "sandbox.lifecycle.stop",
+          {
+            attributes: {
+              "paperclip.native.span.lifecycle_mode": "per_turn",
+              "paperclip.native.span.disposition": "stop_and_retain",
+              "paperclip.native.span.provider":
+                input.nativeLifecycleTelemetry?.provider ?? "unknown",
+              "paperclip.native.span.harness":
+                input.nativeLifecycleTelemetry?.harness ?? "unknown",
+              "paperclip.native.span.sandbox_resource":
+                input.nativeLifecycleTelemetry?.sandboxResource ?? "stop_and_reuse",
+              "paperclip.native.span.bytes_transferred": 0,
+            },
+          },
+        )
+      : null;
 
     let releasedLeases: EnvironmentRuntimeLeaseRecord[];
     try {
@@ -593,11 +621,16 @@ export function environmentRunOrchestrator(
         input.heartbeatRunId,
         status,
         (leaseId, error) => result.errors.push({ leaseId, error }),
+        input.providerResourceDisposition,
       );
     } catch (err) {
+      lifecycleSpan?.setStatus({ code: 2 });
+      lifecycleSpan?.end();
       result.errors.push({ leaseId: "*", error: err });
       return result;
     }
+    if (result.errors.length > 0) lifecycleSpan?.setStatus({ code: 2 });
+    lifecycleSpan?.end();
 
     for (const released of releasedLeases) {
       try {
@@ -607,7 +640,9 @@ export function environmentRunOrchestrator(
           actorId: input.agentId,
           agentId: input.agentId,
           runId: input.heartbeatRunId,
-          action: "environment.lease_released",
+          action: released.lease.status === "retained"
+            ? "environment.lease_retained"
+            : "environment.lease_released",
           entityType: "environment_lease",
           entityId: released.lease.id,
           issueId: released.lease.issueId,
@@ -621,6 +656,7 @@ export function environmentRunOrchestrator(
             status: released.lease.status,
             cleanupStatus: released.lease.cleanupStatus,
             failureReason: input.failureReason ?? released.lease.failureReason,
+            providerResourceDisposition: input.providerResourceDisposition ?? "legacy_default",
           },
         });
       } catch {

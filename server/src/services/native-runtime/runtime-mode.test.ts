@@ -1,70 +1,171 @@
 import { describe, expect, it } from "vitest";
-
-import { BUILTIN_ADAPTER_TYPES } from "../../adapters/builtin-adapter-types.js";
 import {
-  NativeRunnerSelectionError,
-  resolveHeartbeatRuntimeMode,
+  NativeRuntimeEligibilityError,
+  resolveHeartbeatNativeRuntimeMode,
+  resolveNativeRuntimeMode,
 } from "./runtime-mode.js";
 
-const base = {
-  persisted: { runtimeMode: "legacy", runtimeModeResolvedAt: null },
+const eligible = {
   enabled: true,
+  runtimeConfig: {},
   adapterConfig: { provider: "codex" },
-  agentStatus: "running",
-  issue: { workMode: "standard" },
-  executionTarget: { kind: "local" },
+  agent: { status: "running", adapterType: "paperclip_runner" },
+  issue: { id: "issue", workMode: "standard" },
+  target: { kind: "local" },
+  workspaceId: "workspace",
 } as const;
 
-describe("resolveHeartbeatRuntimeMode", () => {
-  it("keeps every direct built-in adapter on the legacy path", () => {
-    for (const adapterType of BUILTIN_ADAPTER_TYPES) {
-      if (adapterType === "paperclip_runner") continue;
-      expect(resolveHeartbeatRuntimeMode({ ...base, adapterType })).toEqual({
-        kind: "legacy",
-        resolverVersion: "paperclip-runner-v1",
-        reason: "direct_adapter",
-      });
-    }
-  });
-
-  it("fails closed for fresh runner starts while the flag is off", () => {
-    expect(() => resolveHeartbeatRuntimeMode({
-      ...base,
+describe("resolveNativeRuntimeMode", () => {
+  it("rejects a fresh Paperclip Runner start while the rollout flag is disabled", () => {
+    expect(() => resolveNativeRuntimeMode({
+      ...eligible,
       enabled: false,
-      adapterType: "paperclip_runner",
-    })).toThrowError(expect.objectContaining({
+    })).toThrow(expect.objectContaining({
       code: "paperclip_runner_rollout_disabled",
-    }) as NativeRunnerSelectionError);
+    }));
   });
 
-  it("selects only Codex on a local target", () => {
-    expect(resolveHeartbeatRuntimeMode({
-      ...base,
-      adapterType: "paperclip_runner",
-    })).toMatchObject({ kind: "native", provider: "codex" });
-    expect(() => resolveHeartbeatRuntimeMode({
-      ...base,
-      adapterType: "paperclip_runner",
-      adapterConfig: { provider: "opencode" },
-    })).toThrow(/only the Codex provider/);
-    expect(() => resolveHeartbeatRuntimeMode({
-      ...base,
-      adapterType: "paperclip_runner",
-      executionTarget: { kind: "remote" },
-    })).toThrow(/local execution environment/);
+  it("rejects unknown Paperclip Runner providers", () => {
+    expect(() => resolveNativeRuntimeMode({
+      ...eligible,
+      runtimeConfig: {},
+      adapterConfig: { provider: "claude" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toThrow(/provider must be codex, opencode, or acpx/);
   });
 
-  it("recovers a persisted native run after the flag changes", () => {
-    expect(resolveHeartbeatRuntimeMode({
-      ...base,
-      enabled: false,
-      adapterType: "paperclip_runner",
-      persisted: { runtimeMode: "native", runtimeModeResolvedAt: new Date() },
-    })).toEqual({
+  it("selects OpenCode only with a provider/model value", () => {
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      runtimeConfig: {},
+      adapterConfig: { provider: "opencode", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toEqual(expect.objectContaining({
+      profile: { mode: "native", backend: "opencode_server", protocolVersion: 1 },
+    }));
+    expect(() => resolveNativeRuntimeMode({
+      ...eligible,
+      runtimeConfig: {},
+      adapterConfig: { provider: "opencode", model: "deepseek" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toThrow(/provider\/model/);
+  });
+
+  it("preserves legacy as the default and as the kill-switch behavior", () => {
+    const direct = {
+      ...eligible,
+      agent: { ...eligible.agent, adapterType: "codex_local" },
+      runtimeConfig: { nativeRunner: { mode: "native", backend: "codex_app_server", protocolVersion: 1 } },
+    };
+    expect(resolveNativeRuntimeMode(direct)).toEqual(expect.objectContaining({
+      kind: "legacy",
+      reason: "direct_adapter",
+    }));
+    expect(resolveNativeRuntimeMode({ ...direct, enabled: false })).toEqual(expect.objectContaining({
+      kind: "legacy",
+      reason: "direct_adapter",
+    }));
+  });
+
+  it("selects native only for an eligible explicit profile", () => {
+    expect(resolveNativeRuntimeMode(eligible)).toEqual(expect.objectContaining({
       kind: "native",
-      resolverVersion: "paperclip-runner-v1",
-      reason: "persisted_native_selection",
-      provider: "codex",
-    });
+      reason: "eligible_opt_in",
+    }));
+  });
+
+  it("keeps a persisted active run native while the global flag rejects a fresh runner start", () => {
+    const disabled = { ...eligible, enabled: false };
+    expect(resolveHeartbeatNativeRuntimeMode({
+      ...disabled,
+      persisted: {
+        runtimeMode: "native",
+        runtimeModeReason: "eligible_opt_in",
+        runtimeModeResolvedAt: new Date(),
+      },
+    })).toEqual(expect.objectContaining({
+      kind: "native",
+      reason: "eligible_opt_in",
+      authorityDecision: expect.objectContaining({ reasonCode: "live_continuation_registered" }),
+    }));
+    expect(() => resolveHeartbeatNativeRuntimeMode({
+      ...disabled,
+      persisted: { runtimeMode: null, runtimeModeReason: null, runtimeModeResolvedAt: null },
+    })).toThrow(expect.objectContaining({
+      code: "paperclip_runner_rollout_disabled",
+    }));
+  });
+
+  it("keeps a persisted OpenCode recovery on its immutable driver", () => {
+    expect(resolveHeartbeatNativeRuntimeMode({
+      ...eligible,
+      enabled: false,
+      adapterConfig: { provider: "codex" },
+      persisted: {
+        runtimeMode: "native",
+        runtimeModeReason: "eligible_opt_in",
+        runtimeModeResolvedAt: new Date(),
+        driverKind: "opencode_server",
+      },
+    })).toEqual(expect.objectContaining({
+      profile: { mode: "native", backend: "opencode_server", protocolVersion: 1 },
+    }));
+  });
+
+  it("rejects an explicit native profile outside the approved boundary", () => {
+    expect(resolveNativeRuntimeMode({ ...eligible, agent: { ...eligible.agent, adapterType: "claude_local" } }))
+      .toEqual(expect.objectContaining({ kind: "legacy", reason: "direct_adapter" }));
+    expect(() => resolveNativeRuntimeMode({ ...eligible, issue: { id: "issue", workMode: "skill_test" } }))
+      .toThrow(NativeRuntimeEligibilityError);
+  });
+
+  it("admits remote targets only through paperclip_runner", () => {
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      target: { kind: "remote" },
+      runtimeConfig: {},
+      adapterConfig: { provider: "codex" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toMatchObject({ kind: "native" });
+  });
+
+  it("allows paperclip_runner to use a transient local workspace for projectless issues", () => {
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      workspaceId: null,
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+      runtimeConfig: {},
+      adapterConfig: { provider: "codex" },
+    })).toEqual(expect.objectContaining({ kind: "native" }));
+  });
+
+  it("admits planning only through paperclip_runner", () => {
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      issue: { id: "plan-issue", workMode: "planning" },
+      runtimeConfig: {},
+      adapterConfig: { provider: "codex" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toMatchObject({ kind: "native", profile: { backend: "codex_app_server" } });
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      issue: { id: "plan-issue", workMode: "planning" },
+      agent: { ...eligible.agent, adapterType: "codex_local" },
+    })).toEqual(expect.objectContaining({ kind: "legacy", reason: "direct_adapter" }));
+  });
+
+  it("admits ask mode through paperclip_runner while preserving the legacy native boundary", () => {
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      issue: { id: "ask-issue", workMode: "ask" },
+      runtimeConfig: {},
+      adapterConfig: { provider: "opencode", model: "opencode/nemotron-3.5-lightning-free" },
+      agent: { ...eligible.agent, adapterType: "paperclip_runner" },
+    })).toMatchObject({ kind: "native", profile: { backend: "opencode_server" } });
+    expect(resolveNativeRuntimeMode({
+      ...eligible,
+      issue: { id: "ask-issue", workMode: "ask" },
+      agent: { ...eligible.agent, adapterType: "codex_local" },
+    })).toEqual(expect.objectContaining({ kind: "legacy", reason: "direct_adapter" }));
   });
 });

@@ -3,13 +3,35 @@ import type {
   AdapterRuntimeCommandSpec,
   ServerAdapterModule,
 } from "./types.js";
+import { execFile } from "node:child_process";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join, posix } from "node:path";
+import { promisify } from "node:util";
+import {
+  AcpxRuntimeHost,
+  inspectQualifiedAcpxInstallation,
+  resolveQualifiedAcpxProfile,
+  type QualifiedAcpxAgent,
+} from "../vendor/paperclip-runner/index.js";
 import { parseAdapterModelsEnv } from "../services/adapter-models-env.js";
 import { stampClaudeAgentIdHeader } from "./claude-agent-id-header.js";
 import {
   buildSandboxNpmInstallCommand,
   getAdapterSessionManagement,
+  PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
+  redactDiagnosticText,
+  resolvePaperclipRunnerPermissionMode,
+  type PaperclipRunnerProvider,
 } from "@paperclipai/adapter-utils";
+import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
 import type { AdapterLoginCapability } from "@paperclipai/adapter-utils";
+import {
+  buildRuntimeMountedSkillSnapshot,
+  readPaperclipRuntimeSkillEntries,
+  resolvePaperclipDesiredSkillNames,
+} from "@paperclipai/adapter-utils/server-utils";
 import {
   execute as claudeExecute,
   listClaudeSkills,
@@ -19,6 +41,7 @@ import {
   testEnvironment as claudeTestEnvironment,
   sessionCodec as claudeSessionCodec,
   getQuotaWindows as claudeGetQuotaWindows,
+  readClaudeAuthStatus,
   getConfigSchema as getClaudeConfigSchema,
   CLAUDE_SETUP_TOKEN_COMMAND,
   parseSetupTokenPrompt,
@@ -36,6 +59,7 @@ import {
   testEnvironment as codexTestEnvironment,
   sessionCodec as codexSessionCodec,
   getQuotaWindows as codexGetQuotaWindows,
+  readCodexAuthInfo,
   getConfigSchema as getCodexConfigSchema,
   CODEX_DEVICE_LOGIN_COMMAND,
   parseDeviceLoginPrompt,
@@ -145,6 +169,699 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+import { resolveAcpxCodexManagedCredentialEnvironment } from "../services/native-runtime/acpx-managed-credential.js";
+
+const execFileAsync = promisify(execFile);
+
+function configuredProbeEnvironment(
+  config: Record<string, unknown>,
+): Record<string, string> {
+  const configured = config.env && typeof config.env === "object"
+    ? config.env as Record<string, unknown>
+    : {};
+  const credentialKeys = [
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ] as const;
+  return Object.fromEntries(
+    [
+      ...credentialKeys.map((key) => [key, process.env[key]] as const),
+      ...Object.entries(configured),
+    ].flatMap(
+      ([key, value]) => typeof value === "string" ? [[key, value]] : [],
+    ),
+  );
+}
+
+function redactedProbeTail(
+  value: unknown,
+  environment: Record<string, string> = {},
+): string {
+  let redacted = value instanceof Error ? value.message : String(value ?? "");
+  for (const [key, secret] of Object.entries(environment)) {
+    if (
+      secret.length >= 4
+      && /(?:KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION)$/i.test(key)
+    ) {
+      redacted = redacted.split(secret).join("[REDACTED]");
+    }
+  }
+  return redactDiagnosticText(redacted, "[REDACTED]").slice(-1_000);
+}
+
+export async function remoteProviderPackRoot(
+  context: Parameters<typeof codexTestEnvironment>[0],
+): Promise<string> {
+  const target = context.executionTarget;
+  if (!target || target.kind !== "remote") {
+    throw new Error("remote provider-pack probe requires a remote target");
+  }
+  const source = process.env.PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH?.trim();
+  const sandboxRunner = target.transport === "sandbox"
+    ? target.runner
+    : undefined;
+  const preinstalled = "/opt/paperclip-runner/provider-pack";
+  if (source) {
+    await access(source);
+    const expectedManifestSha = createHash("sha256")
+      .update(await readFile(join(source, "provider-pack.json")))
+      .digest("hex");
+    const preinstalledManifest = await runAdapterExecutionTargetProcess(
+      `provider-pack-manifest-environment-${randomUUID()}`,
+      target,
+      "sh",
+      [
+        "-c",
+        `test -f ${preinstalled}/provider-pack.json && sha256sum ${preinstalled}/provider-pack.json`,
+      ],
+      {
+        cwd: target.remoteCwd,
+        env: {},
+        timeoutSec: 30,
+        graceSec: 2,
+        onLog: async () => undefined,
+      },
+    );
+    if (
+      preinstalledManifest.exitCode === 0
+      && !preinstalledManifest.timedOut
+      && preinstalledManifest.stdout.trim().split(/\s+/, 1)[0]
+        === expectedManifestSha
+    ) {
+      return preinstalled;
+    }
+    if (!sandboxRunner?.syncIn) {
+      throw new Error(
+        "runner_remote_provider_artifact_incompatible: the preinstalled provider-pack manifest does not match and this target cannot stage the configured pack",
+      );
+    }
+    const destination = posix.join(
+      target.remoteCwd,
+      ".paperclip-runtime",
+      "environment-probes",
+      "provider-pack",
+    );
+    await sandboxRunner.syncIn([{
+      operationId: `provider-pack-probe-${randomUUID()}`,
+      files: [{
+        sourcePath: source,
+        targetPath: destination,
+        kind: "directory",
+        mode: 0o700,
+      }],
+    }]);
+    return destination;
+  }
+  return preinstalled;
+}
+
+async function testPaperclipRunnerOpenCodeEnvironment(
+  context: Parameters<typeof openCodeTestEnvironment>[0],
+) {
+  if (context.executionTarget?.kind === "remote") {
+    const testedAt = new Date().toISOString();
+    try {
+      const packRoot = await remoteProviderPackRoot(context);
+      const command = posix.join(packRoot, "node_modules", ".bin", "opencode");
+      const providerNode = posix.join(
+        packRoot,
+        "node_modules",
+        "node",
+        "bin",
+        "node",
+      );
+      const runtimeDirectory = posix.join(
+        context.executionTarget.remoteCwd,
+        ".paperclip-runtime",
+        "environment-probes",
+        "opencode",
+      );
+      const environment = {
+        ...configuredProbeEnvironment(context.config),
+        HOME: context.executionTarget.remoteCwd,
+        PAPERCLIP_OPENCODE_COMMAND: command,
+        PAPERCLIP_OPENCODE_MODEL:
+          typeof context.config.model === "string" ? context.config.model : "",
+        PAPERCLIP_OPENCODE_RUNTIME_DIR: runtimeDirectory,
+        PAPERCLIP_RUNNER_INSTANCE_ID: "environment-probe",
+        PAPERCLIP_RUN_ID: `environment-probe-${randomUUID()}`,
+        PAPERCLIP_NORMALIZED_SESSION_ID: `environment-probe-${randomUUID()}`,
+        XDG_CONFIG_HOME: posix.join(runtimeDirectory, "config"),
+        XDG_CACHE_HOME: posix.join(runtimeDirectory, "cache"),
+        XDG_DATA_HOME: posix.join(runtimeDirectory, "data"),
+      };
+      const version = await runAdapterExecutionTargetProcess(
+        `opencode-environment-${randomUUID()}`,
+        context.executionTarget,
+        command,
+        ["--version"],
+        {
+          cwd: context.executionTarget.remoteCwd,
+          env: configuredProbeEnvironment(context.config),
+          timeoutSec: 30,
+          graceSec: 2,
+          onLog: async () => undefined,
+        },
+      );
+      const rpcInput = [
+        JSON.stringify({ id: 1, method: "initialize", params: {} }),
+        JSON.stringify({
+          id: 2,
+          method: "thread/start",
+          params: {
+            cwd: context.executionTarget.remoteCwd,
+            model: context.config.model,
+            baseInstructions: "Environment readiness probe. Do not start a turn.",
+            dynamicTools: [],
+          },
+        }),
+      ].join("\n") + "\n";
+      const proxy = await runAdapterExecutionTargetProcess(
+        `opencode-proxy-environment-${randomUUID()}`,
+        context.executionTarget,
+        providerNode,
+        [posix.join(packRoot, "dist", "cli", "opencode-app-server-proxy.js")],
+        {
+          cwd: context.executionTarget.remoteCwd,
+          env: environment,
+          stdin: rpcInput,
+          timeoutSec: 60,
+          graceSec: 5,
+          onLog: async () => undefined,
+        },
+      );
+      const frames = proxy.stdout
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .flatMap((line: string) => {
+          try {
+            return [JSON.parse(line) as Record<string, unknown>];
+          } catch {
+            return [];
+          }
+        });
+      const initialized = frames.find((frame) => frame.id === 1);
+      const opened = frames.find((frame) => frame.id === 2);
+      const serverInfo = initialized?.result && typeof initialized.result === "object"
+        ? (initialized.result as Record<string, unknown>).serverInfo as Record<string, unknown> | undefined
+        : undefined;
+      const thread = opened?.result && typeof opened.result === "object"
+        ? ((opened.result as Record<string, unknown>).thread as Record<string, unknown> | undefined)
+        : undefined;
+      const proxyReady = proxy.exitCode === 0
+        && !proxy.timedOut
+        && serverInfo?.version === "1.18.17"
+        && typeof thread?.id === "string"
+        && thread.id.length > 0;
+      const exact = version.exitCode === 0
+        && !version.timedOut
+        && version.stdout.trim() === "1.18.17";
+      const versionCheck = exact
+        ? {
+            code: "opencode_version_qualified_remote",
+            level: "info" as const,
+            message: "OpenCode 1.18.17 and its hello probe succeeded inside the selected execution target.",
+          }
+        : {
+            code: "opencode_version_incompatible_remote",
+            level: "error" as const,
+            message: `The selected execution target did not expose exact OpenCode 1.18.17 (received ${version.stdout.trim() || "no version"}).`,
+          };
+      const proxyCheck = proxyReady
+        ? {
+            code: "opencode_proxy_qualified_remote",
+            level: "info" as const,
+            message: "The packaged proxy launched OpenCode server, passed /global/health at exact version 1.18.17, and created a provider session inside the selected execution target.",
+          }
+        : {
+            code: "opencode_proxy_failed_remote",
+            level: "error" as const,
+            message: `The packaged OpenCode proxy failed its initialize/session probe inside the selected execution target (${redactedProbeTail(proxy.stderr, environment) || "incomplete response"}).`,
+          };
+      return {
+        adapterType: "paperclip_runner",
+        testedAt,
+        status: versionCheck.level === "error" || proxyCheck.level === "error"
+          ? "fail" as const
+          : "pass" as const,
+        checks: [versionCheck, proxyCheck],
+      };
+    } catch (error) {
+      return {
+        adapterType: "paperclip_runner",
+        status: "fail" as const,
+        testedAt,
+        checks: [{
+          code: "opencode_remote_probe_failed",
+          level: "error" as const,
+          message: redactedProbeTail(error) || "Remote OpenCode probe failed.",
+        }],
+      };
+    }
+  }
+  const result = await openCodeTestEnvironment(context);
+  const command = readConfiguredCommand(context.config, "opencode");
+  try {
+    const { stdout, stderr } = await execFileAsync(command, ["--version"], {
+      timeout: 5_000,
+      env: process.env,
+    });
+    const output = `${stdout}\n${stderr}`;
+    const match = output.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+    if (!match) throw new Error("OpenCode returned an unrecognized version string");
+    const version = `${match[1]}.${match[2]}.${match[3]}`;
+    const comparison = compareSemver(version, "1.18.17");
+    const check = comparison < 0
+      ? { code: "opencode_version_too_old", level: "error" as const, message: `OpenCode ${version} is older than required 1.18.17.` }
+      : comparison > 0
+        ? { code: "opencode_version_unqualified", level: "warn" as const, message: `OpenCode ${version} is newer than qualified version 1.18.17.` }
+        : { code: "opencode_version_qualified", level: "info" as const, message: "OpenCode 1.18.17 is installed and qualified." };
+    return {
+      ...result,
+      status: check.level === "error" ? "fail" as const
+        : check.level === "warn" && result.status === "pass" ? "warn" as const
+          : result.status,
+      checks: [...result.checks, check],
+    };
+  } catch (error) {
+    return {
+      ...result,
+      status: "fail" as const,
+      checks: [...result.checks, {
+        code: "opencode_version_probe_failed",
+        level: "error" as const,
+        message: error instanceof Error ? error.message : "OpenCode version probe failed.",
+      }],
+    };
+  }
+}
+
+async function testPaperclipRunnerCodexEnvironment(
+  context: Parameters<typeof codexTestEnvironment>[0],
+) {
+  if (context.executionTarget?.kind !== "remote") {
+    return codexTestEnvironment(context);
+  }
+  const target = context.executionTarget;
+  const testedAt = new Date().toISOString();
+  const environment = {
+    ...configuredProbeEnvironment(context.config),
+    HOME: target.remoteCwd,
+  };
+  try {
+    const version = await runAdapterExecutionTargetProcess(
+      `codex-version-environment-${randomUUID()}`,
+      target,
+      "codex",
+      ["--version"],
+      {
+        cwd: target.remoteCwd,
+        env: environment,
+        timeoutSec: 30,
+        graceSec: 2,
+        onLog: async () => undefined,
+      },
+    );
+    const versionText = `${version.stdout}\n${version.stderr}`;
+    const exactVersion = versionText.match(/\bcodex-cli\s+(\d+\.\d+\.\d+)\b/)?.[1];
+    const initializeInput = [
+      JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "paperclip-runner-environment-probe",
+            title: "Paperclip Runner environment probe",
+            version: "1",
+          },
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+          },
+        },
+      }),
+      JSON.stringify({ method: "initialized" }),
+    ].join("\n") + "\n";
+    const initializedProcess = await runAdapterExecutionTargetProcess(
+      `codex-app-server-environment-${randomUUID()}`,
+      target,
+      "codex",
+      ["app-server"],
+      {
+        cwd: target.remoteCwd,
+        env: environment,
+        stdin: initializeInput,
+        timeoutSec: 30,
+        graceSec: 5,
+        onLog: async () => undefined,
+      },
+    );
+    const initialized = initializedProcess.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .flatMap((line: string) => {
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      })
+      .find((frame) => frame.id === 1);
+    const versionReady = version.exitCode === 0
+      && !version.timedOut
+      && exactVersion === "0.148.0";
+    const initializeReady = initializedProcess.exitCode === 0
+      && !initializedProcess.timedOut
+      && initialized?.result !== undefined
+      && initialized.error === undefined;
+    return {
+      adapterType: "paperclip_runner",
+      status: versionReady && initializeReady ? "pass" as const : "fail" as const,
+      testedAt,
+      checks: [{
+        code: versionReady
+          ? "codex_version_qualified_remote"
+          : "codex_version_incompatible_remote",
+        level: versionReady ? "info" as const : "error" as const,
+        message: versionReady
+          ? "Codex 0.148.0 is installed inside the selected execution target."
+          : `The selected execution target did not expose exact Codex 0.148.0 (received ${exactVersion ?? "an unrecognized version"}).`,
+      }, {
+        code: initializeReady
+          ? "codex_app_server_initialized_remote"
+          : "codex_app_server_initialize_failed_remote",
+        level: initializeReady ? "info" as const : "error" as const,
+        message: initializeReady
+          ? "Codex app-server completed JSON-RPC initialize inside the selected execution target."
+          : `Codex app-server did not complete JSON-RPC initialize inside the selected execution target (${redactedProbeTail(initializedProcess.stderr, environment) || "incomplete response"}).`,
+      }],
+    };
+  } catch (error) {
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{
+        code: "codex_remote_initialize_probe_failed",
+        level: "error" as const,
+        message: redactedProbeTail(error, environment) || "Remote Codex initialize probe failed.",
+      }],
+    };
+  }
+}
+
+async function testPaperclipRunnerAcpxEnvironment(
+  context: Parameters<typeof codexTestEnvironment>[0],
+) {
+  const testedAt = new Date().toISOString();
+  const agent = context.config.acpxAgent;
+  const model = typeof context.config.model === "string" ? context.config.model.trim() : "";
+  if (agent !== "pi" && agent !== "claude" && agent !== "codex") {
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{ code: "acpx_agent_invalid", level: "error" as const, message: "ACPX agent must be Pi, Claude, or Codex." }],
+    };
+  }
+  let profile;
+  try {
+    profile = resolveQualifiedAcpxProfile(agent, model);
+  } catch (error) {
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{ code: "acpx_model_unqualified", level: "error" as const, message: error instanceof Error ? error.message : "ACPX model is not qualified." }],
+    };
+  }
+  if (context.executionTarget?.kind === "remote") {
+    const target = context.executionTarget;
+    try {
+      const packRoot = await remoteProviderPackRoot(context);
+      const providerNode = posix.join(
+        packRoot,
+        "node_modules",
+        "node",
+        "bin",
+        "node",
+      );
+      const runtimeDirectory = posix.join(
+        target.remoteCwd,
+        ".paperclip-runtime",
+        "environment-probes",
+        `acpx-${agent}`,
+      );
+      const configuredEnvironment = configuredProbeEnvironment(context.config);
+      const environment = {
+        ...configuredEnvironment,
+        ...(agent === "codex"
+          ? resolveAcpxCodexManagedCredentialEnvironment(configuredEnvironment)
+          : {}),
+        HOME: target.remoteCwd,
+        XDG_CONFIG_HOME: posix.join(runtimeDirectory, "config"),
+        XDG_CACHE_HOME: posix.join(runtimeDirectory, "cache"),
+        XDG_DATA_HOME: posix.join(runtimeDirectory, "data"),
+      };
+      const nodeVersion = await runAdapterExecutionTargetProcess(
+        `acpx-node-environment-${randomUUID()}`,
+        target,
+        providerNode,
+        ["-p", "process.versions.node"],
+        {
+          cwd: target.remoteCwd,
+          env: environment,
+          timeoutSec: 30,
+          graceSec: 2,
+          onLog: async () => undefined,
+        },
+      );
+      const [nodeMajor = 0, nodeMinor = 0] = nodeVersion.stdout
+        .trim()
+        .split(".")
+        .map(Number);
+      if (
+        nodeVersion.exitCode !== 0
+        || nodeVersion.timedOut
+        || nodeMajor < 24
+        || (nodeMajor === 24 && nodeMinor < 11)
+      ) {
+        throw new Error(
+          `ACPX provider pack requires Node 24.11 or newer inside the execution target; found ${nodeVersion.stdout.trim() || "no version"}.`,
+        );
+      }
+      const request = (id: number, command: string, params: Record<string, unknown>) =>
+        JSON.stringify({ protocolVersion: 2, id, command, params });
+      const probeInput = [
+        request(1, "initialize", { agent, model }),
+        request(2, "session.open", {
+          runtimeDirectory,
+          normalizedSessionId: `environment-probe-${agent}`,
+          workingDirectory: target.remoteCwd,
+          agent,
+          model,
+          permissionMode: "deny-all",
+          permissionModePinned: true,
+          systemInstructions: "Environment readiness probe. Do not start a turn.",
+          tools: [],
+        }),
+        request(3, "session.suspend", {
+          reason: "environment probe complete",
+        }),
+      ].join("\n") + "\n";
+      const probe = await runAdapterExecutionTargetProcess(
+        `acpx-environment-${randomUUID()}`,
+        target,
+        providerNode,
+        [posix.join(packRoot, "dist", "cli", "acpx-runtime-sidecar.js")],
+        {
+          cwd: target.remoteCwd,
+          env: environment,
+          stdin: probeInput,
+          timeoutSec: 90,
+          graceSec: 5,
+          onLog: async () => undefined,
+        },
+      );
+      const frames = probe.stdout
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .flatMap((line: string) => {
+          try {
+            return [JSON.parse(line) as Record<string, unknown>];
+          } catch {
+            return [];
+          }
+        });
+      const initialized = frames.find((frame: Record<string, unknown>) => frame.id === 1);
+      const opened = frames.find((frame: Record<string, unknown>) => frame.id === 2);
+      const suspended = frames.find((frame: Record<string, unknown>) => frame.id === 3);
+      const identity = opened?.result && typeof opened.result === "object"
+        ? (opened.result as Record<string, unknown>).identity as Record<string, unknown> | undefined
+        : undefined;
+      const failures: string[] = [];
+      if (probe.exitCode !== 0) failures.push(`process_exit=${probe.exitCode}`);
+      if (probe.timedOut) failures.push("process_timeout");
+      const responseFailure = (
+        label: string,
+        frame: Record<string, unknown> | undefined,
+      ) => {
+        if (frame?.ok === true) return;
+        const error = frame?.error && typeof frame.error === "object"
+          ? frame.error as Record<string, unknown>
+          : {};
+        const code = typeof error.code === "string" ? error.code : "missing_response";
+        const message = redactedProbeTail(error.message, environment);
+        failures.push(`${label}=${code}${message ? `:${message}` : ""}`);
+      };
+      responseFailure("initialize", initialized);
+      responseFailure("session.open", opened);
+      responseFailure("session.suspend", suspended);
+      if (!identity) {
+        failures.push("identity_missing");
+      } else {
+        const verifiedIdentity = identity;
+        if (verifiedIdentity.requestedModel !== model) {
+          failures.push(
+            `requested_model_mismatch(expected=${model},received=${String(verifiedIdentity.requestedModel ?? "missing")})`,
+          );
+        }
+        if (verifiedIdentity.effectiveModel !== profile.qualificationModel) {
+          failures.push(
+            `effective_model_mismatch(expected=${profile.qualificationModel},received=${String(verifiedIdentity.effectiveModel ?? "missing")})`,
+          );
+        }
+        if (verifiedIdentity.profile === undefined) failures.push("profile_missing");
+        const missingIdentityKeys = ["acpxRecordId", "backendSessionId", "agentSessionId"].filter(
+          (key) => {
+            const value = verifiedIdentity[key];
+            return typeof value !== "string" || value.length === 0;
+          },
+        );
+        if (missingIdentityKeys.length > 0) {
+          failures.push(`persistent_identity_missing=${missingIdentityKeys.join(",")}`);
+        }
+      }
+      if (failures.length > 0) {
+        const stderr = redactedProbeTail(probe.stderr, environment);
+        throw new Error(
+          `ACPX ${agent} failed initialize/session.open/suspend inside the selected execution target: ${failures.join("; ")}${stderr ? `; stderr=${stderr}` : ""}`,
+        );
+      }
+      return {
+        adapterType: "paperclip_runner",
+        status: "pass" as const,
+        testedAt,
+        checks: [{
+          code: "acpx_profile_qualified_remote",
+          level: "info" as const,
+          message: `Verified ACPX ${profile.acpxVersion}, ${profile.agentServerPackage}@${profile.agentServerVersion}, Node ${nodeVersion.stdout.trim()}, exact model ${String(identity?.effectiveModel ?? "unverified")}, all persistent identities, and clean suspension inside the selected execution target.`,
+        }],
+      };
+    } catch (error) {
+      return {
+        adapterType: "paperclip_runner",
+        status: "fail" as const,
+        testedAt,
+        checks: [{
+          code: "acpx_remote_handshake_failed",
+          level: "error" as const,
+          message: redactedProbeTail(error) || "Remote ACPX handshake failed.",
+        }],
+      };
+    }
+  }
+  const nodeParts = process.versions.node.split(".").map(Number);
+  if ((nodeParts[0] ?? 0) < 24 || ((nodeParts[0] ?? 0) === 24 && (nodeParts[1] ?? 0) < 11)) {
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{ code: "acpx_node_too_old", level: "error" as const, message: `The provider pack requires Node 24.11 or newer; found ${process.versions.node}.` }],
+    };
+  }
+  const configuredEnv = context.config.env && typeof context.config.env === "object"
+    ? context.config.env as Record<string, unknown>
+    : {};
+  const environment = { ...process.env };
+  for (const [key, value] of Object.entries(configuredEnv)) if (typeof value === "string") environment[key] = value;
+  const managedClaudeAuth = agent === "claude" && !environment.ANTHROPIC_API_KEY && !environment.CLAUDE_CODE_OAUTH_TOKEN
+    ? await readClaudeAuthStatus()
+    : null;
+  const managedCodexAuth = agent === "codex" && !environment.OPENAI_API_KEY && !environment.CODEX_API_KEY
+    ? await readCodexAuthInfo()
+    : null;
+  const credentialReady = agent === "pi"
+    ? Boolean(environment.OPENROUTER_API_KEY)
+    : agent === "claude"
+      ? Boolean(environment.ANTHROPIC_API_KEY || environment.CLAUDE_CODE_OAUTH_TOKEN || managedClaudeAuth?.loggedIn)
+      : Boolean(environment.OPENAI_API_KEY || environment.CODEX_API_KEY || managedCodexAuth);
+  if (!credentialReady) {
+    const required = agent === "pi"
+      ? "OPENROUTER_API_KEY"
+      : agent === "claude"
+        ? "ANTHROPIC_API_KEY or the managed Claude credential"
+        : "the managed Codex credential or OPENAI_API_KEY";
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{ code: "acpx_auth_missing", level: "error" as const, message: `ACPX ${agent} requires ${required}.` }],
+    };
+  }
+  let probeRoot: string | null = null;
+  try {
+    const installation = await inspectQualifiedAcpxInstallation(agent as QualifiedAcpxAgent, model);
+    probeRoot = await mkdtemp(join(tmpdir(), "paperclip-acpx-probe-"));
+    const host = await AcpxRuntimeHost.open({
+      runtimeDirectory: probeRoot,
+      normalizedSessionId: "environment-probe",
+      workingDirectory: probeRoot,
+      agent: agent as QualifiedAcpxAgent,
+      model,
+      environment,
+      dynamicTools: [],
+      dynamicToolHandler: async () => { throw new Error("environment probe exposes no semantic tools"); },
+    });
+    const identity = host.identity();
+    await host.close({ reason: "environment probe complete", discardPersistentState: true });
+    return {
+      adapterType: "paperclip_runner",
+      status: "pass" as const,
+      testedAt,
+      checks: [{
+        code: "acpx_profile_qualified",
+        level: "info" as const,
+        message: `Verified ACPX ${profile.acpxVersion}, ${profile.agentServerPackage}@${profile.agentServerVersion}, exact model ${identity.effectiveModel}, semantic bridge startup, and clean shutdown (digest ${installation.commandDigest}).`,
+      }, {
+        code: "acpx_auth_ready",
+        level: "info" as const,
+        message: `Credential readiness was verified for ACPX ${agent}; no credential value was retained.`,
+      }],
+    };
+  } catch (error) {
+    return {
+      adapterType: "paperclip_runner",
+      status: "fail" as const,
+      testedAt,
+      checks: [{ code: "acpx_handshake_failed", level: "error" as const, message: error instanceof Error ? error.message : "ACPX handshake failed." }],
+    };
+  } finally {
+    if (probeRoot) await rm(probeRoot, { recursive: true, force: true });
+  }
+}
+
+function compareSemver(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return (a[index] ?? 0) - (b[index] ?? 0);
+  }
+  return 0;
+}
 
 function readConfiguredCommand(config: Record<string, unknown>, fallback: string): string {
   const value = typeof config.command === "string" ? config.command.trim() : "";
@@ -366,7 +1083,7 @@ const paperclipRunnerAdapter: ServerAdapterModule = {
   type: "paperclip_runner",
   runtimeToolDelivery: "environment",
   async execute(ctx) {
-    const message = "paperclip_runner requires the native runner coordinator";
+    const message = "paperclip_runner must be executed by the native runner coordinator";
     await ctx.onLog("stderr", `${message}\n`);
     return {
       exitCode: 1,
@@ -374,37 +1091,159 @@ const paperclipRunnerAdapter: ServerAdapterModule = {
       timedOut: false,
       errorMessage: message,
       errorCode: "paperclip_runner_coordinator_required",
-      provider: "codex",
+      provider: ctx.config.provider === "acpx"
+        ? "acpx"
+        : ctx.config.provider === "opencode"
+          ? "opencode"
+          : "codex",
       summary: message,
     };
   },
   async testEnvironment(context) {
-    const result = await codexTestEnvironment(context);
+    const provider = context.config.provider === "opencode"
+      ? "opencode"
+      : context.config.provider === "acpx"
+        ? "acpx"
+        : "codex";
+    const permissionCapability = PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES[provider];
+    const configuredMode = context.config[permissionCapability.configKey];
+    if (
+      configuredMode !== undefined
+      && resolvePaperclipRunnerPermissionMode(provider as PaperclipRunnerProvider, configuredMode) !== configuredMode
+    ) {
+      return {
+        adapterType: "paperclip_runner",
+        status: "fail" as const,
+        testedAt: new Date().toISOString(),
+        checks: [{
+          code: "runner_permission_mode_invalid",
+          level: "error" as const,
+          message: `${permissionCapability.configKey} is not supported by ${provider}.`,
+        }],
+      };
+    }
+    const result = provider === "opencode"
+      ? await testPaperclipRunnerOpenCodeEnvironment(context)
+      : provider === "acpx"
+      ? await testPaperclipRunnerAcpxEnvironment(context)
+      : await testPaperclipRunnerCodexEnvironment(context);
     return { ...result, adapterType: "paperclip_runner" };
   },
-  listSkills: listCodexSkills,
-  syncSkills: syncCodexSkills,
+  async listSkills(context) {
+    const availableEntries = await readPaperclipRuntimeSkillEntries(context.config, import.meta.dirname);
+    return buildRuntimeMountedSkillSnapshot({
+      adapterType: "paperclip_runner",
+      availableEntries,
+      desiredSkills: resolvePaperclipDesiredSkillNames(context.config, availableEntries),
+      configuredDetail: "Will be copied into the immutable Paperclip Runner context on the next run.",
+    });
+  },
+  async syncSkills(context) {
+    const availableEntries = await readPaperclipRuntimeSkillEntries(context.config, import.meta.dirname);
+    return buildRuntimeMountedSkillSnapshot({
+      adapterType: "paperclip_runner",
+      availableEntries,
+      desiredSkills: resolvePaperclipDesiredSkillNames(context.config, availableEntries),
+      configuredDetail: "Will be copied into the immutable Paperclip Runner context on the next run.",
+    });
+  },
   sessionCodec: codexSessionCodec,
-  models: codexModels,
+  models: [
+    ...codexModels,
+    { id: "openrouter/deepseek/deepseek-v4-flash-0731", label: "OpenRouter · DeepSeek V4 Flash 0731" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5 (ACPX)" },
+  ],
+  modelProfiles: codexModelProfiles,
   listModels: listCodexModels,
   refreshModels: refreshCodexModels,
   supportsLocalAgentJwt: false,
-  supportsInstructionsBundle: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
-  getRuntimeCommandSpec: (config) => buildNpmRuntimeCommandSpec(config, "codex", "@openai/codex"),
-  agentConfigurationDoc:
-    "# Paperclip Runner\n\nAdapter: paperclip_runner\n\nRuns Codex through the Rust Paperclip runner and authenticated PRP transport.\n",
+  getRuntimeCommandSpec: (config) => config.provider === "acpx"
+    ? { command: "paperclip-runnerd", detectCommand: null, installCommand: null }
+    : config.provider === "opencode"
+    ? buildNpmRuntimeCommandSpec(config, "opencode", "opencode-ai@1.18.17")
+    : buildNpmRuntimeCommandSpec(config, "codex", "@openai/codex@0.148.0"),
+  agentConfigurationDoc: `# Paperclip Runner\n\nAdapter: paperclip_runner\n\nRuns native Codex, OpenCode, or a qualified Pi/Claude/Codex ACP agent through ACPX 0.13.1 and authenticated PRP. Provider processes never receive a Paperclip credential or unrestricted server environment.\n\nFresh executions default to the highest non-interactive harness mode: Codex \`codexPermissionMode=never\`, OpenCode \`opencodePermissionMode=allow\`, and ACPX \`acpxPermissionMode=approve-all\`. Lower modes remain configurable per provider. Full auto suppresses harness approval pauses but does not widen Paperclip workspace, network, credential, protected-path, or read-only planning boundaries.\n`,
   getConfigSchema: () => ({
-    fields: [
-      {
-        key: "provider",
-        label: "Provider",
-        type: "select",
-        default: "codex",
-        options: [{ value: "codex", label: "Codex" }],
-        hint: "Paperclip Runner currently supports only Codex app-server.",
-      },
-    ],
+    fields: [{
+      key: "provider",
+      label: "Provider",
+      type: "select",
+      default: "codex",
+      options: [
+        { value: "codex", label: "Codex" },
+        { value: "opencode", label: "OpenCode 1.18.17" },
+        { value: "acpx", label: "ACPX" },
+      ],
+      hint: "Select a local Codex/OpenCode harness or a qualified ACPX agent.",
+    }, {
+      key: "acpxAgent",
+      label: "ACP agent",
+      type: "select",
+      default: "pi",
+      options: [
+        { value: "pi", label: "Pi via ACPX" },
+        { value: "claude", label: "Claude via ACPX" },
+        { value: "codex", label: "Codex via ACPX (control)" },
+      ],
+      hint: "Qualified ACP server profile. Configuration is immutable after session creation.",
+      meta: { provider: "acpx" },
+    }, {
+      key: "codexPermissionMode",
+      label: "Permission mode",
+      type: "select",
+      default: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.codex.defaultMode,
+      options: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.codex.options.map(({ value, label }) => ({ value, label })),
+      hint: `${PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.codex.description} Full auto retains Paperclip isolation.`,
+      meta: { visibleWhen: { key: "provider", value: "codex" } },
+    }, {
+      key: "opencodePermissionMode",
+      label: "Permission mode",
+      type: "select",
+      default: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.opencode.defaultMode,
+      options: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.opencode.options.map(({ value, label }) => ({ value, label })),
+      hint: `${PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.opencode.description} Full auto retains Paperclip isolation.`,
+      meta: { visibleWhen: { key: "provider", value: "opencode" } },
+    }, {
+      key: "acpxPermissionMode",
+      label: "Permission mode",
+      type: "select",
+      default: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.acpx.defaultMode,
+      options: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.acpx.options.map(({ value, label }) => ({ value, label })),
+      hint: `${PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.acpx.description} Full auto retains Paperclip isolation.`,
+      meta: { visibleWhen: { key: "provider", value: "acpx" } },
+    }, {
+      key: "lifecycleMode",
+      label: "Runner lifecycle",
+      type: "select",
+      default: "per_turn",
+      options: [
+        { value: "per_turn", label: "Turn by turn" },
+        { value: "warm", label: "Warm session" },
+      ],
+      hint: "Warm sessions retain runnerd and the provider between separately governed runs.",
+    }, {
+      key: "idleTimeoutMs",
+      label: "Warm idle timeout (ms)",
+      type: "number",
+      default: 300000,
+      hint: "Warm sessions suspend resumably after this much inactivity.",
+    }, {
+      key: "model",
+      label: "Model",
+      type: "text",
+      default: "openrouter/deepseek/deepseek-v4-flash-0731",
+      placeholder: "openrouter/deepseek/deepseek-v4-flash-0731",
+      hint: "OpenCode uses provider/model form; ACPX requires its qualified exact model.",
+    }, {
+      key: "command",
+      label: "OpenCode command",
+      type: "text",
+      default: "opencode",
+      hint: "OpenCode executable. Version 1.18.17 is qualified.",
+    }],
   }),
   loginCapability: codexLoginCapability,
 };

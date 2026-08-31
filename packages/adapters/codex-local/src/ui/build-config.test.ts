@@ -71,40 +71,12 @@ describe("buildCodexLocalConfig", () => {
 });
 
 describe("buildPaperclipRunnerConfig", () => {
-  it("keeps only settings implemented by the Codex runner profile", () => {
-    const config = buildPaperclipRunnerConfig(makeValues({
-      codexEngine: "acp",
-      codexAcpAgentCommand: "custom-acp",
-      codexAcpStateDir: "/tmp/acp",
-      search: true,
-      fastMode: true,
-      dangerouslyBypassSandbox: true,
-      instructionsFilePath: "/tmp/AGENTS.md",
-      thinkingEffort: "high",
-      command: "custom-codex",
-      extraArgs: "--unsafe",
-    }));
-
-    expect(config).toMatchObject({
+  it("preserves the Codex provider default", () => {
+    expect(buildPaperclipRunnerConfig(makeValues())).toMatchObject({
       provider: "codex",
       model: "gpt-5.4",
-      timeoutSec: 0,
-      graceSec: 15,
+      lifecycleMode: "per_turn",
     });
-    for (const unsupportedKey of [
-      "engine",
-      "agentCommand",
-      "stateDir",
-      "instructionsFilePath",
-      "modelReasoningEffort",
-      "search",
-      "fastMode",
-      "dangerouslyBypassApprovalsAndSandbox",
-      "command",
-      "extraArgs",
-    ]) {
-      expect(config).not.toHaveProperty(unsupportedKey);
-    }
   });
 
   it("builds a bounded OpenCode runner profile from schema values", () => {
@@ -144,6 +116,71 @@ describe("buildPaperclipRunnerConfig", () => {
       provider: "opencode",
       opencodePermissionMode: "allow",
       lifecycleMode: "per_turn",
+    });
+  });
+
+  it("persists a warm lifecycle and its idle timeout", () => {
+    expect(buildPaperclipRunnerConfig(makeValues({
+      paperclipRunnerLifecycleMode: "warm",
+      paperclipRunnerIdleTimeoutMs: 45_000,
+    }))).toMatchObject({ lifecycleMode: "warm", idleTimeoutMs: 45_000 });
+  });
+
+  it("persists OpenCode and supplies the qualified model when blank", () => {
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      paperclipRunnerProvider: "opencode",
+      model: "",
+    }))).toMatchObject({
+      provider: "opencode",
+      model: "openrouter/deepseek/deepseek-v4-flash-0731",
+      opencodePermissionMode: "allow",
+    });
+  });
+
+  it("defaults every Paperclip Runner harness to its maximum permission mode", () => {
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      paperclipRunnerProvider: "acpx",
+      paperclipRunnerAcpxAgent: "claude",
+      model: "",
+      dangerouslyBypassSandbox: true,
+      adapterSchemaValues: {
+        permissionPolicy: "interactive",
+        dangerouslyBypassApprovalsAndSandbox: true,
+      },
+    }))).toMatchObject({
+      provider: "acpx",
+      acpxAgent: "claude",
+      model: "claude-sonnet-5",
+      codexPermissionMode: "never",
+      opencodePermissionMode: "allow",
+      acpxPermissionMode: "approve-all",
+    });
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      dangerouslyBypassSandbox: true,
+      adapterSchemaValues: {
+        permissionPolicy: "interactive",
+        dangerouslyBypassSandbox: true,
+      },
+    }))).toEqual(expect.not.objectContaining({
+      dangerouslyBypassApprovalsAndSandbox: expect.anything(),
+      dangerouslyBypassSandbox: expect.anything(),
+      permissionPolicy: expect.anything(),
+    }));
+  });
+
+  it("persists lower provider-specific permission modes", () => {
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      codexPermissionMode: "on-request",
+      opencodePermissionMode: "ask",
+      acpxPermissionMode: "approve-reads",
+    }))).toMatchObject({
+      codexPermissionMode: "on-request",
+      opencodePermissionMode: "ask",
+      acpxPermissionMode: "approve-reads",
     });
   });
 });
