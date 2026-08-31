@@ -164,15 +164,23 @@ function installStorybookApiFixtures() {
       return Response.json(storybookEnvironments());
     }
 
-    if (/^\/api\/companies\/[^/]+\/environments\/capabilities$/.test(url.pathname)) {
+    if (
+      /^\/api\/companies\/[^/]+\/environments\/capabilities$/.test(url.pathname)
+    ) {
       return Response.json(storybookEnvironmentCapabilities());
     }
 
-    if (/^\/api\/companies\/[^/]+\/adapters\/[^/]+\/auth-signal/.test(url.pathname)) {
+    if (
+      /^\/api\/companies\/[^/]+\/adapters\/[^/]+\/auth-signal/.test(
+        url.pathname,
+      )
+    ) {
       return Response.json(storybookAuthSignal());
     }
 
-    if (/^\/api\/companies\/[^/]+\/adapters\/[^/]+\/models$/.test(url.pathname)) {
+    if (
+      /^\/api\/companies\/[^/]+\/adapters\/[^/]+\/models$/.test(url.pathname)
+    ) {
       return Response.json([]);
     }
 
@@ -184,7 +192,9 @@ function installStorybookApiFixtures() {
     // its own height and clips its overflow. A canvas that measured itself once
     // would cut that expansion off, and nothing short of driving the flow would
     // show it.
-    if (/^\/api\/companies\/[^/]+\/setup-token-login-sessions$/.test(url.pathname)) {
+    if (
+      /^\/api\/companies\/[^/]+\/setup-token-login-sessions$/.test(url.pathname)
+    ) {
       return Response.json({
         sessionId: "setup-token-storybook",
         environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
@@ -193,22 +203,55 @@ function installStorybookApiFixtures() {
         failure: null,
       });
     }
-    if (/^\/api\/companies\/[^/]+\/setup-token-login-sessions\/[^/]+$/.test(url.pathname)) {
+    if (
+      /^\/api\/companies\/[^/]+\/setup-token-login-sessions\/[^/]+$/.test(
+        url.pathname,
+      )
+    ) {
       return Response.json({
         sessionId: "setup-token-storybook",
         environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
         status: "awaiting_browser_code",
         expiresAt: null,
         failure: null,
-        panelMode: "submitted_browser_code",
-        prompt: {
-          authorizationUrl:
-            "https://claude.ai/oauth/authorize?client_id=storybook&response_type=code&state=storybook",
-          transportAdvisory: null,
-        },
       });
     }
-    if (/^\/api\/companies\/[^/]+\/claude-oauth-token-status$/.test(url.pathname)) {
+    // The authorization URL is its own route, and deliberately so: the status
+    // read above is public and carries no secret, while the URL is an owner-only
+    // read. The panel polls this one separately and stays on "Preparing the
+    // login…" until it answers — so a fixture without it looks like a hung login
+    // rather than a missing route, which is exactly how it was misread once.
+    if (
+      /^\/api\/companies\/[^/]+\/setup-token-login-sessions\/[^/]+\/prompt$/.test(
+        url.pathname,
+      )
+    ) {
+      return Response.json({
+        authorizationUrl:
+          "https://claude.ai/oauth/authorize?client_id=storybook&response_type=code&state=storybook",
+        transportAdvisory: null,
+      });
+    }
+    // Submitting the browser code. The panel hands the pasted code here and then
+    // completes; both are stubbed so the last stage of the flow — the one where
+    // the card is at its tallest — can actually be reached.
+    if (
+      /^\/api\/companies\/[^/]+\/setup-token-login-sessions\/[^/]+\/code$/.test(
+        url.pathname,
+      )
+    ) {
+      return Response.json({
+        sessionId: "setup-token-storybook",
+        environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
+        status: "awaiting_completion",
+        expiresAt: null,
+        failure: null,
+        transportAdvisory: null,
+      });
+    }
+    if (
+      /^\/api\/companies\/[^/]+\/claude-oauth-token-status$/.test(url.pathname)
+    ) {
       return new Response(null, { status: 404 });
     }
 
@@ -293,7 +336,10 @@ function installStorybookApiFixtures() {
             // connect step's provider sign-in silently never renders, which is
             // indistinguishable from it having been removed. Mirrors
             // `KNOWN_DEFAULTS` in `use-adapter-capabilities.ts`.
-            login: { panelMode: "submitted_browser_code", timeoutPolicy: "fixed" },
+            login: {
+              panelMode: "submitted_browser_code",
+              timeoutPolicy: "fixed",
+            },
           },
         },
         {
@@ -309,7 +355,10 @@ function installStorybookApiFixtures() {
             supportsLocalAgentJwt: true,
             requiresMaterializedRuntimeSkills: false,
             supportsModelProfiles: true,
-            login: { panelMode: "displayed_code", timeoutPolicy: "caller_bounded" },
+            login: {
+              panelMode: "displayed_code",
+              timeoutPolicy: "caller_bounded",
+            },
           },
         },
       ]);
