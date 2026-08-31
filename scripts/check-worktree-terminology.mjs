@@ -38,7 +38,8 @@ for (const file of files.filter((name) => /^ui\/(?:src\/(?:components|pages)|sto
     for (const candidate of candidates) {
       const raw = candidate[0];
       const importPath = /^["'`](?:\.{1,2}\/|@\/).*workspace/i.test(raw);
-      const machineBoundary = importPath || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
+      const thirdPartyProduct = file === "ui/src/pages/apps/AppsConnect.test.tsx" && /Workspace account/i.test(raw);
+      const machineBoundary = importPath || thirdPartyProduct || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
       const visible = raw.replace(/\{[^}]*\}/g, "");
       const looksRendered = /\bWorkspace(s)?\b/.test(visible) || /\bworkspaces?\s+[a-z]/i.test(visible) || /[a-z]\s+workspaces?\b/i.test(visible);
       if (looksRendered && !machineBoundary) {
@@ -51,7 +52,8 @@ for (const file of files.filter((name) => /^ui\/(?:src\/(?:components|pages)|sto
       /(["'`])(?:(?!\1).)*workspaces?(?:(?!\1).)*\1|>[^<]*workspaces?[^<]*</gi,
       (raw) => {
         const importPath = /^["'`](?:\.{1,2}\/|@\/).*workspace/i.test(raw);
-        const machineBoundary = importPath || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
+        const thirdPartyProduct = file === "ui/src/pages/apps/AppsConnect.test.tsx" && /Workspace account/i.test(raw);
+        const machineBoundary = importPath || thirdPartyProduct || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
         const visible = raw.replace(/\{[^}]*\}/g, "");
         const looksRendered = /\bWorkspace(s)?\b/.test(visible) || /\bworkspaces?\s+[a-z]/i.test(visible) || /[a-z]\s+workspaces?\b/i.test(visible);
         if (!looksRendered || machineBoundary) return raw;

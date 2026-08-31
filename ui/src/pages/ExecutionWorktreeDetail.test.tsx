@@ -93,19 +93,19 @@ vi.mock("../components/SummarySlotCard", () => ({
   },
 }));
 vi.mock("../components/ExecutionWorktreeCloseDialog", () => ({
-  ExecutionWorkspaceCloseDialog: () => null,
+  ExecutionWorktreeCloseDialog: () => null,
 }));
 vi.mock("../components/RoutineRunVariablesDialog", () => ({
   RoutineRunVariablesDialog: () => null,
 }));
 vi.mock("../components/WorktreeRuntimeControls", () => ({
-  buildWorkspaceRuntimeControlSections: () => [],
-  buildWorkspaceServiceControlEntries: () => [],
-  resolveWorkspaceServiceControlRequests: () => [],
-  WorkspaceRuntimeControls: () => <div data-testid="runtime-controls" />,
+  buildWorktreeRuntimeControlSections: () => [],
+  buildWorktreeServiceControlEntries: () => [],
+  resolveWorktreeServiceControlRequests: () => [],
+  WorktreeRuntimeControls: () => <div data-testid="runtime-controls" />,
 }));
 vi.mock("../components/WorktreeServiceControlBar", () => ({
-  WorkspaceServiceControlBar: () => <div data-testid="service-control-bar" />,
+  WorktreeServiceControlBar: () => <div data-testid="service-control-bar" />,
 }));
 vi.mock("../components/PageTabBar", () => ({
   PageTabBar: ({ items }: { items: Array<{ value: string; label: string }> }) => (

@@ -140,7 +140,7 @@ export function buildReusableExecutionWorktreeOptionGroups<T extends ReusableExe
 
   return [
     ...(recent.length > 0 ? [{ id: "recent" as const, label: "Recent", options: recent }] : []),
-    { id: "all", label: "All workspaces", options: all },
+    { id: "all", label: "All worktrees", options: all },
   ];
 }
 

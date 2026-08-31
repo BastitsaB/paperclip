@@ -26,7 +26,7 @@ vi.mock("./IssueWorktreeCard", async () => {
   const React = await import("react");
 
   return {
-    IssueWorkspaceCard: ({
+    IssueWorktreeCard: ({
       issue,
       onDraftChange,
     }: {

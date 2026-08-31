@@ -1887,7 +1887,7 @@ describe("CompanyEnvironments — test provider button", () => {
     const holders = document.body.querySelector<HTMLElement>(
       "[data-testid='environment-delete-lease-holders']",
     )!;
-    const worktreeLink = holders.querySelector<HTMLAnchorElement>("a[href='/execution-workspaces/ws-1']");
+    const worktreeLink = holders.querySelector<HTMLAnchorElement>("a[href='/execution-worktrees/ws-1']");
     expect(worktreeLink?.textContent).toBe("ACME-7-fix-the-thing");
     // The two leases on ws-1 collapse into one row naming both issues.
     expect(holders.querySelectorAll("li")).toHaveLength(2);

@@ -33,11 +33,11 @@ vi.mock("@/context/FileViewerContext", () => ({
 }));
 
 vi.mock("@/components/WorktreeFileBrowser", () => ({
-  WorkspaceFileBrowser: () => null,
+  WorktreeFileBrowser: () => null,
 }));
 
 vi.mock("@/components/WorktreeFileMarkdownBody", () => ({
-  WorkspaceFileMarkdownBody: ({ children }: { children: string }) => (
+  WorktreeFileMarkdownBody: ({ children }: { children: string }) => (
     <div data-testid="mock-rendered-markdown">Rendered Markdown: {children}</div>
   ),
 }));

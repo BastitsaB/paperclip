@@ -378,7 +378,7 @@ vi.mock("../components/IssueRunLedger", () => ({
 }));
 
 vi.mock("../components/IssueWorktreeCard", () => ({
-  IssueWorkspaceCard: (props: { onBrowseFiles?: () => void; onOpenFileByPath?: () => void }) => {
+  IssueWorktreeCard: (props: { onBrowseFiles?: () => void; onOpenFileByPath?: () => void }) => {
     mockIssueWorktreeCardRender(props);
     return <div>Worktree</div>;
   },

@@ -1056,7 +1056,7 @@ export function buildInboxIssueGroupCreateDefaults(
         executionWorkspaceId: executionWorktreeId,
         executionWorkspaceMode: "reuse_existing",
         ...(projectId ? { projectId } : {}),
-        ...(projectWorktreeId ? { projectWorktreeId } : {}),
+        ...(projectWorktreeId ? { projectWorkspaceId: projectWorktreeId } : {}),
       };
     }
 

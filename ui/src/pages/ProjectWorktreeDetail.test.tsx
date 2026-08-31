@@ -53,8 +53,8 @@ vi.mock("../context/CompanyContext", () => ({
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: mockSetBreadcrumbs }) }));
 vi.mock("../components/PathInstructionsModal", () => ({ ChoosePathButton: () => null }));
 vi.mock("../components/WorktreeRuntimeControls", () => ({
-  buildWorkspaceRuntimeControlSections: () => [],
-  WorkspaceRuntimeControls: () => <div data-testid="runtime-controls" />,
+  buildWorktreeRuntimeControlSections: () => [],
+  WorktreeRuntimeControls: () => <div data-testid="runtime-controls" />,
 }));
 vi.mock("@/plugins/slots", () => ({
   PluginSlotMount: (props: unknown) => {

@@ -1088,13 +1088,13 @@ export function NewIssueDialog() {
       ...(newIssueDefaults.parentId ? { parentId: newIssueDefaults.parentId } : {}),
       ...(newIssueDefaults.goalId ? { goalId: newIssueDefaults.goalId } : {}),
       ...(projectId ? { projectId } : {}),
-      ...(projectWorktreeId ? { projectWorktreeId } : {}),
+      ...(projectWorktreeId ? { projectWorkspaceId: projectWorktreeId } : {}),
       ...(assigneeAdapterOverrides ? { assigneeAdapterOverrides } : {}),
       ...(executionWorktreePolicy?.enabled ? { executionWorkspacePreference: executionWorktreeMode } : {}),
       ...(executionWorktreeMode === "reuse_existing" && selectedExecutionWorktreeId
         ? { executionWorkspaceId: selectedExecutionWorktreeId }
         : {}),
-      ...(executionWorktreeSettings ? { executionWorktreeSettings } : {}),
+      ...(executionWorktreeSettings ? { executionWorkspaceSettings: executionWorktreeSettings } : {}),
       ...(executionPolicy ? { executionPolicy } : {}),
       ...(taskWatchdogsEnabled && watchdogAgentId
         ? { watchdog: { agentId: watchdogAgentId, instructions: watchdogInstructions.trim() || null } }

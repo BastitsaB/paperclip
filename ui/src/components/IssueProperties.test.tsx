@@ -1624,7 +1624,7 @@ describe("IssueProperties", () => {
     );
     expect(container.textContent).not.toContain("View worktree tasks");
     expect(worktreeLink).not.toBeUndefined();
-    expect(worktreeLink?.getAttribute("href")).toBe("/execution-workspaces/workspace-1");
+    expect(worktreeLink?.getAttribute("href")).toBe("/execution-worktrees/workspace-1");
 
     act(() => root.unmount());
   });

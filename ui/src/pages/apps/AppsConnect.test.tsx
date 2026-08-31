@@ -587,7 +587,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
 
     expect(radioContaining("Read & create")?.getAttribute("aria-checked")).toBe("true");
     expect(radioContaining("Read only")?.getAttribute("aria-checked")).toBe("false");
-    expect(container.textContent).toContain("Before connecting, enroll the signed-in Worktree account");
+    expect(container.textContent).toContain("Before connecting, enroll the signed-in Workspace account");
     expect(container.textContent).toContain("Your OAuth app");
   });
 

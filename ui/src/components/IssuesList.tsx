@@ -151,7 +151,7 @@ export type BoardColumnPageSize = KanbanColumnPageSize;
 export type IssueViewState = IssueFilterState & {
   sortField: IssueSortField;
   sortDir: "asc" | "desc";
-  groupBy: "status" | "priority" | "assignee" | "project" | "worktree" | "parent" | "none";
+  groupBy: "status" | "priority" | "assignee" | "project" | "workspace" | "parent" | "none";
   viewMode: "list" | "board";
   nestingEnabled: boolean;
   collapsedGroups: string[];
@@ -1229,21 +1229,21 @@ export function IssuesList({
         .filter((p) => groups[p]?.length)
         .map((p) => ({ key: p, label: issueFilterLabel(p), items: groups[p]! }));
     }
-    if (viewState.groupBy === "worktree") {
+    if (viewState.groupBy === "workspace") {
       const groups = groupBy(
         filtered,
-        (issue) => resolveIssueFilterWorktreeId(issue, issueFilterWorkspaceContext) ?? "__no_worktree",
+        (issue) => resolveIssueFilterWorktreeId(issue, issueFilterWorkspaceContext) ?? "__no_workspace",
       );
       return Object.keys(groups)
         .sort((a, b) => {
           // Groups with items first, "no worktree" last
-          if (a === "__no_worktree") return 1;
-          if (b === "__no_worktree") return -1;
+          if (a === "__no_workspace") return 1;
+          if (b === "__no_workspace") return -1;
           return (groups[b]?.length ?? 0) - (groups[a]?.length ?? 0);
         })
         .map((key) => ({
           key,
-          label: key === "__no_worktree" ? "No Worktree" : (workspaceNameMap.get(key) ?? key.slice(0, 8)),
+          label: key === "__no_workspace" ? "No Worktree" : (workspaceNameMap.get(key) ?? key.slice(0, 8)),
           items: groups[key]!,
         }));
     }
@@ -1582,7 +1582,7 @@ export function IssuesList({
         else defaults.assigneeAgentId = groupKey;
       }
       else if (viewState.groupBy === "project" && groupKey !== "__no_project") defaults.projectId = groupKey;
-      else if (viewState.groupBy === "worktree" && groupKey !== "__no_worktree") {
+      else if (viewState.groupBy === "workspace" && groupKey !== "__no_workspace") {
         const representativeIssue = group?.items.find((issue) =>
           issue.executionWorkspaceId === groupKey || issue.projectWorkspaceId === groupKey,
         ) ?? null;
@@ -1881,7 +1881,7 @@ export function IssuesList({
                     ["priority", "Priority"],
                     ["assignee", "Responsible"],
                     ["project", "Project"],
-                    ["worktree", "Worktree"],
+                    ["workspace", "Worktree"],
                     ["parent", "Parent Task"],
                     ["none", "None"],
                   ] as const)

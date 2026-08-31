@@ -304,7 +304,7 @@ describe("ProjectWorktreeSummaryCard", () => {
       ));
     });
 
-    const titleLink = container.querySelector("a[href='/projects/paperclip-app/workspaces/workspace-1']");
+    const titleLink = container.querySelector("a[href='/projects/paperclip-app/worktrees/workspace-1']");
     expect(titleLink).not.toBeNull();
     expect(container.textContent).not.toContain("Close worktree");
     expect(container.textContent).not.toContain("Start services");

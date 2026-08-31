@@ -329,8 +329,8 @@ describe("MarkdownBody", () => {
       { resolveWorkspaceFileRef: () => OPENABLE_AUTO_TARGET },
     );
 
-    expect(html).toContain('data-workspace-file-link="true"');
-    expect(html).toContain('data-workspace-file-path="videos/90-days-paperclip/out/90-days-paperclip-1x1.mp4"');
+    expect(html).toContain('data-worktree-file-link="true"');
+    expect(html).toContain('data-worktree-file-path="videos/90-days-paperclip/out/90-days-paperclip-1x1.mp4"');
     expect(html).toContain("videos/90-days-paperclip/out/90-days-paperclip-1x1.mp4");
     expect(html).not.toContain("max-w-(--sz-38ch)");
     expect(html).not.toContain("paperclip-markdown-issue-ref");
@@ -340,7 +340,7 @@ describe("MarkdownBody", () => {
   it("renders auto-detected worktree paths as plain code without an availability resolver", () => {
     const html = renderMarkdown("Check `ui/src/pages/IssueDetail.tsx:42` please.");
 
-    expect(html).not.toContain("data-workspace-file-link");
+    expect(html).not.toContain("data-worktree-file-link");
     expect(html).not.toContain("paperclip-workspace-file-link");
     expect(html).toContain("ui/src/pages/IssueDetail.tsx:42");
   });
@@ -352,7 +352,7 @@ describe("MarkdownBody", () => {
       { resolveWorkspaceFileRef: () => null },
     );
 
-    expect(html).not.toContain("data-workspace-file-link");
+    expect(html).not.toContain("data-worktree-file-link");
     expect(html).not.toContain('role="button"');
     expect(html).not.toContain("paperclip-workspace-file-link");
     expect(html).toContain("<code");
@@ -365,7 +365,7 @@ describe("MarkdownBody", () => {
       { resolveWorkspaceFileRef: () => null },
     );
 
-    expect(html).not.toContain("data-workspace-file-link");
+    expect(html).not.toContain("data-worktree-file-link");
     expect(html).toContain('href="/issues/PAP-10306"');
   });
 
@@ -376,8 +376,8 @@ describe("MarkdownBody", () => {
       { resolveWorkspaceFileRef: () => OPENABLE_AUTO_TARGET },
     );
 
-    expect(html).toContain('data-workspace-file-link="true"');
-    expect(html).toContain('data-workspace-file-path="ui/src/pages/IssueDetail.tsx"');
+    expect(html).toContain('data-worktree-file-link="true"');
+    expect(html).toContain('data-worktree-file-path="ui/src/pages/IssueDetail.tsx"');
   });
 
   it("keeps trailing punctuation outside auto-linked issue references", () => {

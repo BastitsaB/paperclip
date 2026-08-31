@@ -120,11 +120,11 @@ function render(children: ReactNode) {
 }
 
 function chips() {
-  return [...container.querySelectorAll('[data-workspace-file-link="true"]')];
+  return [...container.querySelectorAll('[data-worktree-file-link="true"]')];
 }
 
 function chipPaths() {
-  return chips().map((chip) => chip.getAttribute("data-workspace-file-path"));
+  return chips().map((chip) => chip.getAttribute("data-worktree-file-path"));
 }
 
 beforeEach(() => {

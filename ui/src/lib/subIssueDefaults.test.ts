@@ -95,7 +95,7 @@ describe("buildSubIssueDefaults", () => {
       goalId: "goal-1",
       executionWorkspaceId: "workspace-1",
       executionWorkspaceMode: "reuse_existing",
-      parentExecutionWorkspaceLabel: "Parent workspace",
+      parentExecutionWorktreeLabel: "Parent workspace",
       assigneeAgentId: "agent-1",
     });
   });

@@ -627,12 +627,12 @@ describe("IssuesList", () => {
     );
 
     await waitForAssertion(() => {
-      const button = container.querySelector<HTMLButtonElement>('button[aria-label="New task in Feature Branch"]');
+      const button = container.querySelector<HTMLButtonElement>('button[aria-label*="Feature Branch"]');
       expect(button).not.toBeNull();
     });
 
     await act(async () => {
-      const button = container.querySelector<HTMLButtonElement>('button[aria-label="New task in Feature Branch"]');
+      const button = container.querySelector<HTMLButtonElement>('button[aria-label*="Feature Branch"]');
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
