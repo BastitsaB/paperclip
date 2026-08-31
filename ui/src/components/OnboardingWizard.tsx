@@ -83,6 +83,7 @@ import {
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
 import { FrontDoor } from "./FrontDoor";
 import { PillGuy } from "./onboarding/PillGuy";
+import { SleepingZs } from "./onboarding/SleepingZs";
 import {
   AGENT_ARC_WIZARD_STEPS,
   ONBOARDING_STEP_LABELS,
@@ -1975,10 +1976,19 @@ function OnboardingWizardInner({
                       {/* Dormant until the agent is actually hired. Review is
                           the first step where one exists, so that is where it
                           wakes — the arc's payoff, not a flourish along it. */}
-                      <PillGuy
-                        state={step === 5 ? "alive" : "dormant"}
-                        className="size-(--sz-72px)"
-                      />
+                      {/* `relative` is load-bearing: the sleep marks anchor
+                          to this box and travel out past its top-right
+                          corner. */}
+                      <div className="relative size-(--sz-72px)">
+                        <PillGuy
+                          state={step === 5 ? "alive" : "dormant"}
+                          className="size-full"
+                        />
+                        {/* Only while it is actually asleep. A still grey
+                            silhouette reads as a placeholder that failed to
+                            load rather than as something waiting its turn. */}
+                        {step < 5 && <SleepingZs />}
+                      </div>
                       <AgentPreview agentName={agentName} agentRole="" />
                     </motion.div>
 
