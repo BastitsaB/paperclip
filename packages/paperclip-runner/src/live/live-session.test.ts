@@ -16,6 +16,8 @@ import {
   InMemoryCapabilityLiveSessionStore,
   CapabilityLiveSessionService,
   reconcileCapabilityLiveUsage,
+  type CapabilityLiveSessionSnapshot,
+  type CapabilityLiveSessionStore,
   type CapabilityLiveTransportFactory,
 } from "./live-session.js";
 import { DurableCapabilityLiveSessionStore } from "./durable-live-session-store.js";
@@ -297,7 +299,63 @@ function providerState(): FakeProviderState {
   };
 }
 
+class TransientFailureLiveSessionStore implements CapabilityLiveSessionStore {
+  readonly #delegate = new InMemoryCapabilityLiveSessionStore();
+  #failNextSave = false;
+
+  failNextSave(): void {
+    this.#failNextSave = true;
+  }
+
+  load(sessionId: string): Promise<CapabilityLiveSessionSnapshot | null> {
+    return this.#delegate.load(sessionId);
+  }
+
+  async save(snapshot: CapabilityLiveSessionSnapshot): Promise<void> {
+    if (this.#failNextSave) {
+      this.#failNextSave = false;
+      throw new Error("transient live-session store failure");
+    }
+    await this.#delegate.save(snapshot);
+  }
+
+  delete(sessionId: string): Promise<void> {
+    return this.#delegate.delete(sessionId);
+  }
+}
+
 describe("Capability live runnerd and Codex session", () => {
+  it("continues persisting newer snapshots after a transient store failure", async () => {
+    const state = providerState();
+    const store = new TransientFailureLiveSessionStore();
+    const service = new CapabilityLiveSessionService({
+      store,
+      transportFactory: fakeTransportFactory(state),
+    });
+    const session = await service.create({
+      runId: "run-live-transient-store",
+      sessionId: "session-live-transient-store",
+    });
+
+    store.failNextSave();
+    await expect(session.recordUsage({
+      receiptId: "usage-before-recovery",
+      inputTokens: 10,
+      outputTokens: 2,
+    })).rejects.toThrow("transient live-session store failure");
+    await expect(session.recordUsage({
+      receiptId: "usage-after-recovery",
+      inputTokens: 20,
+      outputTokens: 4,
+    })).resolves.toBe("committed");
+
+    expect((await store.load(session.id))?.usageLedger.map((receipt) => receipt.receiptId)).toEqual([
+      "usage-before-recovery",
+      "usage-after-recovery",
+    ]);
+    await service.shutdown(session.id);
+  });
+
   it("turns an assistant local-file link into a verified dynamic-chat file card record", async () => {
     const root = await mkdtemp(join(tmpdir(), "paperclip-live-file-reference-"));
     await writeFile(join(root, "guide.md"), "# Dynamic guide\n\nVerified by the runner.\n");

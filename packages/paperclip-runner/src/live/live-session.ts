@@ -2312,8 +2312,12 @@ export class CapabilityLiveSession {
     this.#revision += 1;
     this.#updatedAt = this.#now().toISOString();
     const snapshot = this.snapshot();
-    this.#persistChain = this.#persistChain.then(() => this.#store.save(snapshot));
-    return this.#persistChain;
+    const attempt = this.#persistChain.then(() => this.#store.save(snapshot));
+    // Report this save failure to its caller, but do not permanently poison the
+    // serialization queue. A later state transition must still be able to
+    // persist a newer snapshot after a transient store failure.
+    this.#persistChain = attempt.catch(() => undefined);
+    return attempt;
   }
 }
 
