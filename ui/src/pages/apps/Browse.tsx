@@ -352,21 +352,20 @@ export function Browse() {
 
   return (
     <div className="max-w-5xl space-y-5 pb-12">
-      <header>
-        <h1 className="text-xl font-bold text-foreground">Connectors</h1>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="shrink-0 text-xl font-bold text-foreground">Connectors</h1>
+        <div className="relative w-full max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search connectors…"
+            aria-label="Search connectors"
+            className="pl-9"
+          />
+        </div>
       </header>
-
-      <div className="relative max-w-md">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search connectors…"
-          aria-label="Search connectors"
-          className="pl-9"
-        />
-      </div>
 
       {loadFailed ? (
         <div

@@ -165,6 +165,9 @@ describe("Connectors landing page", () => {
     await renderBrowse();
 
     expect(container.querySelector("header")?.textContent).toBe("Connectors");
+    expect(
+      container.querySelector('header input[aria-label="Search connectors"]'),
+    ).toBeTruthy();
     expect(container.querySelector('[aria-label="Popular apps"]')).toBeNull();
     expect(container.querySelector('[aria-label="Connected apps"]')).toBeNull();
     expect(container.querySelector('[aria-label="All apps"]')).toBeNull();
