@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 export const LOCAL_RUNNER_BROWSER_LIMITS = Object.freeze({
   maxActiveRuns: 4,
@@ -233,18 +230,9 @@ async function loadLocalRunnerRunner() {
   return import(runnerModuleUrl);
 }
 
-async function loadDurableRecoveryRunner() {
-  const runnerModuleUrl = new URL(
-    "../dist/mock-core/durable-recovery.js",
-    import.meta.url,
-  ).href;
-  return import(runnerModuleUrl);
-}
-
 export function createLocalRunnerBrowserMiddleware(options = {}) {
   const limits = normalizeLimits(options.limits);
   const loadRunner = options.loadRunner ?? loadLocalRunnerRunner;
-  const loadRecoveryRunner = options.loadRecoveryRunner ?? loadDurableRecoveryRunner;
   const runs = new Map();
   let startingRuns = 0;
 
@@ -264,36 +252,8 @@ export function createLocalRunnerBrowserMiddleware(options = {}) {
 
   return async function middleware(request, response, next) {
     const url = new URL(request.url ?? "/", "http://localRunner.local");
-    if (!url.pathname.startsWith("/api/localRunner/") && url.pathname !== "/api/durableRecovery/recovery") {
+    if (!url.pathname.startsWith("/api/localRunner/")) {
       next();
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/durableRecovery/recovery") {
-      let storageDirectory = null;
-      try {
-        assertTrustedTransport(request);
-        rejectDeclaredOversize(request, limits.maxRequestBodyBytes);
-        const body = await readJson(request, limits.maxRequestBodyBytes);
-        const recovery = await loadRecoveryRunner();
-        const scratchRoot =
-          process.env.PAPERCLIP_RUN_SCRATCH_DIR ??
-          process.env.PAPERCLIP_SCRATCH_DIR ??
-          tmpdir();
-        storageDirectory = await mkdtemp(
-          join(scratchRoot, "paperclip-runner-browser-durable-recovery-"),
-        );
-        json(response, 200, await recovery.runDurableRecoveryRecovery({
-          fault: body.fault ?? "lost-ack",
-          stateDirectory: storageDirectory,
-        }));
-      } catch (error) {
-        sendError(response, error);
-      } finally {
-        if (storageDirectory !== null) {
-          await rm(storageDirectory, { recursive: true, force: true });
-        }
-      }
       return;
     }
 

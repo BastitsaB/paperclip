@@ -815,7 +815,11 @@ export function trustedRuntimeReadOnlyRoots(
 
 function unwrapToolResponse(
   response: Record<string, unknown>,
-): Record<string, unknown> {
+): {
+  readonly __paperclipSemanticToolOutcome: true;
+  readonly result: unknown;
+  readonly isError: boolean;
+} {
   const items = Array.isArray(response.contentItems)
     ? response.contentItems
     : [];
@@ -827,7 +831,7 @@ function unwrapToolResponse(
     result = response;
   }
   return {
-    __paperclipSemanticToolOutcome: true,
+    __paperclipSemanticToolOutcome: true as const,
     result,
     isError: response.success === false,
   };

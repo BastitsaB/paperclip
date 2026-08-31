@@ -145,7 +145,6 @@ devtool:
 ```sh
 pnpm --filter @paperclipai/paperclip-runner replay:fixture
 pnpm --filter @paperclipai/paperclip-runner trace:local-runner -- --scenario happy-path
-pnpm --filter @paperclipai/paperclip-runner trace:durable-recovery -- --fault lost-ack
 pnpm --filter @paperclipai/paperclip-runner trace:codex
 pnpm --filter @paperclipai/paperclip-runner demo:live-console -- --host 127.0.0.1 --port 4174
 
@@ -189,7 +188,6 @@ and JSON content; see the protocol-server tutorial for direct `curl` examples.
 | `trace:conformance:typescript` | Run the TypeScript reference tracer directly. |
 | `replay:fixture` | Validate and reduce a fixture to a final snapshot. |
 | `trace:local-runner` | Run one native local session through the Rust runner and fake harness. |
-| `trace:durable-recovery` | Run the Rust runner against the mock core with a selected recovery fault. |
 | `trace:codex` | Run the mock core with a real, local skillless Codex app-server session. |
 | `demo:live-console` | Start the package-local HTTP/SSE server with server-only Codex authentication. |
 | `console:live-console` | Start the standalone browser devtool with the Live console on `127.0.0.1:4180`. |
@@ -204,7 +202,7 @@ and JSON content; see the protocol-server tutorial for direct `curl` examples.
 | `console:issue-thread` | Start the Paperclip-style issue thread on `127.0.0.1:4184`. |
 | `test:scenarios` | Run the scenario index, run-artifact, parity, explorer component, and route tests. |
 | `test:browser:scenarios` | Exercise both the scenario explorer and issue-thread browser contracts. |
-| `browser:dev` | Start the standalone live/replay/recovery browser devtool. |
+| `browser:dev` | Start the standalone live/replay browser devtool. |
 | `test:browser` | Exercise static replay and live scenarios, then capture temporary screenshots under ignored test output. |
 | `verify` | Run the complete deterministic Conformance through SDK acceptance sequence. |
 | `verify:rootless` | Extract Debian/Ubuntu browser libraries without root, then run `verify`. |
@@ -218,7 +216,6 @@ and JSON content; see the protocol-server tutorial for direct `curl` examples.
 - [Replay hand-run tutorial](docs/tutorials/replay.md)
 - [Local runner hand-run tutorial](docs/tutorials/local-runner.md)
 - [Local protocol reference](docs/local-runner.md)
-- [Durable recovery break-it-on-purpose tutorial](docs/tutorials/durable-recovery.md)
 - [Durable transport reference](docs/durable-recovery.md)
 - [Codex skillless Codex tutorial](docs/tutorials/codex.md)
 - [Codex skillless Codex driver reference](docs/codex-driver.md)

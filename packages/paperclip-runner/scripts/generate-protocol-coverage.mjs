@@ -39,7 +39,7 @@ const lifecycleRequirements = [
   ["catalog-drift", "canonical catalog consistency and drift rejection", "runner/crates/runner-core/src/provider_bridge.rs::durable_session_refuses_catalog_drift"],
   ["authorization", "authorization denial and unknown-tool rejection", "runner/crates/runner-core/src/provider_bridge.rs::forwards_only_authorized_calls_and_correlates_results"],
   ["duplicates", "correlated duplicate and conflicting-result handling", "runner/crates/runner-core/src/provider_bridge.rs::rejects_unknown_tools_and_conflicting_duplicate_results"],
-  ["recovery", "lost ACK, reconnect, runner restart, and provider-thread recovery", "src/mock-core/durable-recovery.test.ts; src/live/live-session.test.ts"],
+  ["recovery", "lost ACK, reconnect, runner restart, and provider-thread recovery", "src/control-plane/durable-prp-control-plane.test.ts; src/live/live-session.test.ts"],
   ["interrupt", "interruption while waiting for a tool result", "src/live/live-session.test.ts; src/live/clean-room-server.test.ts"],
   ["bounds", "bounded queues, logs, frames, and retries", "src/live/turn-stream.test.ts; runner/crates/runner-core/src/durable/runner.rs"],
   ["cleanup", "process-group cleanup with no abandoned provider", "runner/crates/runner-core/tests/process_supervisor.rs"],
@@ -83,7 +83,7 @@ const document = {
   actions,
   discoveryGateways: [
     { id: "discover_capabilities", deterministicOwners: ["src/semantic-tools/semantic-tools.test.ts::discovers only authorized optional tools and returns trusted schemas"] },
-    { id: "invoke_discovered_capability", deterministicOwners: ["src/mock-core/durable-recovery.test.ts::repeatedly completes the provider bridge and explicit runner shutdown"] },
+    { id: "invoke_discovered_capability", deterministicOwners: ["src/control-plane/durable-prp-control-plane.test.ts; src/live/live-session.test.ts"] },
   ],
   legacyRequirements: requirements,
   lifecycleRequirements: lifecycleRequirements.map(([id, requirement, deterministicOwner]) => ({ id, requirement, deterministicOwner })),

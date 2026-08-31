@@ -3,6 +3,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "react", "react-dom"],
     "outDir": "dist",
     "rootDir": "src"
   },

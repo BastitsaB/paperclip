@@ -19,6 +19,7 @@ import {
 } from "../protocol/semantic-tool-receipts.js";
 import type {
   SemanticConformanceAdapter,
+  SemanticConformanceJsonValue,
   SemanticConformanceObservation,
   SemanticConformanceVector,
 } from "./semantic-conformance.js";
@@ -295,7 +296,9 @@ export function normalizeCapabilitySemanticObservation(input: {
     authorization,
     state: projectSemanticState(after, taskId),
     effects,
-    audit: after.audit.length > before.audit.length ? [{ outcome: "recorded" }] : [],
+    audit: after.audit.length > before.audit.length
+      ? [{ outcome: "recorded" as const }]
+      : [],
     receipt: {
       schema: receipt.schema,
       schemaVersion: receipt.schemaVersion,
@@ -315,7 +318,10 @@ export function normalizeCapabilitySemanticObservation(input: {
   });
 }
 
-function projectSemanticState(state: Readonly<CapabilityFixtureState>, taskId: string): unknown {
+function projectSemanticState(
+  state: Readonly<CapabilityFixtureState>,
+  taskId: string,
+): SemanticConformanceJsonValue {
   const task = state.tasks.find((candidate) => candidate.id === taskId);
   if (task === undefined) throw new Error(`semantic_conformance_task_missing:${taskId}`);
   return {
@@ -350,7 +356,9 @@ function projectSemanticState(state: Readonly<CapabilityFixtureState>, taskId: s
   };
 }
 
-function normalizeEffects(result: unknown): readonly unknown[] {
+function normalizeEffects(
+  result: unknown,
+): readonly SemanticConformanceJsonValue[] {
   if (typeof result !== "object" || result === null || Array.isArray(result)) return [];
   const record = result as Record<string, unknown>;
   const entityRefs = Array.isArray(record.entityRefs)
@@ -358,7 +366,8 @@ function normalizeEffects(result: unknown): readonly unknown[] {
     : [];
   const scheduledWakeIds = Array.isArray(record.scheduledWakeIds) ? record.scheduledWakeIds : [];
   return [{
-    disposition: record.disposition,
+    disposition:
+      typeof record.disposition === "string" ? record.disposition : null,
     entityKinds: [...new Set(entityRefs.map((reference) => reference.split(":", 1)[0]))].sort(),
     scheduledWakeCount: scheduledWakeIds.length,
   }];

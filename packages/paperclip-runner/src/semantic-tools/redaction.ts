@@ -19,7 +19,8 @@ export function redactSemanticValue(value: unknown, key = ""): CapabilityJsonVal
   if (typeof wrapped !== "object" || wrapped === null || Array.isArray(wrapped)) {
     return CAPABILITY_REDACTED;
   }
-  return (wrapped[key] ?? CAPABILITY_REDACTED) as CapabilityJsonValue;
+  const object = wrapped as { readonly [entryKey: string]: PaperclipJsonValue };
+  return (object[key] ?? CAPABILITY_REDACTED) as CapabilityJsonValue;
 }
 
 const PAPERCLIP_SENSITIVE_KEY =

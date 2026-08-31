@@ -206,29 +206,10 @@ A `revoke` envelope persists the `revoked` lifecycle. The runner flushes any
 existing durable events and exits. It does not accept new work or delete
 unacknowledged facts.
 
-## Diagnostics
+## Verification
 
-Run a fault and print operator-safe diagnostics:
-
-```sh
-pnpm --filter @paperclipai/paperclip-runner trace:durable-recovery -- --fault lost-ack
-```
-
-Supported fault names are:
-
-```text
-none
-socket-drop
-lost-ack
-duplicate-command
-runner-restart
-harness-restart
-malformed-input
-lease-expiry
-storage-pressure
-drain
-revoke
-```
+The production durable control plane and live-session suites cover reconnect,
+ACK replay, restart recovery, backpressure, lease expiry, drain, and revoke.
 
 Use `--json` for the complete trace or `--output <path>` to write it. The CLI
 and browser show connection counts, safe lease ID and expiry, stable identities,

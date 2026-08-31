@@ -8,14 +8,14 @@ It currently includes Conformance through the Standalone Paperclip adapter trace
 ## What this tutorial proves
 
 This tutorial proves that the standalone package boundary, static replay path,
-local live-run path, durable recovery path, and direct Codex driver work
+local live-run path, durable transport, and direct Codex driver work
 together. It does not use the Paperclip control plane. Codex uses a real
 local Codex session through the mock core.
 
 The current system includes the Rust mock-core tracer, shared protocol fixtures,
 the Rust supervisor, a scripted fake harness, CLI live runs, and browser live and
-replay modes. It also includes the Rust outbound WebSocket client, durable
-outbox, package-local mock core, recovery CLI, and recovery browser view.
+replay modes. It also includes the Rust outbound WebSocket client and durable
+outbox.
 The final phase adds a skillless task envelope, direct app-server driver,
 semantic completion tools, and the same reducer/replay proof used by fixtures.
 SDK freezes that browser transport and reducer projection as public SDK
@@ -36,25 +36,22 @@ flag while preserving server-owned workspace, governance, and status authority.
 7. Follow [Local runner: Run the Local Runner and Fake Harness](local-runner.md).
 8. Run the happy, permission/input, interruption, error, and duplicate-terminal scenarios.
 9. Open the browser live mode and confirm the completed run says `Match` for live and replay output.
-10. Follow [Durable recovery: Break Recovery on Purpose](durable-recovery.md).
-11. Confirm that the recovered runner and session IDs stay the same and that
-    the outbox is empty after replay and cumulative acknowledgement.
-12. Follow [Codex: Run the Skillless Codex Driver](codex.md).
-13. Inspect the exact model-context snapshot and confirm that it has no
+10. Follow [Codex: Run the Skillless Codex Driver](codex.md).
+11. Inspect the exact model-context snapshot and confirm that it has no
     Paperclip instructions, bearer credentials, or unrelated skills.
-14. Run the safe task, then steer and interrupt separate sessions. Confirm
+12. Run the safe task, then steer and interrupt separate sessions. Confirm
     stable session identities and exactly one result and terminal event.
-15. Follow [Live console: Run the Protocol Demo Server](live-console-protocol-server.md).
-16. Confirm requests stay pending for a typed browser decision, stale steering
+13. Follow [Live console: Run the Protocol Demo Server](live-console-protocol-server.md).
+14. Confirm requests stay pending for a typed browser decision, stale steering
     is rejected, and reconnect keeps the same run and session identities.
-17. Follow [SDK: Run the SDK Console and Mini Consumer](sdk-console.md).
-18. Run the fake lifecycle in both consumers, then confirm the mini consumer
+15. Follow [SDK: Run the SDK Console and Mini Consumer](sdk-console.md).
+16. Run the fake lifecycle in both consumers, then confirm the mini consumer
     reaches `Replay parity: match` after reconnect and replay.
-19. Run the safe real-Codex browser smoke.
-20. Follow [Standalone: Run the Thin Paperclip Adapter](standalone-thin-paperclip-adapter.md).
-21. Run the unchanged port conformance suite against mock and database-backed
+17. Run the safe real-Codex browser smoke.
+18. Follow [Standalone: Run the Thin Paperclip Adapter](standalone-thin-paperclip-adapter.md).
+19. Run the unchanged port conformance suite against mock and database-backed
     Paperclip ports, then inspect one local feature-flagged task.
-22. Disable the flag and confirm a fresh task selects legacy while persisted
+20. Disable the flag and confirm a fresh task selects legacy while persisted
     native finalization remains native.
 
 The one-command form after installation is:

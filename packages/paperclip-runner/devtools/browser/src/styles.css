@@ -356,46 +356,8 @@ select {
   border-block: 0.0625rem solid var(--border);
 }
 
-.recovery-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin: 0;
-  padding-block: var(--space-5);
-  border-block: 0.0625rem solid var(--border);
-}
-
-.diagnostic-note {
-  color: var(--muted-foreground);
-  font-size: var(--font-size-sm);
-}
-
-.snapshot-grid div,
-.recovery-grid > div {
+.snapshot-grid div {
   min-width: 0;
-}
-
-.storage-diagnostic {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  overflow: visible;
-  white-space: normal;
-}
-
-.outcome-diagnostic {
-  display: grid;
-  gap: var(--space-1);
-  overflow: visible;
-  white-space: normal;
-}
-
-.outcome-diagnostic > span:not(.ui-badge),
-.delivery-marker {
-  color: var(--muted-foreground);
-  font-family: var(--font-sans);
-  font-size: var(--font-size-xs);
 }
 
 dd {

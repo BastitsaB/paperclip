@@ -8,7 +8,6 @@ Paperclip's runtime selection.
 ## Tutorials
 
 - [Local runner](tutorials/local-runner.md)
-- [Durable recovery](tutorials/durable-recovery.md)
 - [Live console protocol server](tutorials/live-console-protocol-server.md)
 - [Live console](tutorials/live-console.md)
 - [SDK console](tutorials/sdk-console.md)

@@ -714,6 +714,32 @@ class DurableCoreStore {
   }
 }
 
+/** Reason supplied when a transport-neutral PRP peer closes. */
+export interface TransportCloseReason {
+  readonly code?: number;
+  readonly message?: string;
+  readonly error?: unknown;
+}
+
+/** A transport-neutral JSON peer used by hosted PRP integrations. */
+export interface PrpWireConnection {
+  sendJson(value: unknown): void;
+  close(code?: number): void;
+  onJson(listener: (value: unknown) => void): void;
+  onClose(listener: (reason: TransportCloseReason) => void): void;
+}
+
+/** Read-only authentication state for an attached PRP peer. */
+export interface PrpWireAttachment {
+  isAuthenticated(): boolean;
+}
+
+/** Read surface retained for live transports that project durable PRP state. */
+export interface DurablePrpControlPlaneStore {
+  readonly path: string;
+  readonly state: StoredCoreState;
+}
+
 class PrpWebSocketConnection {
   readonly socket: Duplex;
   pendingChallenge: PendingChallenge | null = null;
@@ -885,6 +911,10 @@ export class DurablePrpControlPlane {
     this.#onSemanticToolInput = options.onSemanticToolInput;
     this.#onCommittedEvent = options.onCommittedEvent;
     this.#connectionLeaseTtlMs = options.connectionLeaseTtlMs ?? 60_000;
+  }
+
+  get store(): DurablePrpControlPlaneStore {
+    return this.#store;
   }
 
   get connectUrl(): string {

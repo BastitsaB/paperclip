@@ -206,11 +206,9 @@ and the runner state stores neither capability. The runner writes each event and
 command result before network delivery, then removes outbox events only after a
 valid cumulative ACK.
 
-The TypeScript peer is a package-local test controller, not production
-Paperclip. It injects lost ACKs, socket loss, malformed input, process restarts,
-lease expiry, storage pressure, drain, and revoke. The browser recovery page
-calls that peer through guarded package-local Vite middleware and renders only
-safe trace fields.
+The TypeScript peer is a package-local control-plane implementation, not
+production Paperclip. Its focused tests cover lost ACKs, socket loss, malformed
+input, process restarts, lease expiry, storage pressure, drain, and revoke.
 
 ## Capability-model boundary
 

@@ -8,11 +8,6 @@ import type {
   LocalRunnerScenario,
 } from "../../../src/contracts/local-runner";
 import {
-  DURABLE_RECOVERY_FAULTS,
-  type DurableRecoveryFault,
-  type DurableRecoveryRunTrace,
-} from "../../../src/contracts/durable-recovery";
-import {
   applyLocalRunnerLiveEvent,
   createLocalRunnerLiveSnapshot,
   localRunnerSnapshotsMatch,
@@ -54,22 +49,8 @@ const liveScenarios: Array<{ key: LocalRunnerScenario; label: string }> = [
   { key: "duplicate-terminal", label: "Duplicate terminal guard" },
 ];
 
-type BrowserMode = "console" | "recovery" | "live" | "replay";
+type BrowserMode = "console" | "live" | "replay";
 type LiveStatus = "idle" | "starting" | "running" | "terminal" | "error";
-
-const durableRecoveryFaultLabels: Record<DurableRecoveryFault, string> = {
-  none: "Normal connection",
-  "socket-drop": "Socket drop",
-  "lost-ack": "Lost ACK",
-  "duplicate-command": "Duplicate command",
-  "runner-restart": "Runner restart",
-  "harness-restart": "Harness restart",
-  "malformed-input": "Malformed input",
-  "lease-expiry": "Lease expiry",
-  "storage-pressure": "Storage pressure",
-  drain: "Drain",
-  revoke: "Revoke",
-};
 
 const modeCopy: Record<
   BrowserMode,
@@ -80,12 +61,6 @@ const modeCopy: Record<
     title: "Live Codex protocol console",
     description:
       "Chat with a live session, steer it, stop it, answer its requests, and inspect the canonical protocol behind every surface.",
-  },
-  recovery: {
-    eyebrow: "Paperclip Runner Protocol · Durable recovery",
-    title: "Durable recovery diagnostics",
-    description:
-      "Break the outbound transport, recover the same session, and inspect durable state.",
   },
   live: {
     eyebrow: "Paperclip Runner Protocol · Local runner",
@@ -137,219 +112,6 @@ function terminalTone(snapshot: SessionSnapshot) {
 function humanizeProtocolLabel(value: string): string {
   const words = value.replaceAll(/[_-]/g, " ");
   return words.length === 0 ? words : `${words[0]?.toUpperCase()}${words.slice(1)}`;
-}
-
-function recoveryOutcomeTone(outcome: DurableRecoveryRunTrace["diagnostics"]["recovery"]["outcome"]) {
-  if (outcome === "recovered") {
-    return "success" as const;
-  }
-  if (outcome === "unrecoverable") {
-    return "danger" as const;
-  }
-  return "warning" as const;
-}
-
-function RecoveryDiagnostics() {
-  const [fault, setFault] = useState<DurableRecoveryFault>("lost-ack");
-  const [trace, setTrace] = useState<DurableRecoveryRunTrace | null>(null);
-  const [status, setStatus] = useState<"idle" | "running" | "complete" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  async function runRecovery() {
-    setStatus("running");
-    setError(null);
-    try {
-      const response = await fetch("/api/durableRecovery/recovery", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fault }),
-      });
-      const result = (await response.json()) as DurableRecoveryRunTrace & { error?: string };
-      if (!response.ok) throw new Error(result.error ?? "The recovery trace failed.");
-      setTrace(result);
-      setStatus("complete");
-    } catch (cause) {
-      setStatus("error");
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }
-
-  return (
-    <div className="workspace-grid recovery-workspace">
-      <Card aria-labelledby="recovery-title">
-        <CardHeader>
-          <CardTitle id="recovery-title">Break recovery on purpose</CardTitle>
-          <CardDescription>
-            Lose one ACK, drop the socket, restart the runner, and finish the same session.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="editor-content">
-          <label htmlFor="recovery-fault">Fault</label>
-          <select
-            id="recovery-fault"
-            value={fault}
-            disabled={status === "running"}
-            onChange={(event) => setFault(event.target.value as DurableRecoveryFault)}
-          >
-            {DURABLE_RECOVERY_FAULTS.map((candidate) => (
-              <option key={candidate} value={candidate}>
-                {durableRecoveryFaultLabels[candidate]}
-              </option>
-            ))}
-          </select>
-          <Button type="button" disabled={status === "running"} onClick={() => void runRecovery()}>
-            {status === "running" ? "Running recovery…" : "Run Durable recovery"}
-          </Button>
-          <div className="live-status" aria-live="polite">
-            <span>Recovery status</span>
-            <Badge tone={status === "error" ? "danger" : status === "complete" ? "success" : "neutral"}>
-              {status}
-            </Badge>
-          </div>
-          {error ? <div className="validation-errors" role="alert">{error}</div> : null}
-          <p className="diagnostic-note">
-            Diagnostics show IDs and counters only. Bootstrap tickets and lease tokens are hidden.
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card aria-labelledby="recovery-state-title">
-        <CardHeader>
-          <CardTitle id="recovery-state-title">Recovery state</CardTitle>
-          <CardDescription>Inspect connection, lease, outbox, ACK, replay, storage, drain, and revoke state.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {trace === null ? (
-            <div className="empty-live-state"><p>Run the trace to collect recovery diagnostics.</p></div>
-          ) : (
-            <>
-              <dl className="recovery-grid" data-testid="durable-recovery-diagnostics">
-                <div>
-                  <dt>Connection</dt>
-                  <dd data-testid="durable-recovery-connection-state">
-                    {humanizeProtocolLabel(trace.diagnostics.connection.state)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Connections</dt>
-                  <dd data-testid="durable-recovery-connections">
-                    {trace.diagnostics.connection.connectionCount}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Reconnects</dt>
-                  <dd data-testid="durable-recovery-reconnects">
-                    {trace.diagnostics.connection.reconnectCount}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Lease</dt>
-                  <dd>{trace.diagnostics.connection.leaseId ?? "closed"}</dd>
-                </div>
-                <div>
-                  <dt>Outbox</dt>
-                  <dd>{trace.diagnostics.outbox.events}</dd>
-                </div>
-                <div>
-                  <dt>Last ACK</dt>
-                  <dd>{trace.diagnostics.cursors.runnerAckedSourceSeq}</dd>
-                </div>
-                <div>
-                  <dt>At-least-once redeliveries</dt>
-                  <dd>{trace.diagnostics.recovery.replayDeliveries}</dd>
-                </div>
-                <div>
-                  <dt>Runner restarts</dt>
-                  <dd data-testid="durable-recovery-runner-restarts">
-                    {trace.diagnostics.recovery.runnerRestarts}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Harness restarts</dt>
-                  <dd>{trace.diagnostics.recovery.harnessRestarts}</dd>
-                </div>
-                <div>
-                  <dt>Fresh bootstraps</dt>
-                  <dd data-testid="durable-recovery-fresh-bootstraps">
-                    {trace.diagnostics.recovery.freshBootstraps}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Duplicate commands</dt>
-                  <dd>{trace.diagnostics.commands.duplicateDeliveries}</dd>
-                </div>
-                <div>
-                  <dt>Storage</dt>
-                  <dd className="storage-diagnostic" data-testid="durable-recovery-storage">
-                    <span>
-                      {trace.diagnostics.outbox.bytes} bytes of {trace.diagnostics.outbox.maxBytes}{" "}
-                      max
-                    </span>
-                    {trace.diagnostics.outbox.backpressure ? (
-                      <Badge tone="warning">Backpressure</Badge>
-                    ) : null}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Peak storage</dt>
-                  <dd>{trace.diagnostics.outbox.peakBytes} bytes</dd>
-                </div>
-                <div>
-                  <dt>Outcome</dt>
-                  <dd className="outcome-diagnostic">
-                    <Badge
-                      tone={recoveryOutcomeTone(trace.diagnostics.recovery.outcome)}
-                      data-testid="durable-recovery-outcome"
-                    >
-                      {humanizeProtocolLabel(trace.diagnostics.recovery.outcome)}
-                    </Badge>
-                    {trace.diagnostics.recovery.outcome !== "recovered" ? (
-                      <span>{humanizeProtocolLabel(trace.diagnostics.recovery.reason)}</span>
-                    ) : null}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Secrets</dt>
-                  <dd>{trace.diagnostics.security.secretLeakCount} leaks</dd>
-                </div>
-              </dl>
-              <p className="diagnostic-note">
-                At-least-once redeliveries include normal in-flight outbox resends. Use reconnects
-                and the per-event history to identify injected recovery.
-              </p>
-              <div className="timeline-heading">
-                <h3>Recovery history</h3>
-                <span>{trace.diagnostics.committedEvents.length} committed events</span>
-              </div>
-              <ol className="timeline" data-testid="recovery-history">
-                {trace.diagnostics.committedEvents.map((event) => (
-                  <li key={event.sourceEventId}>
-                    <span className="sequence" aria-hidden="true">
-                      {event.sourceSeq}
-                    </span>
-                    <div className="timeline-title">
-                      <code>{event.eventType}</code>
-                      {event.deliveryCount > 1 ? (
-                        <span className="delivery-marker">delivered {event.deliveryCount}×</span>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-              <div className="parity-line">
-                <span>Same runner and session</span>
-                <Badge tone={trace.assertions.stableIdentity ? "success" : "danger"}>{trace.assertions.stableIdentity ? "Preserved" : "Changed"}</Badge>
-              </div>
-              <div className="parity-line">
-                <span>Secrets redacted</span>
-                <Badge tone={trace.assertions.secretsRedacted ? "success" : "danger"}>{trace.assertions.secretsRedacted ? "Yes" : "No"}</Badge>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
 }
 
 function liveStatusTone(status: LiveStatus, snapshot: SessionSnapshot | null) {
@@ -854,13 +616,6 @@ export function App() {
         </Button>
         <Button
           type="button"
-          aria-pressed={mode === "recovery"}
-          onClick={() => setMode("recovery")}
-        >
-          Recovery
-        </Button>
-        <Button
-          type="button"
           aria-pressed={mode === "live"}
           onClick={() => setMode("live")}
         >
@@ -877,8 +632,6 @@ export function App() {
 
       {mode === "console" ? (
         <LiveConsole />
-      ) : mode === "recovery" ? (
-        <RecoveryDiagnostics />
       ) : mode === "live" ? (
         <LiveRunner />
       ) : (

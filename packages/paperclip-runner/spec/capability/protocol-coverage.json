@@ -1426,7 +1426,7 @@
     {
       "id": "invoke_discovered_capability",
       "deterministicOwners": [
-        "src/mock-core/durable-recovery.test.ts::repeatedly completes the provider bridge and explicit runner shutdown"
+        "src/control-plane/durable-prp-control-plane.test.ts; src/live/live-session.test.ts"
       ]
     }
   ],
@@ -3536,7 +3536,7 @@
     {
       "id": "recovery",
       "requirement": "lost ACK, reconnect, runner restart, and provider-thread recovery",
-      "deterministicOwner": "src/mock-core/durable-recovery.test.ts; src/live/live-session.test.ts"
+      "deterministicOwner": "src/control-plane/durable-prp-control-plane.test.ts; src/live/live-session.test.ts"
     },
     {
       "id": "interrupt",

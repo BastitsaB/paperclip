@@ -83,5 +83,5 @@ A new driver must cover:
 - an end-to-end default-mode write plus validation command that completes
   without an Input needed permission card.
 
-Run TypeScript, Rust, UI, protocol-generation, durable-recovery, and
+Run TypeScript, Rust, UI, protocol-generation, durable transport, and
 documentation validation before declaring the harness qualified.
