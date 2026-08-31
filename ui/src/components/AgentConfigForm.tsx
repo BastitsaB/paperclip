@@ -2210,7 +2210,12 @@ function DisplayedCodeLoginPanel({
   const startDisabled = startLogin.isPending || isActive;
 
   return (
-    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-2">
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 flex flex-col gap-2">
+      {/* `gap`, not `space-y`: the live region below collapses to
+          `display: none` whenever it has nothing to announce, and
+          `space-y` would still put its 8px on the row above — dead space
+          inside the card that pushes the row off centre. A gap only
+          applies between children that render. */}
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-foreground">Sign in to the environment</span>
         <div className="flex items-center gap-1.5">
@@ -2658,7 +2663,12 @@ function SubmittedBrowserCodeLoginPanel({
   };
 
   return (
-    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-2">
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 flex flex-col gap-2">
+      {/* `gap`, not `space-y`: the live region below collapses to
+          `display: none` whenever it has nothing to announce, and
+          `space-y` would still put its 8px on the row above — dead space
+          inside the card that pushes the row off centre. A gap only
+          applies between children that render. */}
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-foreground">Sign in to the environment</span>
         <div className="flex items-center gap-1.5">
