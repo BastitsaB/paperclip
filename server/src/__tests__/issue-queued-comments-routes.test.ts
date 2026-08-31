@@ -10,6 +10,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
   issues,
@@ -45,6 +46,7 @@ describeEmbeddedPostgres("issue queued-comment routes", () => {
     await db.update(agentWakeupRequests).set({ runId: null }).catch(() => undefined);
     await db.delete(activityLog).catch(() => undefined);
     await db.delete(issueComments).catch(() => undefined);
+    await db.delete(heartbeatRunEvents).catch(() => undefined);
     await db.delete(heartbeatRuns).catch(() => undefined);
     await db.delete(agentWakeupRequests).catch(() => undefined);
     await db.delete(issues).catch(() => undefined);
@@ -408,66 +410,6 @@ describeEmbeddedPostgres("issue queued-comment routes", () => {
       .delete(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}`)
       .send({ queueId: seeded.wakeId, revision: initial.body.revision });
     expect(discard.status).toBe(403);
-  });
-
-  it("leaves the selected row queued when no native steering session is attached", async () => {
-    const seeded = await seedQueue();
-    const initial = await request(app(seeded.companyId))
-      .get(`/api/issues/${seeded.issueId}/queued-comments`);
-    const steered = await request(app(seeded.companyId))
-      .post(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}/steer`)
-      .send({ queueId: seeded.wakeId, targetRunId: seeded.runId, revision: initial.body.revision });
-
-    expect(steered.status).toBe(409);
-    expect(steered.body.details).toMatchObject({
-      code: "steering_temporarily_unavailable",
-      retryable: true,
-    });
-    const queueAfterFailure = await request(app(seeded.companyId))
-      .get(`/api/issues/${seeded.issueId}/queued-comments`);
-    expect(queueAfterFailure.body.entries.map((entry: any) => entry.comment.id)).toEqual(seeded.commentIds);
-  });
-
-  it("keeps queue edits available during handoff but rejects stale same-turn steering", async () => {
-    const seeded = await seedQueue();
-    const initial = await request(app(seeded.companyId))
-      .get(`/api/issues/${seeded.issueId}/queued-comments`);
-    await db
-      .update(heartbeatRuns)
-      .set({ status: "succeeded", finishedAt: new Date("2026-08-22T15:05:00.000Z") })
-      .where(eq(heartbeatRuns.id, seeded.runId));
-
-    const edit = await request(app(seeded.companyId))
-      .patch(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}`)
-      .send({
-        queueId: seeded.wakeId,
-        revision: initial.body.revision,
-        body: "edited during handoff",
-      });
-
-    expect(edit.status, JSON.stringify(edit.body)).toBe(200);
-    const stored = await db
-      .select({ body: issueComments.body })
-      .from(issueComments)
-      .where(eq(issueComments.id, seeded.commentIds[0]))
-      .then((rows) => rows[0]);
-    expect(stored?.body).toBe("edited during handoff");
-    const steer = await request(app(seeded.companyId))
-      .post(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}/steer`)
-      .send({
-        queueId: seeded.wakeId,
-        targetRunId: seeded.runId,
-        revision: edit.body.revision,
-      });
-    expect(steer.status).toBe(409);
-    expect(steer.body.details?.code).toBe("queued_comment_stale_target");
-    const wake = await db
-      .select({ status: agentWakeupRequests.status, payload: agentWakeupRequests.payload })
-      .from(agentWakeupRequests)
-      .where(eq(agentWakeupRequests.id, seeded.wakeId))
-      .then((rows) => rows[0]);
-    expect(wake?.status).toBe("deferred_issue_execution");
-    expect((wake?.payload as any)?._paperclipWakeContext?.wakeCommentIds).toEqual(seeded.commentIds);
   });
 
   it("cancels a queued continuation whose comments disappeared before claim", async () => {

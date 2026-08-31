@@ -282,14 +282,6 @@ describeEmbeddedPostgres("recovery sweepStaleIssueLocks", () => {
 
   it("preserves a process-less native run while same-run resumption owns its retry", async () => {
     const { companyId, agentId, runningRunId } = await seed();
-    await db
-      .update(heartbeatRuns)
-      .set({
-        runtimeMode: "native",
-        nativePhase: "retryable_failure",
-        processPid: 2_000_000_000,
-      })
-      .where(eq(heartbeatRuns.id, runningRunId));
     const issueId = randomUUID();
     await db.insert(issues).values({
       id: issueId,
@@ -302,6 +294,15 @@ describeEmbeddedPostgres("recovery sweepStaleIssueLocks", () => {
       executionRunId: runningRunId,
       executionLockedAt: new Date(),
     });
+    await db
+      .update(heartbeatRuns)
+      .set({
+        runtimeMode: "native",
+        nativeIssueId: issueId,
+        nativePhase: "retryable_failure",
+        processPid: 2_000_000_000,
+      })
+      .where(eq(heartbeatRuns.id, runningRunId));
     await db.insert(nativeRunFinalizations).values({
       runId: runningRunId,
       companyId,

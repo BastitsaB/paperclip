@@ -7,7 +7,11 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
 } from "@paperclipai/db";
-import { appendHeartbeatRunEvent, HeartbeatRunEventConflictError } from "../services/heartbeat-run-events.js";
+import {
+  allocateHeartbeatRunEventSeq,
+  appendHeartbeatRunEvent,
+  HeartbeatRunEventConflictError,
+} from "../services/heartbeat-run-events.js";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 describe("P6-11..13 / P6-17 canonical event allocator", () => {
@@ -47,6 +51,25 @@ describe("P6-11..13 / P6-17 canonical event allocator", () => {
       expect((await db.select({ nextEventSeq: heartbeatRuns.nextEventSeq }).from(heartbeatRuns)
         .where(eq(heartbeatRuns.id, runId)))[0]?.nextEventSeq).toBe(33);
 
+      const legacyWrites = Array.from({ length: 16 }, (_, index) => (async () => {
+        const seq = await allocateHeartbeatRunEventSeq(db, runId);
+        await db.insert(heartbeatRunEvents).values({
+          companyId,
+          runId,
+          agentId,
+          seq,
+          eventType: "stdout",
+          message: `legacy-event-${index + 1}`,
+        });
+        return seq;
+      })());
+      const legacySequences = await Promise.all(legacyWrites);
+      expect([...legacySequences].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: 16 }, (_, index) => index + 33),
+      );
+      expect((await db.select({ nextEventSeq: heartbeatRuns.nextEventSeq }).from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, runId)))[0]?.nextEventSeq).toBe(49);
+
       const original = rows.find((row) => row.sourceEventId === "source-event-1")!;
       await expect(appendHeartbeatRunEvent(db, {
         companyId,
@@ -76,7 +99,7 @@ describe("P6-11..13 / P6-17 canonical event allocator", () => {
           canonicalPayload: { ordinal: 999 },
         },
       })).rejects.toBeInstanceOf(HeartbeatRunEventConflictError);
-      expect(await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId))).toHaveLength(32);
+      expect(await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId))).toHaveLength(48);
     } finally {
       await temporary.cleanup();
     }

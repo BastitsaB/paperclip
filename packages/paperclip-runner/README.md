@@ -39,10 +39,9 @@ route/service authorities; it does not copy those rules into this package.
 ## Quick start
 
 The package also builds `paperclip-runner-acpx-sidecar`. This bounded v2
-stdin/stdout bridge admits the qualified Codex ACPX profile only. It validates
-the exact model, session identity, tool catalog, structured input, and terminal
-settlement at the process boundary. Runnerd and the server do not select this
-sidecar in this slice. Other ACPX agents remain unavailable.
+stdin/stdout bridge admits only descriptor-pinned, qualified ACPX profiles. It
+validates the selected agent's exact package/model pair, session identity, tool
+catalog, structured input, and terminal settlement at the process boundary.
 
 The Rust core includes a bounded client for this sidecar protocol. It enforces
 request identity, event order, frame and queue limits, timeouts, redacted
@@ -79,7 +78,7 @@ unresolved turn-scoped requests. This reducer still does not select ACPX in
 runnerd.
 
 The package-local session bootstrap starts the bounded sidecar transport,
-verifies the Codex-only capability handshake and effective model, opens one
+verifies the selected qualified capability handshake and effective model, opens one
 identity-bound session, and confirms its run attachment. Any failed bootstrap
 terminates the process; session shutdown preserves persistent provider state.
 The session can then start one immutable-workspace turn, request interruption,
@@ -97,9 +96,8 @@ against the exact persisted question IDs, answer modes, options, required
 answers, custom-answer policy, and text constraints before provider delivery.
 Tool results and structured question responses then use two-phase resolution:
 validate retained identity and schema, require the exact sidecar
-acknowledgement, and only then clear pending local state. Codex permission
-requests violate its pinned sidecar policy and terminate the session fail
-closed.
+acknowledgement, and only then clear pending local state. Permission events that
+escape the pinned sidecar policy terminate the session fail closed.
 Safe suspension is available only with no active turn or pending request. The
 sidecar must return the exact persistent session identity before runnerd
 terminates the local process.
@@ -120,7 +118,7 @@ pnpm --filter @paperclipai/paperclip-runner verify
 ```
 
 The verification command requires a stable Rust toolchain with `cargo` on
-`PATH`, in addition to Node.js 20+ and pnpm 9+.
+`PATH`, in addition to Node.js 24.11+ and pnpm 9+.
 
 Minimal Debian/Ubuntu hosts without root access can extract the required
 Playwright browser libraries into a user-owned cache and run the same acceptance

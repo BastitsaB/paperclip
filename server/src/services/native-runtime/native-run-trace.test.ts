@@ -78,7 +78,7 @@ describe("native runner performance trace", () => {
       startedAtMs: 1_125,
       endedAtMs: 1_125,
       attributes: {
-        mode: "provider_ingress",
+        mode: "direct_loopback",
         credential: "must-not-export",
       },
     });
@@ -95,7 +95,7 @@ describe("native runner performance trace", () => {
         startOffsetMs: 125,
         durationMs: 0,
         outcome: "ok",
-        mode: "provider_ingress",
+        mode: "direct_loopback",
       },
     });
     expect(events[0]?.payload).not.toHaveProperty("credential");

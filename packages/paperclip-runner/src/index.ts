@@ -11,10 +11,16 @@ export * from "./contracts/question-set.js";
 export * from "./contracts/runtime-context.js";
 export * from "./contracts/types.js";
 export * from "./backends/harness-driver-backend.js";
+export { createOpenCodeNativeSessionBackend } from "./backends/opencode-native-backend.js";
 export {
   createNativeSessionBackend,
   type NativeBackendFactoryOptions,
 } from "./backends/native-backend-factory.js";
+export {
+  OpenCodeServerDriver,
+  type OpenCodeServerDriverOptions,
+} from "./drivers/opencode/opencode-server-driver.js";
+export { parseCodexTurnDiff } from "./drivers/codex/codex-turn-diff.js";
 export * from "./native-session-runtime.js";
 export {
   DurablePrpControlPlane,

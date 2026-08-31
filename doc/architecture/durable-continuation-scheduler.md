@@ -159,4 +159,3 @@ continuation decision; increasing the polling interval only hides the bug.
   idempotent materialization of native continuation effects.
 - `server/src/services/heartbeat.ts` — run lifecycle, immediate recovery, queue
   promotion, and wake execution.
-

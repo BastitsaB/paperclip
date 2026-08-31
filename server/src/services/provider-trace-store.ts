@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, ne, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { providerTraceRecords } from "@paperclipai/db";
 import type {
@@ -13,6 +13,7 @@ import { logActivity } from "./activity-log.js";
 
 export const PROVIDER_TRACE_MAX_BYTES = 64 * 1024 * 1024;
 export const PROVIDER_TRACE_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const EXPIRED_PROVIDER_TRACE_REF = "00000000-0000-0000-0000-000000000000.ndjson";
 
 export function providerTraceRequiredChannels(provider: string): string[] {
   if (provider === "opencode") return ["typescript_opencode_native"];
@@ -266,29 +267,63 @@ export function assessProviderTraceEntries(
 }
 
 export function providerTraceStore(db: Db) {
-  async function cleanupExpired(now = new Date()) {
-    const expired = await db
-      .select()
-      .from(providerTraceRecords)
-      .where(
-        and(
-          lt(providerTraceRecords.expiresAt, now),
-          isNull(providerTraceRecords.deletedAt),
-        ),
-      );
-    for (const row of expired) {
-      await fs.unlink(tracePath(row.traceRef)).catch(() => undefined);
-      await fs
-        .unlink(rehydrationTracePath(row.traceRef))
-        .catch(() => undefined);
-      await db
+  async function removeTraceFiles(traceRef: string) {
+    for (const filePath of [tracePath(traceRef), rehydrationTracePath(traceRef)]) {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+
+  async function expireRow(row: TraceRow, now: Date) {
+    let expired = row;
+    let newlyExpired = false;
+    if (!row.deletedAt) {
+      if (row.expiresAt.getTime() > now.getTime()) return null;
+      const updated = await db
         .update(providerTraceRecords)
         .set({
           status: "expired",
           deletedAt: now,
           updatedAt: now,
         })
-        .where(eq(providerTraceRecords.id, row.id));
+        .where(and(
+          eq(providerTraceRecords.id, row.id),
+          isNull(providerTraceRecords.deletedAt),
+          lte(providerTraceRecords.expiresAt, now),
+        ))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!updated) return null;
+      expired = updated;
+      newlyExpired = true;
+    } else if (row.expiresAt.getTime() > now.getTime()) {
+      return null;
+    }
+
+    // The database tombstone is authoritative before filesystem cleanup, so
+    // concurrent readers fail closed. traceRef becomes a durable completion
+    // marker only after both raw sidecars are absent; failures are retried by
+    // later reads and cleanup passes.
+    if (expired.traceRef !== EXPIRED_PROVIDER_TRACE_REF) {
+      await removeTraceFiles(expired.traceRef);
+      await db
+        .update(providerTraceRecords)
+        .set({
+          status: "expired",
+          traceRef: EXPIRED_PROVIDER_TRACE_REF,
+          updatedAt: now,
+        })
+        .where(and(
+          eq(providerTraceRecords.id, expired.id),
+          lte(providerTraceRecords.expiresAt, now),
+          eq(providerTraceRecords.traceRef, expired.traceRef),
+        ));
+      expired = { ...expired, traceRef: EXPIRED_PROVIDER_TRACE_REF };
+    }
+    if (newlyExpired) {
       await logActivity(db, {
         companyId: row.companyId,
         actorType: "system",
@@ -307,6 +342,27 @@ export function providerTraceStore(db: Db) {
     return expired;
   }
 
+  async function cleanupExpired(now = new Date()) {
+    const expired = await db
+      .select()
+      .from(providerTraceRecords)
+      .where(
+        and(
+          lte(providerTraceRecords.expiresAt, now),
+          or(
+            isNull(providerTraceRecords.deletedAt),
+            ne(providerTraceRecords.traceRef, EXPIRED_PROVIDER_TRACE_REF),
+          ),
+        ),
+      );
+    const removed: TraceRow[] = [];
+    for (const row of expired) {
+      const removedRow = await expireRow(row, now);
+      if (removedRow) removed.push(removedRow);
+    }
+    return removed;
+  }
+
   async function prepare(input: {
     runId: string;
     companyId: string;
@@ -320,11 +376,18 @@ export function providerTraceStore(db: Db) {
       .where(eq(providerTraceRecords.runId, input.runId))
       .limit(1)
       .then((rows) => rows[0] ?? null);
-    if (existing)
+    if (existing) {
+      const now = new Date();
+      const expired = existing.expiresAt.getTime() <= now.getTime();
+      if (expired) await expireRow(existing, now);
+      if (existing.deletedAt || expired) {
+        throw new Error("provider_trace_unavailable");
+      }
       return {
         metadata: asMetadata(existing),
         path: tracePath(existing.traceRef),
       };
+    }
 
     await fs.mkdir(traceRoot(), { recursive: true, mode: 0o700 });
     const traceRef = `${randomUUID()}.ndjson`;
@@ -365,6 +428,26 @@ export function providerTraceStore(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  async function getReadableByRun(runId: string, companyId: string) {
+    const row = await getByRun(runId, companyId);
+    if (!row) return null;
+    const now = new Date();
+    if (row.deletedAt) {
+      if (
+        row.expiresAt.getTime() <= now.getTime()
+        && row.traceRef !== EXPIRED_PROVIDER_TRACE_REF
+      ) {
+        await expireRow(row, now);
+      }
+      return null;
+    }
+    if (row.expiresAt.getTime() <= now.getTime()) {
+      await expireRow(row, now);
+      return null;
+    }
+    return row;
+  }
+
   async function listMetadataForRuns(companyId: string, runIds: string[]) {
     if (runIds.length === 0) return [];
     const rows = await db
@@ -384,22 +467,29 @@ export function providerTraceStore(db: Db) {
     companyId: string,
     failureReason?: string | null,
   ) {
-    const row = await getByRun(runId, companyId);
-    if (!row || row.deletedAt) return null;
+    const row = await getReadableByRun(runId, companyId);
+    if (!row) return null;
     let bytes: Buffer;
     try {
       bytes = await readTraceBytes(row.traceRef);
     } catch {
-      return db
+      const updatedAt = new Date();
+      const finalized = await db
         .update(providerTraceRecords)
         .set({
           status: "incomplete",
           reason: failureReason ?? "trace_sidecar_missing",
-          updatedAt: new Date(),
+          updatedAt,
         })
-        .where(eq(providerTraceRecords.id, row.id))
+        .where(and(
+          eq(providerTraceRecords.id, row.id),
+          isNull(providerTraceRecords.deletedAt),
+          gt(providerTraceRecords.expiresAt, updatedAt),
+        ))
         .returning()
         .then((rows) => rows[0] ?? null);
+      if (!finalized) await getReadableByRun(runId, companyId);
+      return finalized;
     }
     let invalidRecordCount = 0;
     const entries = bytes
@@ -420,7 +510,8 @@ export function providerTraceStore(db: Db) {
       requiredChannels,
     });
     const terminalStatus = failureReason ? "incomplete" : integrity.status;
-    return db
+    const updatedAt = new Date();
+    const finalized = await db
       .update(providerTraceRecords)
       .set({
         status: terminalStatus,
@@ -431,16 +522,22 @@ export function providerTraceStore(db: Db) {
         ),
         digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
         reason: failureReason ?? integrity.reason,
-        updatedAt: new Date(),
+        updatedAt,
       })
-      .where(eq(providerTraceRecords.id, row.id))
+      .where(and(
+        eq(providerTraceRecords.id, row.id),
+        isNull(providerTraceRecords.deletedAt),
+        gt(providerTraceRecords.expiresAt, updatedAt),
+      ))
       .returning()
       .then((rows) => rows[0] ?? null);
+    if (!finalized) await getReadableByRun(runId, companyId);
+    return finalized;
   }
 
   async function inspect(runId: string, companyId: string) {
-    const row = await getByRun(runId, companyId);
-    if (!row || row.deletedAt) return { trace: null, entries: [] };
+    const row = await getReadableByRun(runId, companyId);
+    if (!row) return { trace: null, entries: [] };
     const entries = await readEntries(row.traceRef).catch(() => []);
     return {
       trace: asMetadata(row),
@@ -451,8 +548,8 @@ export function providerTraceStore(db: Db) {
   }
 
   async function readExactEntries(runId: string, companyId: string) {
-    const row = await getByRun(runId, companyId);
-    if (!row || row.deletedAt) return null;
+    const row = await getReadableByRun(runId, companyId);
+    if (!row) return null;
     return readEntries(row.traceRef);
   }
 
@@ -461,8 +558,8 @@ export function providerTraceStore(db: Db) {
     companyId: string,
     frameId: number,
   ) {
-    const row = await getByRun(runId, companyId);
-    if (!row || row.deletedAt) return null;
+    const row = await getReadableByRun(runId, companyId);
+    if (!row) return null;
     const entry = (await readEntries(row.traceRef)).find(
       (candidate) =>
         candidate.kind === "frame" && Number(candidate.frameId) === frameId,
@@ -473,16 +570,17 @@ export function providerTraceStore(db: Db) {
   }
 
   async function download(runId: string, companyId: string) {
-    const row = await getByRun(runId, companyId);
-    if (!row || row.deletedAt) return null;
+    const row = await getReadableByRun(runId, companyId);
+    if (!row) return null;
     return { row, bytes: await readTraceBytes(row.traceRef) };
   }
 
   async function remove(runId: string, companyId: string) {
     const row = await getByRun(runId, companyId);
     if (!row || row.deletedAt) return null;
-    await fs.unlink(tracePath(row.traceRef)).catch(() => undefined);
-    await fs.unlink(rehydrationTracePath(row.traceRef)).catch(() => undefined);
+    // Manual deletion is filesystem-first and strict: a reported success must
+    // never leave raw sidecars orphaned behind an inaccessible database row.
+    await removeTraceFiles(row.traceRef);
     const now = new Date();
     return db
       .update(providerTraceRecords)

@@ -66,24 +66,81 @@ export function buildCodexLocalConfig(v: CreateConfigValues): Record<string, unk
   return ac;
 }
 
-/** Build the Codex-backed Rust runner profile without exposing legacy engines. */
+const MANAGED_PROVIDER_CONFIG_KEYS = [
+  "managedProfileId",
+  "anthropicAgentId",
+  "agentVersion",
+  "anthropicEnvironmentId",
+  "agentCoreProfileId",
+  "awsRegion",
+  "awsAccountId",
+  "harnessArn",
+  "harnessId",
+  "harnessVersion",
+  "endpointQualifier",
+  "endpointArn",
+  "agentRuntimeArn",
+  "memoryId",
+  "memoryArn",
+  "invocationRoleArn",
+  "contextBucket",
+  "contextPrefix",
+  "contextKmsKeyArn",
+] as const;
+
+function boundedManagedProviderConfig(
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of MANAGED_PROVIDER_CONFIG_KEYS) {
+    const value = values[key];
+    if (typeof value === "string" && value.trim()) result[key] = value.trim();
+  }
+  return result;
+}
+
+function positiveFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+/** Build a provider profile accepted by the experimental Rust runner. */
 export function buildPaperclipRunnerConfig(v: CreateConfigValues): Record<string, unknown> {
   const config = buildCodexLocalConfig(v);
-  delete config.engine;
-  delete config.agentCommand;
-  delete config.mode;
-  delete config.nonInteractivePermissions;
-  delete config.stateDir;
-  delete config.warmHandleIdleMs;
-  delete config.dangerouslyBypassApprovalsAndSandbox;
-  const schemaValues = { ...(v.adapterSchemaValues ?? {}) };
-  delete schemaValues.provider;
-  delete schemaValues.permissionPolicy;
-  delete schemaValues.dangerouslyBypassApprovalsAndSandbox;
-  delete schemaValues.dangerouslyBypassSandbox;
-  const providerCandidate = v.paperclipRunnerProvider ?? v.adapterSchemaValues?.provider;
-  const provider = isPaperclipRunnerProvider(providerCandidate) ? providerCandidate : "codex";
-  const acpxAgent = v.paperclipRunnerAcpxAgent === "claude" || v.paperclipRunnerAcpxAgent === "codex"
+  for (const unsupportedKey of [
+    "engine",
+    "agentCommand",
+    "mode",
+    "nonInteractivePermissions",
+    "stateDir",
+    "warmHandleIdleMs",
+    "dangerouslyBypassApprovalsAndSandbox",
+    "dangerouslyBypassSandbox",
+    "instructionsFilePath",
+    "modelReasoningEffort",
+    "search",
+    "fastMode",
+    "command",
+    "extraArgs",
+  ]) {
+    delete config[unsupportedKey];
+  }
+  const schemaValues = v.adapterSchemaValues ?? {};
+  const providerCandidate = v.paperclipRunnerProvider ?? schemaValues.provider;
+  const provider = isPaperclipRunnerProvider(providerCandidate)
+    ? providerCandidate
+    : "codex";
+  const lifecycleCandidate = v.paperclipRunnerLifecycleMode ?? schemaValues.lifecycleMode;
+  const lifecycleMode = lifecycleCandidate === "warm" ? "warm" : "per_turn";
+  const configuredIdleTimeoutMs = v.paperclipRunnerIdleTimeoutMs ?? schemaValues.idleTimeoutMs;
+  const idleTimeoutMs = typeof configuredIdleTimeoutMs === "number"
+    && Number.isSafeInteger(configuredIdleTimeoutMs)
+    && configuredIdleTimeoutMs > 0
+    ? configuredIdleTimeoutMs
+    : 300_000;
+  const acpxAgent = v.paperclipRunnerAcpxAgent === "claude"
+    || v.paperclipRunnerAcpxAgent === "codex"
     ? v.paperclipRunnerAcpxAgent
     : "pi";
   const acpxModel = acpxAgent === "claude"
@@ -91,36 +148,53 @@ export function buildPaperclipRunnerConfig(v: CreateConfigValues): Record<string
     : acpxAgent === "codex"
       ? "gpt-5.6-sol"
       : "openrouter/deepseek/deepseek-v4-flash-0731";
+  const providerConfig = boundedManagedProviderConfig(schemaValues);
   return {
     ...config,
-    ...schemaValues,
+    ...providerConfig,
     provider,
-    codexPermissionMode: resolvePaperclipRunnerPermissionMode("codex", v.codexPermissionMode),
-    opencodePermissionMode: resolvePaperclipRunnerPermissionMode("opencode", v.opencodePermissionMode),
-    acpxPermissionMode: resolvePaperclipRunnerPermissionMode("acpx", v.acpxPermissionMode),
+    codexPermissionMode: resolvePaperclipRunnerPermissionMode(
+      "codex",
+      v.codexPermissionMode ?? schemaValues.codexPermissionMode,
+    ),
+    opencodePermissionMode: resolvePaperclipRunnerPermissionMode(
+      "opencode",
+      v.opencodePermissionMode ?? schemaValues.opencodePermissionMode,
+    ),
+    acpxPermissionMode: resolvePaperclipRunnerPermissionMode(
+      "acpx",
+      v.acpxPermissionMode ?? schemaValues.acpxPermissionMode,
+    ),
+    lifecycleMode,
+    ...(lifecycleMode === "warm" ? { idleTimeoutMs } : {}),
+    ...(provider === "opencode" && !v.model
+      ? { model: "openrouter/deepseek/deepseek-v4-flash-0731" }
+      : {}),
     ...(provider === "acpx" ? { acpxAgent, model: v.model || acpxModel } : {}),
     ...(provider === "claude_managed"
       ? {
-          maxSessionListCostUsd: schemaValues.maxSessionListCostUsd ?? 1,
+          maxSessionListCostUsd: positiveFiniteNumber(
+            schemaValues.maxSessionListCostUsd,
+            1,
+          ),
           managedAgentsRetentionAcknowledged:
-            schemaValues.managedAgentsRetentionAcknowledged ?? false,
+            schemaValues.managedAgentsRetentionAcknowledged === true,
         }
       : {}),
     ...(provider === "aws_agentcore"
       ? {
-          maxEstimatedSessionCostUsd: schemaValues.maxEstimatedSessionCostUsd ?? 1,
+          maxEstimatedSessionCostUsd: positiveFiniteNumber(
+            schemaValues.maxEstimatedSessionCostUsd,
+            1,
+          ),
           qualificationRevision:
-            schemaValues.qualificationRevision ?? "aws-agentcore-harness-v1",
+            typeof schemaValues.qualificationRevision === "string"
+              && schemaValues.qualificationRevision.trim()
+              ? schemaValues.qualificationRevision.trim()
+              : "aws-agentcore-harness-v1",
           agentCoreRetentionAcknowledged:
-            schemaValues.agentCoreRetentionAcknowledged ?? false,
+            schemaValues.agentCoreRetentionAcknowledged === true,
         }
-      : {}),
-    lifecycleMode: v.paperclipRunnerLifecycleMode ?? "per_turn",
-    ...(v.paperclipRunnerLifecycleMode === "warm"
-      ? { idleTimeoutMs: v.paperclipRunnerIdleTimeoutMs ?? 300_000 }
-      : {}),
-    ...(provider === "opencode" && !v.model
-      ? { model: "openrouter/deepseek/deepseek-v4-flash-0731" }
       : {}),
   };
 }

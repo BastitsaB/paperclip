@@ -1894,7 +1894,7 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: true,
     });
 
-    expect(prompt).toContain("accepted-plan directive");
+    expect(prompt).toContain("accepted-plan continuation");
     expect(prompt).toContain("do not create a child merely because a plan was accepted");
     expect(prompt).not.toContain("Update the plan only");
   });

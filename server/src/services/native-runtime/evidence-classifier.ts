@@ -14,7 +14,7 @@ import {
   type PrpIgnoredAttentionRequest,
   type PrpNormalizedAttentionRequest,
   type PrpVerificationReasonCode,
-} from "@paperclipai/paperclip-runner";
+} from "../../vendor/paperclip-runner/index.js";
 
 export type NativeEvidenceOutcome = "accepted" | "missing" | "rejected" | "unverifiable";
 

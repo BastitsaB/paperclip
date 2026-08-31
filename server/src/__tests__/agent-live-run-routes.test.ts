@@ -49,6 +49,7 @@ const mockWorkspaceDiffReprojection = vi.hoisted(() => ({
   persist: vi.fn(),
 }));
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockQueueRuntimeRequestResolution = vi.hoisted(() => vi.fn());
 
 const routeAgentId = "11111111-1111-4111-8111-111111111111";
 
@@ -85,6 +86,16 @@ function registerModuleMocks() {
     projectCodexWorkspaceDiffsFromTrace: mockWorkspaceDiffReprojection.project,
     persistReprojectedWorkspaceDiffs: mockWorkspaceDiffReprojection.persist,
   }));
+
+  vi.doMock("../realtime/runner-prp-ws.js", async () => {
+    const actual = await vi.importActual<typeof import("../realtime/runner-prp-ws.js")>(
+      "../realtime/runner-prp-ws.js",
+    );
+    return {
+      ...actual,
+      queueRunnerPrpRuntimeRequestResolution: mockQueueRuntimeRequestResolution,
+    };
+  });
 
   vi.doMock("../services/index.js", () => ({
     agentService: () => mockAgentService,
@@ -170,6 +181,16 @@ function createLiveRunsDbStub(rows: Array<Record<string, unknown>>) {
     },
     limit,
   };
+}
+
+function createRuntimeRequestDbStub(row: Record<string, unknown>) {
+  const query = {
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    orderBy: vi.fn().mockReturnThis(),
+    limit: vi.fn(async () => [row]),
+  };
+  return { select: vi.fn(() => query) };
 }
 
 async function requestApp(
@@ -290,6 +311,9 @@ describe("agent live run routes", () => {
       companyId: "company-1",
       agentId: "agent-1",
       status: "succeeded",
+    });
+    mockQueueRuntimeRequestResolution.mockReturnValue({
+      commandId: "command-resolution-1",
     });
     mockProviderTraceStore.inspect.mockResolvedValue({
       trace: null,
@@ -801,6 +825,119 @@ describe("agent live run routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("does not let an ordinary member downgrade a persisted approval into a question", async () => {
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      status: "running",
+      runtimeMode: "native",
+    });
+    const db = createRuntimeRequestDbStub({
+      eventType: "runtime_request.created",
+      payload: {
+        prpEvent: {
+          schema: "paperclip.prp.event.v1",
+          eventType: "runtime_request.created",
+          sourceKind: "runner",
+          runId: "run-1",
+          turnId: "canonical-turn",
+          payload: {
+            request: {
+              requestId: "approval-1",
+              requestKind: "command_approval",
+              turnId: "canonical-turn",
+              status: "pending",
+            },
+          },
+        },
+      },
+    });
+    const app = await createApp(db, {
+      type: "board",
+      userId: "ordinary-member",
+      companyIds: ["company-1"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/heartbeat-runs/run-1/runtime-requests/approval-1/resolve")
+      .send({
+        requestKind: "runtime",
+        turnId: "attacker-turn",
+        resolution: { action: "accept" },
+      }));
+
+    expect(res.status).toBe(403);
+    expect(mockQueueRuntimeRequestResolution).not.toHaveBeenCalled();
+  });
+
+  it("queues an admin resolution with canonical request and actor bindings", async () => {
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      status: "running",
+      runtimeMode: "native",
+    });
+    const db = createRuntimeRequestDbStub({
+      eventType: "runtime_request.created",
+      payload: {
+        prpEvent: {
+          schema: "paperclip.prp.event.v1",
+          eventType: "runtime_request.created",
+          sourceKind: "runner",
+          runId: "run-1",
+          turnId: "canonical-turn",
+          payload: {
+            request: {
+              requestId: "approval-1",
+              requestKind: "permission_approval",
+              turnId: "canonical-turn",
+              status: "pending",
+            },
+          },
+        },
+      },
+    });
+    const app = await createApp(db, {
+      type: "board",
+      userId: "instance-admin",
+      companyIds: ["company-1"],
+      source: "session",
+      isInstanceAdmin: true,
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/heartbeat-runs/run-1/runtime-requests/approval-1/resolve")
+      .send({
+        requestKind: "user_input",
+        turnId: "attacker-turn",
+        resolution: { action: "accept" },
+      }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(mockQueueRuntimeRequestResolution).toHaveBeenCalledWith({
+      companyId: "company-1",
+      runId: "run-1",
+      pendingRequest: {
+        companyId: "company-1",
+        runId: "run-1",
+        requestId: "approval-1",
+        requestKind: "permission_approval",
+        turnId: "canonical-turn",
+        resolverPolicy: "instance_admin",
+      },
+      actor: {
+        type: "user",
+        userId: "instance-admin",
+        isInstanceAdmin: true,
+      },
+      resolution: { action: "accept" },
+    });
   });
 
   it.each([

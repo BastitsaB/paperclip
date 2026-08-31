@@ -77,8 +77,6 @@ const fakeSandboxEnvironmentConfigSchema = z.object({
     .default("ubuntu:24.04"),
   reuseLease: z.boolean().optional().default(false),
   streamRunLogs: z.boolean().optional(),
-  runnerLifecycleMode: z.enum(["inherit", "per_turn", "warm"]).optional(),
-  runnerIdleTimeoutMs: z.coerce.number().int().min(1_000).max(86_400_000).optional(),
   archiveOnRelease: z.boolean().optional(),
 }).strict();
 
@@ -95,8 +93,6 @@ const pluginSandboxEnvironmentConfigSchema = z.object({
   timeoutMs: z.coerce.number().int().min(1).max(86_400_000).optional(),
   reuseLease: z.boolean().optional().default(false),
   streamRunLogs: z.boolean().optional(),
-  runnerLifecycleMode: z.enum(["inherit", "per_turn", "warm"]).optional(),
-  runnerIdleTimeoutMs: z.coerce.number().int().min(1_000).max(86_400_000).optional(),
   archiveOnRelease: z.boolean().optional(),
 }).catchall(z.unknown());
 
@@ -393,8 +389,6 @@ export function stripSandboxProviderEnvelope(config: SandboxEnvironmentConfig): 
   const {
     provider: _provider,
     streamRunLogs: _streamRunLogs,
-    runnerLifecycleMode: _runnerLifecycleMode,
-    runnerIdleTimeoutMs: _runnerIdleTimeoutMs,
     ...driverConfig
   } = config as Record<string, unknown>;
   return driverConfig;
@@ -408,8 +402,6 @@ export function stripSandboxProviderEnvelope(config: SandboxEnvironmentConfig): 
 // the stream never starts.
 const HOST_OWNED_SANDBOX_STREAM_FLAGS = [
   "streamRunLogs",
-  "runnerLifecycleMode",
-  "runnerIdleTimeoutMs",
 ] as const;
 
 function applyHostOwnedSandboxStreamFlags(

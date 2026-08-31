@@ -30,6 +30,7 @@ export interface PaperclipControlPlaneBinding {
   issueId: string;
   runId: string;
   agentId: string;
+  sessionId: string;
   completionContractId: string;
   completionContractSha256: string;
   sourceInstanceId: string;
@@ -77,6 +78,17 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
     this.#onCommittedEvent = options.onCommittedEvent;
   }
 
+  #matchesPersistedBinding(run: typeof heartbeatRuns.$inferSelect): boolean {
+    return run.companyId === this.#binding.companyId
+      && run.agentId === this.#binding.agentId
+      && run.runtimeMode === "native"
+      && run.nativeIssueId === this.#binding.issueId
+      && run.nativeSessionId === this.#binding.sessionId
+      && run.runnerInstanceId === this.#binding.sourceInstanceId
+      && run.completionContractId === this.#binding.completionContractId
+      && run.completionContractSha256 === this.#binding.completionContractSha256;
+  }
+
   async openRun(input: OpenControlPlaneRunInput): Promise<void> {
     const identity = input.identity;
     if (
@@ -84,6 +96,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       || identity.issueId !== this.#binding.issueId
       || identity.runId !== this.#binding.runId
       || identity.agentId !== this.#binding.agentId
+      || identity.sessionId !== this.#binding.sessionId
       || input.sourceInstanceId !== this.#binding.sourceInstanceId
     ) {
       throw new Error("native_open_run_binding_mismatch");
@@ -96,26 +109,19 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       ))
       .limit(1)
       .then((rows) => rows[0] ?? null);
-    if (!run || run.runtimeMode !== "native" || run.completionContractId !== this.#binding.completionContractId) {
+    if (!run || !this.#matchesPersistedBinding(run)) {
       throw new Error("native_open_run_not_authorized");
     }
     this.#sessionId = identity.sessionId;
   }
 
   async loadSessionCheckpoint(): Promise<PersistedNativeSession | null> {
-    const run = await this.#db.select({
-      companyId: heartbeatRuns.companyId,
-      agentId: heartbeatRuns.agentId,
-      runtimeMode: heartbeatRuns.runtimeMode,
-      nativeSessionId: heartbeatRuns.nativeSessionId,
-      runnerProfileJson: heartbeatRuns.runnerProfileJson,
-    }).from(heartbeatRuns).where(eq(heartbeatRuns.id, this.#binding.runId))
+    const run = await this.#db.select().from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, this.#binding.runId))
       .limit(1).then((rows) => rows[0] ?? null);
     if (
       !run
-      || run.companyId !== this.#binding.companyId
-      || run.agentId !== this.#binding.agentId
-      || run.runtimeMode !== "native"
+      || !this.#matchesPersistedBinding(run)
     ) throw new Error("native_session_checkpoint_binding_mismatch");
     const candidate = record(run.runnerProfileJson).sessionCheckpoint;
     if (candidate === undefined || candidate === null) return null;
@@ -145,13 +151,9 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       const run = await tx.select().from(heartbeatRuns)
         .where(eq(heartbeatRuns.id, this.#binding.runId)).for("update").limit(1)
         .then((rows) => rows[0] ?? null);
-      if (
-        !run
-        || run.companyId !== this.#binding.companyId
-        || run.agentId !== this.#binding.agentId
-        || run.runtimeMode !== "native"
-        || run.nativeSessionId !== identity.sessionId
-      ) throw new Error("native_session_checkpoint_binding_mismatch");
+      if (!run || !this.#matchesPersistedBinding(run)) {
+        throw new Error("native_session_checkpoint_binding_mismatch");
+      }
       await tx.update(heartbeatRuns).set({
         runnerProfileJson: {
           ...record(run.runnerProfileJson),
@@ -262,13 +264,9 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       const run = await tx.select().from(heartbeatRuns)
         .where(eq(heartbeatRuns.id, this.#binding.runId)).for("update").limit(1)
         .then((rows) => rows[0] ?? null);
-      if (
-        !run
-        || run.companyId !== this.#binding.companyId
-        || run.runtimeMode !== "native"
-        || run.completionContractId !== this.#binding.completionContractId
-        || run.completionContractSha256 !== this.#binding.completionContractSha256
-      ) throw new Error("native_result_binding_mismatch");
+      if (!run || !this.#matchesPersistedBinding(run)) {
+        throw new Error("native_result_binding_mismatch");
+      }
 
       const callerConditions = [eq(nativeRunResults.serverFingerprint, serverFingerprint)];
       if (value.callerResultId) callerConditions.push(eq(nativeRunResults.callerResultId, value.callerResultId));

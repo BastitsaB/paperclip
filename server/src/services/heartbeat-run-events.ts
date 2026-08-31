@@ -1,4 +1,4 @@
-import { and, asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { heartbeatRunEvents, heartbeatRuns } from "@paperclipai/db";
 import { nativeSha256 } from "./native-runtime/canonical.js";
@@ -34,6 +34,28 @@ export class HeartbeatRunEventConflictError extends Error {
     super("native_event_replay_conflict");
     this.name = "HeartbeatRunEventConflictError";
   }
+}
+
+/**
+ * Atomically reserve the next event sequence on the run row. Both native PRP
+ * ingestion and legacy/direct-adapter writers use this allocator so the
+ * database uniqueness invariant cannot turn a concurrent log/cancel/recovery
+ * race into a failed run.
+ */
+export async function allocateHeartbeatRunEventSeq(
+  db: Db,
+  runId: string,
+): Promise<number> {
+  const [updated] = await db
+    .update(heartbeatRuns)
+    .set({
+      nextEventSeq: sql`${heartbeatRuns.nextEventSeq} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(eq(heartbeatRuns.id, runId))
+    .returning({ nextEventSeq: heartbeatRuns.nextEventSeq });
+  if (!updated) throw new Error("heartbeat_run_event_binding_mismatch");
+  return Number(updated.nextEventSeq) - 1;
 }
 
 export async function appendHeartbeatRunEvent(
@@ -87,7 +109,10 @@ export async function appendHeartbeatRunEvent(
       }
     }
 
-    const seq = Number(run.nextEventSeq ?? 1);
+    const seq = await allocateHeartbeatRunEventSeq(
+      tx as unknown as Db,
+      input.runId,
+    );
     const [row] = await tx.insert(heartbeatRunEvents).values({
       companyId: input.companyId,
       runId: input.runId,
@@ -106,10 +131,6 @@ export async function appendHeartbeatRunEvent(
       protocolSchemaVersion: input.nativeSource?.protocolSchemaVersion ?? null,
     }).returning();
     if (!row) throw new Error("heartbeat_run_event_not_persisted");
-    await tx.update(heartbeatRuns).set({
-      nextEventSeq: seq + 1,
-      updatedAt: new Date(),
-    }).where(eq(heartbeatRuns.id, input.runId));
     return {
       row,
       disposition: "committed" as const,

@@ -287,7 +287,9 @@ describe("OpenCodeServerDriver", () => {
     });
     expect(JSON.stringify(submittedPrompt?.parts ?? null)).not.toContain(PAPERCLIP_EXECUTION_PROMPT);
     const sessionRoot = join(root, "context");
-    await expect(readFile(join(sessionRoot, "home", ".claude", "skills", "assigned", "references", "support.md"), "utf8"))
+    const isolatedHomes = (await readdir(sessionRoot)).filter((entry) => entry.startsWith("home-"));
+    expect(isolatedHomes).toHaveLength(1);
+    await expect(readFile(join(sessionRoot, isolatedHomes[0]!, ".claude", "skills", "assigned", "references", "support.md"), "utf8"))
       .resolves.toBe("skill support\n");
     const config = JSON.parse(await readFile(join(sessionRoot, "config", "opencode", "opencode.json"), "utf8"));
     expect(config).toMatchObject({
@@ -459,16 +461,22 @@ describe("OpenCodeServerDriver", () => {
       payload: { request: { requestId: "question-native-1", type: "input" } },
     });
 
-    await expect(session.handoffRuntimeRequest?.({
+    const firstHandoff = session.handoffRuntimeRequest?.({
       requestId: "question-native-1",
       turnId,
       reason: "durable_handoff",
-    })).resolves.toBe("handed_off");
-    await expect(session.handoffRuntimeRequest?.({
+      signal: new AbortController().signal,
+    });
+    expect(firstHandoff?.result).toBe("handed_off");
+    await firstHandoff?.cleanup;
+    const repeatedHandoff = session.handoffRuntimeRequest?.({
       requestId: "question-native-1",
       turnId,
       reason: "durable_handoff",
-    })).resolves.toBe("already_settled");
+      signal: new AbortController().signal,
+    });
+    expect(repeatedHandoff?.result).toBe("already_settled");
+    await repeatedHandoff?.cleanup;
 
     let expired: Awaited<ReturnType<typeof iterator.next>>["value"] | null = null;
     for (let count = 0; count < 20; count += 1) {

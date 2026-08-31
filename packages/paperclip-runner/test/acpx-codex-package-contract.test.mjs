@@ -23,6 +23,13 @@ const codexPatch = await readFile(
   ),
   "utf8",
 );
+const claudePatch = await readFile(
+  new URL(
+    "../../../patches/@agentclientprotocol__claude-agent-acp@0.70.0.patch",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("the runner pins the qualified ACPX provider dependencies", () => {
   assert.deepEqual(runnerPackage.dependencies, {
@@ -58,11 +65,26 @@ test("old and new pnpm configuration both apply the exact runtime patches", () =
     ],
     "patches/@agentclientprotocol__codex-acp@1.6.2.patch",
   );
+  assert.equal(
+    rootPackage.pnpm.patchedDependencies[
+      "@agentclientprotocol/claude-agent-acp@0.70.0"
+    ],
+    "patches/@agentclientprotocol__claude-agent-acp@0.70.0.patch",
+  );
+  assert.equal(
+    rootPackage.pnpm.patchedDependencies["pi-acp@0.0.33"],
+    "patches/pi-acp@0.0.33.patch",
+  );
   assert.match(workspace, /acpx@0\.13\.1: patches\/acpx@0\.13\.1\.patch/);
   assert.match(
     workspace,
     /codex-acp@1\.6\.2': patches\/@agentclientprotocol__codex-acp@1\.6\.2\.patch/,
   );
+  assert.match(
+    workspace,
+    /claude-agent-acp@0\.70\.0': patches\/@agentclientprotocol__claude-agent-acp@0\.70\.0\.patch/,
+  );
+  assert.match(workspace, /pi-acp@0\.0\.33: patches\/pi-acp@0\.0\.33\.patch/);
 });
 
 test("the ACPX patch preserves launch-only state and verified spawning", () => {
@@ -113,6 +135,19 @@ test("the Codex patch enforces isolated instructions, tools, and skills", () => 
   ]) {
     assert.match(
       codexPatch,
+      new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  }
+});
+
+test("the Claude patch removes ambient project and local configuration", () => {
+  for (const token of [
+    "PAPERCLIP_ACPX_ISOLATED_CONTEXT",
+    'settingSources: ["user"]',
+    "userProvidedOptions?.mcpServers",
+  ]) {
+    assert.match(
+      claudePatch,
       new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
     );
   }

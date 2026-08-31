@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 
@@ -23,6 +23,7 @@ import type {
   OpenHarnessSessionInput,
   PersistedHarnessSession,
   HarnessRuntimeRequest,
+  HarnessRuntimeRequestHandoff,
   HarnessRuntimeRequestResolution,
   PaperclipQuestion,
   PaperclipQuestionResponse,
@@ -535,11 +536,15 @@ class OpenCodeHarnessSession implements HarnessSession {
     }), { turnId: input.turnId, itemId: pending.request.itemId });
   }
 
-  async handoffRuntimeRequest(input: {
+  handoffRuntimeRequest(input: {
     requestId: string;
     turnId: string;
     reason: "durable_handoff";
-  }): Promise<"handed_off" | "already_settled"> {
+    signal: AbortSignal;
+  }): HarnessRuntimeRequestHandoff {
+    if (input.signal.aborted) {
+      return { result: "already_settled", cleanup: Promise.resolve() };
+    }
     const pending = this.#pendingRuntimeRequests.get(input.requestId);
     if (
       !pending
@@ -549,15 +554,17 @@ class OpenCodeHarnessSession implements HarnessSession {
       || pending.settling
       || pending.submittedResponse !== undefined
       || pending.submittedAction !== undefined
-    ) return "already_settled";
-    if (!this.#pendingRuntimeRequests.delete(input.requestId)) return "already_settled";
+    ) return { result: "already_settled", cleanup: Promise.resolve() };
+    if (!this.#pendingRuntimeRequests.delete(input.requestId)) {
+      return { result: "already_settled", cleanup: Promise.resolve() };
+    }
     this.#emit(
       "runtime_request.expired",
       harnessRuntimeInputExpiredOutcome(pending.request, input.reason),
       { turnId: input.turnId, itemId: pending.request.itemId },
     );
     const workspace = `directory=${encodeURIComponent(this.#workingDirectory)}`;
-    await Promise.allSettled([
+    const cleanup = Promise.allSettled([
       api(
         this.#fetch,
         this.#runtime,
@@ -570,8 +577,8 @@ class OpenCodeHarnessSession implements HarnessSession {
         `/session/${encodeURIComponent(this.#providerSessionId)}/abort`,
         { method: "POST" },
       ),
-    ]);
-    return "handed_off";
+    ]).then(() => undefined);
+    return { result: "handed_off", cleanup };
   }
 
   async read(): Promise<Record<string, unknown>> {
@@ -1265,10 +1272,6 @@ async function startRuntime(input: {
   trace: ProviderTraceFileSink | null;
   dispatch: (call: { tool: string; callId: string; arguments: unknown }) => Promise<unknown>;
 }): Promise<OpenCodeRuntime> {
-  const bridge = await startOpenCodeMcpBridge({
-    tools: input.options.dynamicTools,
-    handler: input.dispatch,
-  });
   const port = await reservePort();
   const password = randomBytes(32).toString("base64url");
   const username = "paperclip";
@@ -1276,15 +1279,37 @@ async function startRuntime(input: {
   const configHome = join(input.root, "config");
   const dataHome = join(input.root, "data");
   const cacheHome = join(input.root, "cache");
-  const isolatedHome = join(input.root, "home");
   await Promise.all([
     mkdir(join(configHome, "opencode"), { recursive: true, mode: 0o700 }),
     mkdir(dataHome, { recursive: true, mode: 0o700 }),
     mkdir(cacheHome, { recursive: true, mode: 0o700 }),
-    mkdir(isolatedHome, { recursive: true, mode: 0o700 }),
   ]);
-  await materializeNativeRuntimeSkills(input.options.runtimeContext ?? null, join(isolatedHome, ".claude", "skills"));
+  // HOME contains a read-only skill snapshot, whose destination must be fresh.
+  // Keep OpenCode's XDG data stable for provider-session recovery while giving
+  // every launch (including retries and recovery) a new isolated HOME.
+  const isolatedHome = await mkdtemp(join(input.root, "home-"));
+  await chmod(isolatedHome, 0o700);
+  try {
+    await materializeNativeRuntimeSkills(input.options.runtimeContext ?? null, join(isolatedHome, ".claude", "skills"));
+  } catch (error) {
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+  const bridge = await startOpenCodeMcpBridge({
+    tools: input.options.dynamicTools,
+    handler: input.dispatch,
+  }).catch(async (error) => {
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  });
   const assignedMcp = nativeMcpLaunchBinding(input.options.environment ?? process.env);
+  input.trace?.addSensitiveValues([
+    password,
+    authHeader,
+    bridge.secret,
+    assignedMcp?.token,
+    input.options.environment?.OPENROUTER_API_KEY,
+  ]);
   const instructionRoot = input.options.runtimeContext?.instructions.bundle.rootPath;
   const config = {
     $schema: "https://opencode.ai/config.json",
@@ -1422,6 +1447,7 @@ async function startRuntime(input: {
           } catch { child.kill("SIGKILL"); }
         }
         await rm(join(configHome, "opencode", "opencode.json"), { force: true }).catch(() => undefined);
+        await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
         if (closeInput.finalizeTrace !== false) {
           await input.trace?.finish({ reason: closeInput.reason ?? null });
         }
@@ -1431,6 +1457,7 @@ async function startRuntime(input: {
     await bridge.close().catch(() => {});
     child.kill("SIGKILL");
     await rm(join(configHome, "opencode", "opencode.json"), { force: true }).catch(() => undefined);
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 }

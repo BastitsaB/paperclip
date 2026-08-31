@@ -58,7 +58,7 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     await tempDb?.cleanup();
   });
 
-  it("provisions one aggregate assignment gateway, mints run tokens, and fails closed on degraded access", async () => {
+  it("provisions one aggregate gateway and filters degraded access without blocking direct adapters", async () => {
     process.env.PAPERCLIP_API_URL = "https://paperclip.example.test";
     const [company] = await db.insert(companies).values({
       name: `Runtime MCP ${randomUUID()}`,
@@ -133,8 +133,8 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
 
     expect(first).toHaveLength(1);
     expect(first[0]).toMatchObject({
-      name: "Installed MCP",
-      connectionId: installedConnection!.id,
+      name: "paperclip-assigned",
+      connectionId: expect.stringMatching(/^assignment:[a-f0-9]{64}$/),
       url: expect.stringMatching(/^https:\/\/paperclip\.example\.test\/mcp\/gateways\/gw_[a-f0-9]{32}$/),
       token: expect.stringMatching(/^pcgw_/),
     });
@@ -161,8 +161,9 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     await db.update(toolConnections)
       .set({ healthStatus: "degraded", healthMessage: "fixture unavailable" })
       .where(eq(toolConnections.id, installedConnection!.id));
-    await expect(buildPaperclipRuntimeMcpServers({ db, agent: agent!, runId: randomUUID() }))
-      .rejects.toThrow(`assigned native MCP connection is unavailable: ${installedConnection!.id}`);
+    await expect(
+      buildPaperclipRuntimeMcpServers({ db, agent: agent!, runId: randomUUID() }),
+    ).resolves.toEqual([]);
   });
 
   it("audits permitted remote MCP connections that were not installed when delivery is empty", async () => {

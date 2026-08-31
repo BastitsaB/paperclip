@@ -32,12 +32,11 @@ function isAuditCountField(key: string, value: unknown): boolean {
 const COMMAND_PAYLOAD_KEY_RE =
   /(^command$|^cmd$|command[-_]?line|resolved[-_]?command|PAPERCLIP_RESOLVED_COMMAND)/i;
 const COMMAND_ARGS_PAYLOAD_KEY_RE = /^(commandArgs|command_?args|argv)$/i;
-// A protocol identifier such as `paperclip.question_set.v1` has the same
-// broad three-segment shape as a JWT. Real JSON web tokens encode JSON in the
-// first two segments (and therefore conventionally begin with `eyJ`) and have
-// a non-trivial signature. Keep the value guard specific enough that durable
-// protocol discriminators survive sanitization and replay.
-const JWT_VALUE_RE = /^eyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?$/;
+const JWT_VALUE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
+// Durable protocol schema identifiers share JWT's broad dotted shape but are
+// public discriminators, not credentials. Exempt only the closed Paperclip
+// schema namespace while retaining the existing fail-closed JWT value guard.
+const PAPERCLIP_SCHEMA_ID_RE = /^paperclip\.[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.v\d+$/;
 const CLI_SECRET_FLAG_RE = new RegExp(String.raw`^-{1,2}${SECRET_FIELD_NAME_PATTERN}$`, "i");
 const JSON_SECRET_FIELD_TEXT_RE = new RegExp(
   String.raw`((?:"|')?${SECRET_FIELD_NAME_PATTERN}(?:"|')?\s*:\s*(?:"|'))[^"'` + "`" + String.raw`\r\n]+((?:"|'))`,
@@ -152,7 +151,12 @@ export function sanitizeRecord(record: Record<string, unknown>): Record<string, 
       redacted[key] = REDACTED_EVENT_VALUE;
       continue;
     }
-    if (typeof value === "string" && JWT_VALUE_RE.test(value) && !AUDIT_SURFACE_PAYLOAD_KEY_RE.test(key)) {
+    if (
+      typeof value === "string"
+      && JWT_VALUE_RE.test(value)
+      && !PAPERCLIP_SCHEMA_ID_RE.test(value)
+      && !AUDIT_SURFACE_PAYLOAD_KEY_RE.test(key)
+    ) {
       redacted[key] = REDACTED_EVENT_VALUE;
       continue;
     }

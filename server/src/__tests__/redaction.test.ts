@@ -48,12 +48,14 @@ describe("redaction", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     const input = {
       session: jwt,
+      opaque: "aaa.bbb.ccc",
       normal: "plain",
     };
 
     const result = sanitizeRecord(input);
 
     expect(result.session).toBe(REDACTED_EVENT_VALUE);
+    expect(result.opaque).toBe(REDACTED_EVENT_VALUE);
     expect(result.normal).toBe("plain");
   });
 

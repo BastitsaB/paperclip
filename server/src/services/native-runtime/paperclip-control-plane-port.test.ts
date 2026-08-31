@@ -22,21 +22,21 @@ import {
 } from "@paperclipai/db";
 import {
   executeNativeSession,
+  parseNativeExecutionInput,
   type NativeSessionBackend,
   type PrpEvent,
   type PrpStructuredRunResult,
   type PrpTerminalState,
-} from "@paperclipai/paperclip-runner";
+} from "../../vendor/paperclip-runner/index.js";
 import {
   CONTROL_PLANE_CONFORMANCE_RESULT,
   CONTROL_PLANE_CONFORMANCE_TERMINAL,
   CONTROL_PLANE_CONFORMANCE_OPEN,
   runControlPlanePortConformance,
-} from "@paperclipai/paperclip-runner/testing";
+} from "../../vendor/paperclip-runner/testing.js";
 import { startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { PaperclipControlPlanePort } from "./paperclip-control-plane-port.js";
 import { finalizeNativeRun } from "./native-run-finalizer.js";
-import { buildNativeExecutionInput } from "./native-execution-input.js";
 import { nativeRuntimeContextFixture } from "./runtime-context.test-fixture.js";
 import { issueThreadInteractionService } from "../issue-thread-interactions.js";
 
@@ -56,6 +56,10 @@ describe("PaperclipControlPlanePort conformance", () => {
   const governanceIssueId = "00000000-0000-4000-8000-000000000014";
   const governanceContractId = "00000000-0000-4000-8000-000000000015";
   const governanceRunId = "00000000-0000-4000-8000-000000000016";
+  const conformanceRunnerId = "00000000-0000-4000-8000-000000000005";
+  const taskRunnerId = "00000000-0000-4000-8000-000000000019";
+  const workspaceFailureRunnerId = "00000000-0000-4000-8000-000000000020";
+  const governanceRunnerId = "00000000-0000-4000-8000-000000000021";
 
   beforeAll(async () => {
     temporary = await startEmbeddedPostgresTestDatabase("paperclip-native-port-");
@@ -102,6 +106,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "running",
       runtimeMode: "native",
+      nativeIssueId: identity.issueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId: conformanceRunnerId,
       completionContractId: contractId,
       completionContractSha256: contractSha,
       contextSnapshot: { issueId: identity.issueId },
@@ -141,7 +148,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       runtimeMode: "native",
       runtimeModeResolverVersion: "phase6-v1",
       runtimeModeReason: "eligible_opt_in",
+      nativeIssueId: taskIssueId,
       nativeSessionId: taskSessionId,
+      runnerInstanceId: taskRunnerId,
       completionContractId: taskContractId,
       completionContractSha256: "phase6-task-contract",
       contextSnapshot: { issueId: taskIssueId },
@@ -190,6 +199,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "running",
       runtimeMode: "native",
+      nativeIssueId: workspaceFailureIssueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId: workspaceFailureRunnerId,
       completionContractId: workspaceFailureContractId,
       completionContractSha256: "phase6-workspace-failure-contract",
       contextSnapshot: { issueId: workspaceFailureIssueId },
@@ -226,6 +238,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "running",
       runtimeMode: "native",
+      nativeIssueId: governanceIssueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId: governanceRunnerId,
       completionContractId: governanceContractId,
       completionContractSha256: "phase6-governance-contract",
       contextSnapshot: { issueId: governanceIssueId },
@@ -244,9 +259,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       await db.delete(activityLog);
       await db.delete(agentWakeupRequests);
       await db.delete(statusDecisionEffects);
+      await db.delete(nativeRunFinalizations);
       await db.delete(statusDecisions);
       await db.delete(workAssessments);
-      await db.delete(nativeRunFinalizations);
       await db.delete(nativeRunResults);
       await db.delete(issueThreadInteractions);
       await db.delete(issueWorkProducts);
@@ -268,9 +283,10 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: identity.issueId,
       runId: identity.runId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: contractId,
       completionContractSha256: contractSha,
-      sourceInstanceId: "runner-standalone-conformance",
+      sourceInstanceId: conformanceRunnerId,
       controlPlaneSourceInstanceId: "control-conformance",
     });
     await expect(runControlPlanePortConformance({ port })).resolves.toEqual({
@@ -321,7 +337,7 @@ describe("PaperclipControlPlanePort conformance", () => {
       schema: "paperclip.prp.event.v1",
       sourceEventId: `phase6-task:${sourceSeq}`,
       sourceSeq,
-      sourceInstanceId: "phase6-scripted-runner",
+      sourceInstanceId: taskRunnerId,
       sourceKind: "runner",
       runId: taskRunId,
       normalizedSessionId: sessionId,
@@ -352,27 +368,52 @@ describe("PaperclipControlPlanePort conformance", () => {
           async capabilities() { return { resume: false, typedEvents: true, steering: false, interruption: true, structuredResult: true }; },
           async *events() { yield* events; },
           async startTurn() { return { turnId: "turn-phase6-paperclip-task" }; },
-          async cancel() {},
+          cancel() { return { cleanup: Promise.resolve() }; },
           async result() { return { result: taskResult, terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL, turnId: "turn-phase6-paperclip-task" }; },
           async snapshot() { return { backendKind: "mock", sessionId, identity: input.identity, providerSessionId: "provider-phase6-paperclip-task" }; },
           async close() {},
         };
       },
     };
-    const execution = buildNativeExecutionInput({
-      companyId: identity.companyId,
-      runId: taskRunId,
-      issue: { id: taskIssueId, identifier: "P6C-2", title: "Complete one native task", description: null, workMode: "standard" },
-      taskPrompt: "# P6C-2: Complete one native task",
-      agentId: identity.agentId,
-      workspace: { id: "workspace-phase6", cwd: process.cwd(), repoUrl: null, repoRef: null, branchName: null },
-      normalizedSessionId: sessionId,
+    const execution = parseNativeExecutionInput({
+      schema: "paperclip.native-execution-input.v4",
+      executionMode: "default",
+      planningContext: null,
+      binding: {
+        companyId: identity.companyId,
+        runId: taskRunId,
+        issueId: taskIssueId,
+        agentId: identity.agentId,
+        executionWorkspaceId: "workspace-phase6",
+      },
+      task: {
+        identifier: "P6C-2",
+        title: "Complete one native task",
+        description: null,
+        prompt: "# P6C-2: Complete one native task",
+        workMode: "standard",
+      },
+      workspace: {
+        cwd: process.cwd(),
+        repoUrl: null,
+        repoRef: null,
+        branchName: null,
+      },
+      session: {
+        normalizedSessionId: sessionId,
+        driverKind: "codex_app_server",
+        protocolVersion: 1,
+        lifecyclePolicy: { mode: "per_turn", idleTimeoutMs: null },
+      },
+      provider: { kind: "codex", model: null, approvalPolicy: "never" },
       completionContract: {
         id: taskContractId,
         sha256: "phase6-task-contract",
         schemaVersion: "paperclip.completion-contract.v1",
         contract: { revision: "phase6-v1", objective: "Complete one native task", criteria: [{ id: "objective", requirement: "Complete the task" }] },
       },
+      interactionResponses: [],
+      credentialBindings: [],
       runtimeContext: nativeRuntimeContextFixture(),
     });
     const port = new PaperclipControlPlanePort(db, {
@@ -380,16 +421,17 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: taskIssueId,
       runId: taskRunId,
       agentId: identity.agentId,
+      sessionId: taskSessionId,
       completionContractId: taskContractId,
       completionContractSha256: "phase6-task-contract",
-      sourceInstanceId: "phase6-scripted-runner",
+      sourceInstanceId: taskRunnerId,
       controlPlaneSourceInstanceId: "phase6-control-plane",
     });
     const completed = await executeNativeSession({
       input: execution,
       backend,
       controlPlane: port,
-      runnerInstanceId: "phase6-scripted-runner",
+      runnerInstanceId: taskRunnerId,
       controlPlaneInstanceId: "phase6-control-plane",
     });
     expect(completed.terminal.runTerminalState).toBe("succeeded");
@@ -427,12 +469,104 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: identity.issueId,
       runId: identity.runId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: contractId,
       completionContractSha256: contractSha,
-      sourceInstanceId: "runner-standalone-conformance",
+      sourceInstanceId: conformanceRunnerId,
       controlPlaneSourceInstanceId: "control-conformance",
     });
     await expect(port.openRun(CONTROL_PLANE_CONFORMANCE_OPEN)).rejects.toThrow("binding_mismatch");
+  });
+
+  it("revalidates every persisted native binding before open and completion", async () => {
+    const identity = CONTROL_PLANE_CONFORMANCE_OPEN.identity;
+    const issueId = "00000000-0000-4000-8000-000000000091";
+    const localContractId = "00000000-0000-4000-8000-000000000092";
+    const runId = "00000000-0000-4000-8000-000000000093";
+    const sessionId = "00000000-0000-4000-8000-000000000094";
+    const runnerInstanceId = "00000000-0000-4000-8000-000000000095";
+    const contractSha256 = "strict-native-binding-contract";
+    await db.insert(issues).values({
+      id: issueId,
+      companyId: identity.companyId,
+      title: "Strict native binding",
+      status: "in_progress",
+      assigneeAgentId: identity.agentId,
+      workMode: "standard",
+    });
+    await db.insert(completionContracts).values({
+      id: localContractId,
+      companyId: identity.companyId,
+      issueId,
+      revision: 1,
+      schemaVersion: "paperclip.completion-contract.v1",
+      policyVersion: "strict-binding-v1",
+      risk: "standard",
+      completionAuthority: "server_arbiter",
+      incompleteCriteriaPolicy: "preserve_non_terminal",
+      contractJson: {
+        revision: "strict-binding-v1",
+        objective: "Enforce the persisted binding",
+        criteria: [{ id: "objective", requirement: "Reject every mismatch" }],
+      },
+      canonicalSha256: contractSha256,
+      createdByActorType: "system",
+      createdByActorId: "test",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: identity.companyId,
+      agentId: identity.agentId,
+      status: "running",
+      runtimeMode: "native",
+      nativeIssueId: issueId,
+      nativeSessionId: sessionId,
+      runnerInstanceId,
+      completionContractId: localContractId,
+      completionContractSha256: contractSha256,
+      contextSnapshot: { issueId },
+    });
+    const createPort = () => new PaperclipControlPlanePort(db, {
+      companyId: identity.companyId,
+      issueId,
+      runId,
+      agentId: identity.agentId,
+      sessionId,
+      completionContractId: localContractId,
+      completionContractSha256: contractSha256,
+      sourceInstanceId: runnerInstanceId,
+      controlPlaneSourceInstanceId: "strict-binding-control",
+    });
+    const open = {
+      identity: { ...identity, issueId, runId, sessionId },
+      backendKind: "mock" as const,
+      sourceInstanceId: runnerInstanceId,
+    };
+    const mutations = [
+      { invalid: { nativeIssueId: taskIssueId }, restore: { nativeIssueId: issueId } },
+      { invalid: { nativeSessionId: taskSessionId }, restore: { nativeSessionId: sessionId } },
+      { invalid: { runnerInstanceId: taskRunnerId }, restore: { runnerInstanceId } },
+      { invalid: { completionContractId: taskContractId }, restore: { completionContractId: localContractId } },
+      { invalid: { completionContractSha256: "wrong-contract" }, restore: { completionContractSha256: contractSha256 } },
+    ] satisfies Array<{
+      invalid: Partial<typeof heartbeatRuns.$inferInsert>;
+      restore: Partial<typeof heartbeatRuns.$inferInsert>;
+    }>;
+    for (const mutation of mutations) {
+      await db.update(heartbeatRuns).set(mutation.invalid).where(eq(heartbeatRuns.id, runId));
+      await expect(createPort().openRun(open)).rejects.toThrow("native_open_run_not_authorized");
+      await db.update(heartbeatRuns).set(mutation.restore).where(eq(heartbeatRuns.id, runId));
+    }
+
+    const openedPort = createPort();
+    await openedPort.openRun(open);
+    await db.update(heartbeatRuns).set({ runnerInstanceId: taskRunnerId }).where(eq(heartbeatRuns.id, runId));
+    await expect(openedPort.completeRun({
+      result: CONTROL_PLANE_CONFORMANCE_RESULT,
+      terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+      callerResultId: "strict-native-binding-result",
+    })).rejects.toThrow("native_result_binding_mismatch");
+    await db.update(heartbeatRuns).set({ runnerInstanceId }).where(eq(heartbeatRuns.id, runId));
   });
 
   it("does not let native completion bypass a pending issue interaction", async () => {
@@ -442,15 +576,16 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: governanceIssueId,
       runId: governanceRunId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: governanceContractId,
       completionContractSha256: "phase6-governance-contract",
-      sourceInstanceId: "runner-phase6-governance",
+      sourceInstanceId: governanceRunnerId,
       controlPlaneSourceInstanceId: "control-phase6-governance",
     });
     await port.openRun({
       identity: { ...identity, runId: governanceRunId, issueId: governanceIssueId },
       backendKind: "mock",
-      sourceInstanceId: "runner-phase6-governance",
+      sourceInstanceId: governanceRunnerId,
     });
     await port.completeRun({
       result: CONTROL_PLANE_CONFORMANCE_RESULT,
@@ -471,6 +606,7 @@ describe("PaperclipControlPlanePort conformance", () => {
     const issueId = "30000000-0000-4000-8000-000000000024";
     const localContractId = "31000000-0000-4000-8000-000000000024";
     const runId = "32000000-0000-4000-8000-000000000024";
+    const runnerInstanceId = "33000000-0000-4000-8000-000000000024";
     await db.insert(issues).values({
       id: issueId,
       companyId: identity.companyId,
@@ -501,6 +637,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "running",
       runtimeMode: "native",
+      nativeIssueId: issueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId,
       completionContractId: localContractId,
       completionContractSha256: "native-review-contract",
       contextSnapshot: { issueId },
@@ -510,15 +649,16 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId,
       runId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: localContractId,
       completionContractSha256: "native-review-contract",
-      sourceInstanceId: "native-review-runner",
+      sourceInstanceId: runnerInstanceId,
       controlPlaneSourceInstanceId: "native-review-control",
     });
     await port.openRun({
       identity: { ...identity, issueId, runId },
       backendKind: "mock",
-      sourceInstanceId: "native-review-runner",
+      sourceInstanceId: runnerInstanceId,
     });
     const result = { ...structuredClone(CONTROL_PLANE_CONFORMANCE_RESULT), reportedWorkDisposition: "needs_review" as const };
     await port.completeRun({
@@ -559,6 +699,7 @@ describe("PaperclipControlPlanePort conformance", () => {
     const issueId = "30000000-0000-4000-8000-000000000029";
     const localContractId = "31000000-0000-4000-8000-000000000029";
     const runId = "32000000-0000-4000-8000-000000000029";
+    const runnerInstanceId = "33000000-0000-4000-8000-000000000029";
     await db.insert(issues).values({
       id: issueId,
       companyId: identity.companyId,
@@ -592,6 +733,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "succeeded",
       runtimeMode: "native",
+      nativeIssueId: issueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId,
       completionContractId: localContractId,
       completionContractSha256: "dot-29-contract",
       contextSnapshot: { issueId },
@@ -601,15 +745,16 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId,
       runId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: localContractId,
       completionContractSha256: "dot-29-contract",
-      sourceInstanceId: "dot-29-runner",
+      sourceInstanceId: runnerInstanceId,
       controlPlaneSourceInstanceId: "dot-29-control",
     });
     await port.openRun({
       identity: { ...identity, issueId, runId },
       backendKind: "mock",
-      sourceInstanceId: "dot-29-runner",
+      sourceInstanceId: runnerInstanceId,
     });
     const result: PrpStructuredRunResult = {
       ...structuredClone(CONTROL_PLANE_CONFORMANCE_RESULT),
@@ -667,6 +812,7 @@ describe("PaperclipControlPlanePort conformance", () => {
     const childIssueId = "30000000-0000-4000-8000-000000000146";
     const localContractId = "31000000-0000-4000-8000-000000000146";
     const runId = "32000000-0000-4000-8000-000000000146";
+    const runnerInstanceId = "33000000-0000-4000-8000-000000000146";
     await db.insert(issues).values([
       {
         id: parentIssueId,
@@ -717,6 +863,9 @@ describe("PaperclipControlPlanePort conformance", () => {
       agentId: identity.agentId,
       status: "running",
       runtimeMode: "native",
+      nativeIssueId: childIssueId,
+      nativeSessionId: identity.sessionId,
+      runnerInstanceId,
       completionContractId: localContractId,
       completionContractSha256: "child-wake-contract",
       contextSnapshot: { issueId: childIssueId },
@@ -726,15 +875,16 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: childIssueId,
       runId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: localContractId,
       completionContractSha256: "child-wake-contract",
-      sourceInstanceId: "child-wake-runner",
+      sourceInstanceId: runnerInstanceId,
       controlPlaneSourceInstanceId: "child-wake-control",
     });
     await port.openRun({
       identity: { ...identity, issueId: childIssueId, runId },
       backendKind: "mock",
-      sourceInstanceId: "child-wake-runner",
+      sourceInstanceId: runnerInstanceId,
     });
     const result: PrpStructuredRunResult = {
       ...structuredClone(CONTROL_PLANE_CONFORMANCE_RESULT),
@@ -838,15 +988,16 @@ describe("PaperclipControlPlanePort conformance", () => {
       issueId: workspaceFailureIssueId,
       runId: workspaceFailureRunId,
       agentId: identity.agentId,
+      sessionId: identity.sessionId,
       completionContractId: workspaceFailureContractId,
       completionContractSha256: "phase6-workspace-failure-contract",
-      sourceInstanceId: "runner-phase6-workspace-failure",
+      sourceInstanceId: workspaceFailureRunnerId,
       controlPlaneSourceInstanceId: "control-phase6-workspace-failure",
     });
     await port.openRun({
       identity: { ...identity, runId: workspaceFailureRunId, issueId: workspaceFailureIssueId },
       backendKind: "mock",
-      sourceInstanceId: "runner-phase6-workspace-failure",
+      sourceInstanceId: workspaceFailureRunnerId,
     });
     await port.completeRun({
       result: CONTROL_PLANE_CONFORMANCE_RESULT,
@@ -897,7 +1048,12 @@ describe("PaperclipControlPlanePort conformance", () => {
         result: {
           ...structuredClone(CONTROL_PLANE_CONFORMANCE_RESULT),
           reportedWorkDisposition: "blocked",
-          blocker: { reasonCode: "access", owner: { kind: "board" }, unblockAction: "Approve access", scope: "task_wide" },
+          blocker: {
+            reasonCode: "access",
+            owner: { kind: "user", name: "Board operator" },
+            unblockAction: "Approve access",
+            scope: "task_wide",
+          },
         },
       },
       {
@@ -923,6 +1079,7 @@ describe("PaperclipControlPlanePort conformance", () => {
       const issueId = `30000000-0000-4000-8000-${value}`;
       const contractId = `31000000-0000-4000-8000-${value}`;
       const runId = `32000000-0000-4000-8000-${value}`;
+      const runnerInstanceId = `33000000-0000-4000-8000-${value}`;
       await db.insert(issues).values({
         id: issueId,
         companyId: identity.companyId,
@@ -953,6 +1110,9 @@ describe("PaperclipControlPlanePort conformance", () => {
         agentId: identity.agentId,
         status: "running",
         runtimeMode: "native",
+        nativeIssueId: issueId,
+        nativeSessionId: identity.sessionId,
+        runnerInstanceId,
         completionContractId: contractId,
         completionContractSha256: `contract-${entry.suffix}`,
         contextSnapshot: { issueId },
@@ -967,15 +1127,16 @@ describe("PaperclipControlPlanePort conformance", () => {
         issueId,
         runId,
         agentId: identity.agentId,
+        sessionId: identity.sessionId,
         completionContractId: contractId,
         completionContractSha256: `contract-${entry.suffix}`,
-        sourceInstanceId: `atomic-runner-${entry.suffix}`,
+        sourceInstanceId: runnerInstanceId,
         controlPlaneSourceInstanceId: `atomic-control-${entry.suffix}`,
       });
       await port.openRun({
         identity: { ...identity, issueId, runId },
         backendKind: "mock",
-        sourceInstanceId: `atomic-runner-${entry.suffix}`,
+        sourceInstanceId: runnerInstanceId,
       });
       await port.completeRun({ result: entry.result, terminal, callerResultId: `atomic-result-${entry.suffix}` });
       await expect(finalizeNativeRun({

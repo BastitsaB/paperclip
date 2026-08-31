@@ -267,4 +267,3 @@ Common patterns:
 See also
 [`durable-continuation-scheduler.md`](./durable-continuation-scheduler.md) for
 the scheduler and recovery behavior that follows an `in_progress` decision.
-

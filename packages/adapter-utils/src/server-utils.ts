@@ -1701,24 +1701,34 @@ export function renderPaperclipWakePrompt(
     lines.push(`- checkbox selection ids: ${selectedOptionIds}`);
     lines.push(`- checkbox selection options: ${selectedOptions}`);
   }
-  const hasWakeComments = normalized.comments.length > 0;
-  const acceptedPlanContinuation =
-    !hasWakeComments &&
-    !normalized.taskWatchdog &&
-    (Boolean(normalized.planReviewContext?.interaction?.acceptedTargetRevision) ||
-      (normalized.interactionKind === "request_confirmation" && normalized.interactionStatus === "accepted"));
-  if (normalized.issue?.workMode === "planning" && !normalized.taskWatchdog && !acceptedPlanContinuation) {
+  if (normalized.issue?.workMode === "planning" && !normalized.taskWatchdog) {
+    const hasWakeComments = normalized.comments.length > 0;
+    const acceptedPlanContinuation =
+      !hasWakeComments &&
+      (Boolean(normalized.planReviewContext?.interaction?.acceptedTargetRevision) ||
+        (normalized.interactionKind === "request_confirmation" &&
+          normalized.interactionStatus === "accepted"));
+    const acceptedPlanWithMissingWakeComment =
+      acceptedPlanContinuation
+      && normalized.commentIds.length > 0
+      && normalized.fallbackFetchNeeded;
     let directive = "Make the plan only. Do not write code or perform implementation work.";
     if (hasWakeComments) {
       directive = "Update the plan only. Do not write code or perform implementation work.";
     }
+    if (acceptedPlanContinuation) {
+      directive = acceptedPlanWithMissingWakeComment
+        ? "Continue the accepted-plan review only. Do not write code or perform implementation work on the planning issue."
+        : "Create child issues from the approved plan only. Do not write code or perform implementation work on the planning issue.";
+    }
     lines.push(`- planning directive: ${directive}`);
-  }
-  if (acceptedPlanContinuation) {
-    lines.push(
-      "- accepted-plan directive: implement the accepted plan on this issue when the work is small and cohesive; use the paperclip-converting-plans-to-tasks skill and create only the minimum subissue graph justified by ownership, parallelism, dependency, review, or lifecycle boundaries",
-      "- accepted-plan topology: do not create a child merely because a plan was accepted, and block the source issue only when it genuinely waits for delegated results",
-    );
+    if (acceptedPlanContinuation) {
+      lines.push(
+        acceptedPlanWithMissingWakeComment
+          ? "- accepted-plan continuation: fetch and reconcile the missing wake comment; do not create a child merely because a plan was accepted"
+          : "- accepted-plan continuation: you may create child implementation issues from the approved plan, but must not start implementation work on the planning issue itself",
+      );
+    }
   }
   if (normalized.checkedOutByHarness) {
     lines.push("- checkout: already claimed by the harness for this run");

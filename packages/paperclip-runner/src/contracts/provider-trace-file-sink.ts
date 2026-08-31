@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, chmod, readFile } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const MAX_PENDING_RECORDS = 1_024;
@@ -28,10 +28,11 @@ type ProviderTraceFieldMapping = {
  * or failed sidecar becomes an incomplete trace instead of run backpressure.
  */
 export class ProviderTraceFileSink {
-  readonly #path: string;
+  readonly #file: FileHandle;
   readonly #provider: string;
   readonly #channel: string;
   readonly #maxBytes: number;
+  readonly #sensitiveValues = new Set<string>();
   readonly #queue: string[] = [];
   #nextFrameId: number;
   #nextDebugSequence: number;
@@ -42,7 +43,7 @@ export class ProviderTraceFileSink {
   #incompleteReason: string | null = null;
 
   constructor(input: {
-    path: string;
+    file: FileHandle;
     provider: string;
     channel: string;
     maxBytes?: number;
@@ -50,13 +51,19 @@ export class ProviderTraceFileSink {
     nextDebugSequence?: number;
     capturedBytes?: number;
   }) {
-    this.#path = input.path;
+    this.#file = input.file;
     this.#provider = input.provider;
     this.#channel = input.channel;
     this.#maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#nextFrameId = input.nextFrameId ?? 1;
     this.#nextDebugSequence = input.nextDebugSequence ?? 1;
     this.#capturedBytes = input.capturedBytes ?? 0;
+  }
+
+  addSensitiveValues(values: readonly (string | undefined)[]): void {
+    for (const value of values) {
+      if (value) this.#sensitiveValues.add(value);
+    }
   }
 
   frame(input: {
@@ -66,7 +73,9 @@ export class ProviderTraceFileSink {
     nativeMethod?: string;
   }): number | null {
     if (this.#closed) return null;
-    const raw = typeof input.raw === "string" ? Buffer.from(input.raw) : Buffer.from(input.raw);
+    const raw = this.#redact(
+      typeof input.raw === "string" ? Buffer.from(input.raw) : Buffer.from(input.raw),
+    );
     if (this.#capturedBytes + raw.byteLength > this.#maxBytes) {
       this.#truncated = true;
       return null;
@@ -134,7 +143,7 @@ export class ProviderTraceFileSink {
     });
     this.#closed = true;
     await this.#draining;
-    await chmod(this.#path, 0o600).catch(() => undefined);
+    await this.#file.close().catch(() => undefined);
   }
 
   #append(value: TraceRecord): void {
@@ -162,13 +171,24 @@ export class ProviderTraceFileSink {
     while (this.#queue.length > 0) {
       const line = this.#queue.shift()!;
       try {
-        await appendFile(this.#path, line, { encoding: "utf8", mode: 0o600 });
+        await this.#file.appendFile(line, { encoding: "utf8" });
       } catch {
         this.#incompleteReason ??= "trace_sidecar_write_failed";
         this.#queue.length = 0;
         return;
       }
     }
+  }
+
+  #redact(raw: Buffer): Buffer {
+    if (this.#sensitiveValues.size === 0) return raw;
+    let value = raw.toString("utf8");
+    for (const sensitive of [...this.#sensitiveValues].sort(
+      (left, right) => right.length - left.length,
+    )) {
+      value = value.split(sensitive).join("[REDACTED]");
+    }
+    return Buffer.from(value, "utf8");
   }
 }
 
@@ -182,7 +202,19 @@ export async function createProviderTraceFileSink(input: {
   const maxBytes = typeof input.maxBytes === "number"
     ? input.maxBytes
     : Number.parseInt(input.maxBytes ?? "", 10);
-  const existing = await readFile(input.path, "utf8").catch(() => "");
+  // Keep one descriptor for the sink lifetime. This prevents a path swap
+  // between permission hardening, replay inspection, and later appends.
+  const file = await open(input.path, "a+", 0o600);
+  let existing: string;
+  try {
+    // Opening an existing file preserves its prior mode. Tighten it before
+    // reading or appending so no provider frame has a readable exposure window.
+    await file.chmod(0o600);
+    existing = await file.readFile({ encoding: "utf8" });
+  } catch (error) {
+    await file.close().catch(() => undefined);
+    throw error;
+  }
   let nextFrameId = 1;
   let nextDebugSequence = 1;
   let capturedBytes = 0;
@@ -205,7 +237,7 @@ export async function createProviderTraceFileSink(input: {
     }
   }
   return new ProviderTraceFileSink({
-    path: input.path,
+    file,
     provider: input.provider,
     channel: input.channel,
     maxBytes: Number.isSafeInteger(maxBytes) && maxBytes > 0 ? maxBytes : DEFAULT_MAX_BYTES,

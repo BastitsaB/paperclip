@@ -146,6 +146,7 @@ import {
   acceptIssueThreadInteractionSchema,
   rejectIssueThreadInteractionSchema,
   respondIssueThreadInteractionSchema,
+  skipIssueThreadInteractionSchema,
   submitIssueThreadInteractionVerdictsSchema,
   withdrawIssueThreadInteractionSchema,
   // Auth / profile
@@ -916,6 +917,7 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "POST /api/issues/{id}/interactions/{interactionId}/accept",
   "POST /api/issues/{id}/interactions/{interactionId}/reject",
   "POST /api/issues/{id}/interactions/{interactionId}/respond",
+  "POST /api/issues/{id}/interactions/{interactionId}/skip",
   "POST /api/issues/{id}/interactions/{interactionId}/withdraw",
   "GET /api/companies/{companyId}/tools/gallery",
   "GET /api/companies/{companyId}/tools/apps/{galleryKey}/preflight",
@@ -4556,42 +4558,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/api/companies/{companyId}/managed-agent-profiles",
-  tags: ["agents"],
-  summary: "List managed agent profiles for a company",
-  request: { params: z.object({ companyId: z.string() }) },
-  responses: { 200: r.ok(), 401: r.unauthorized },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/api/companies/{companyId}/managed-agent-profiles",
-  tags: ["agents"],
-  summary: "Create a managed agent profile",
-  request: { params: z.object({ companyId: z.string() }) },
-  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/api/companies/{companyId}/remote-agent-profiles",
-  tags: ["agents"],
-  summary: "List remote agent profiles for a company",
-  request: { params: z.object({ companyId: z.string() }) },
-  responses: { 200: r.ok(), 401: r.unauthorized },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/api/companies/{companyId}/remote-agent-profiles",
-  tags: ["agents"],
-  summary: "Create a remote agent profile",
-  request: { params: z.object({ companyId: z.string() }) },
-  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized },
-});
-
-registry.registerPath({
-  method: "get",
   path: "/api/companies/{companyId}/live-runs",
   tags: ["runs"],
   summary: "List live runs for a company",
@@ -4716,22 +4682,6 @@ registry.registerPath({
       queueId: z.string().min(1),
       revision: z.string().min(1),
       orderedCommentIds: z.array(z.string().min(1)).max(500),
-    })),
-  },
-  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 404: r.notFound, 409: r.conflict },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/api/issues/{id}/queued-comments/{commentId}/steer",
-  tags: ["issues"],
-  summary: "Steer a queued issue comment into the active run",
-  request: {
-    params: z.object({ id: z.string(), commentId: z.string() }),
-    body: jsonBody(z.object({
-      queueId: z.string().min(1),
-      targetRunId: z.string().min(1),
-      revision: z.string().min(1),
     })),
   },
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 404: r.notFound, 409: r.conflict },
@@ -7295,6 +7245,14 @@ registerCurrentRoute({
 
 registerCurrentRoute({
   method: "post",
+  path: "/api/issues/{id}/interactions/{interactionId}/skip",
+  tags: ["issues"],
+  summary: "Skip a pending issue thread interaction",
+  body: skipIssueThreadInteractionSchema,
+});
+
+registerCurrentRoute({
+  method: "post",
   path: "/api/issues/{id}/interactions/{interactionId}/withdraw",
   tags: ["issues"],
   summary: "Withdraw a pending issue thread interaction",
@@ -7774,9 +7732,44 @@ registerCurrentRoute({
 
 registerCurrentRoute({
   method: "get",
+  path: "/api/tools/oauth/cloud-connector/callback",
+  tags: ["tool-access"],
+  summary: "Handle a brokered Paperclip Cloud OAuth callback",
+});
+
+registerCurrentRoute({
+  method: "get",
   path: "/api/tools/oauth/paperclip-id/callback",
   tags: ["tool-access"],
-  summary: "Handle a brokered Paperclip ID OAuth callback",
+  summary: "Handle a legacy brokered Paperclip ID OAuth callback",
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/tools/oauth/cloud-connector/enrollment",
+  tags: ["tool-access"],
+  summary: "Get Paperclip Cloud connector enrollment status",
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/tools/oauth/cloud-connector/enrollment",
+  tags: ["tool-access"],
+  summary: "Start Paperclip Cloud connector enrollment",
+  body: z.object({ companyId: z.string().min(1), label: z.string().optional() }).strict(),
+  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/tools/oauth/cloud-connector/enrollment-callback",
+  tags: ["tool-access"],
+  summary: "Complete Paperclip Cloud connector enrollment",
+  query: z.object({
+    enrollment_id: z.string().min(1),
+    approval_code: z.string().min(1),
+    state: z.string().min(1),
+  }).strict(),
 });
 
 registerCurrentRoute({

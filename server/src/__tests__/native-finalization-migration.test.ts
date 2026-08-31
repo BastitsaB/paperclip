@@ -14,10 +14,17 @@ describe("P6-18 / MIG-01..04 native finalization migration", () => {
   it("repairs only later duplicates and preserves legacy event bytes and cursors", async () => {
     const temporary = await startEmbeddedPostgresTestDatabase("paperclip-native-migration-");
     const migration = await readFile(
-      new URL("../../../packages/db/src/migrations/0227_sharp_lilandra.sql", import.meta.url),
+      new URL("../../../packages/db/src/migrations/0227_modern_pandemic.sql", import.meta.url),
       "utf8",
     );
     const migrationHash = createHash("sha256").update(migration).digest("hex");
+    const sequenceMigration = await readFile(
+      new URL("../../../packages/db/src/migrations/0235_heartbeat_run_event_sequence_uniqueness.sql", import.meta.url),
+      "utf8",
+    );
+    const sequenceMigrationHash = createHash("sha256")
+      .update(sequenceMigration)
+      .digest("hex");
     const rawDb = createDb(temporary.connectionString);
     try {
       const companyId = "10000000-0000-4000-8000-000000000001";
@@ -31,6 +38,8 @@ describe("P6-18 / MIG-01..04 native finalization migration", () => {
         DROP TRIGGER IF EXISTS paperclip_issue_status_version_trigger ON issues;
         DROP FUNCTION IF EXISTS paperclip_bump_issue_status_version();
         DROP INDEX IF EXISTS heartbeat_run_events_run_seq_uq;
+        CREATE INDEX IF NOT EXISTS heartbeat_run_events_run_seq_idx
+          ON heartbeat_run_events (run_id, seq);
         DROP INDEX IF EXISTS heartbeat_run_events_run_source_event_uq;
         DROP INDEX IF EXISTS heartbeat_run_events_run_source_seq_uq;
         ALTER TABLE heartbeat_run_events
@@ -60,6 +69,7 @@ describe("P6-18 / MIG-01..04 native finalization migration", () => {
           DROP COLUMN IF EXISTS last_status_decision_id;
       `));
       await rawDb.execute(sql`DELETE FROM "drizzle"."__drizzle_migrations" WHERE "hash" = ${migrationHash}`);
+      await rawDb.execute(sql`DELETE FROM "drizzle"."__drizzle_migrations" WHERE "hash" = ${sequenceMigrationHash}`);
       await rawDb.execute(sql`
         INSERT INTO companies (id, name, issue_prefix)
         VALUES (${companyId}, 'Migration fixture', 'MIG')

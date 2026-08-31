@@ -18,7 +18,7 @@ import {
   CONTROL_PLANE_CONFORMANCE_OPEN,
   CONTROL_PLANE_CONFORMANCE_RESULT,
   CONTROL_PLANE_CONFORMANCE_TERMINAL,
-} from "@paperclipai/paperclip-runner/testing";
+} from "../vendor/paperclip-runner/testing.js";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { reconcileNativeFinalizations } from "../services/native-runtime/native-finalization-reconciler.js";
 import { PaperclipControlPlanePort } from "../services/native-runtime/paperclip-control-plane-port.js";
@@ -80,6 +80,9 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
       status: "running",
       runtimeMode: "native",
       runtimeModeReason: "persisted_before_kill_switch",
+      nativeIssueId: issueId,
+      nativeSessionId: runId,
+      runnerInstanceId: contractId,
       completionContractId: contractId,
       completionContractSha256: "native-recovery-contract",
       contextSnapshot: { issueId },
@@ -89,15 +92,16 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
       issueId,
       runId,
       agentId,
+      sessionId: runId,
       completionContractId: contractId,
       completionContractSha256: "native-recovery-contract",
-      sourceInstanceId: "recovery-runner",
+      sourceInstanceId: contractId,
       controlPlaneSourceInstanceId: "recovery-control",
     });
     await port.openRun({
       ...CONTROL_PLANE_CONFORMANCE_OPEN,
-      identity: { companyId, issueId, runId, agentId, normalizedSessionId: "recovery-session" },
-      sourceInstanceId: "recovery-runner",
+      identity: { companyId, issueId, runId, agentId, sessionId: runId },
+      sourceInstanceId: contractId,
     });
     await port.completeRun({
       result: CONTROL_PLANE_CONFORMANCE_RESULT,
@@ -154,6 +158,9 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
       status: "running",
       runtimeMode: "native",
       runtimeModeReason: "persisted_before_kill_switch",
+      nativeIssueId: staleIssueId,
+      nativeSessionId: staleRunId,
+      runnerInstanceId: staleContractId,
       completionContractId: staleContractId,
       completionContractSha256: "stale-finalizer-contract",
       contextSnapshot: { issueId: staleIssueId },
@@ -163,15 +170,16 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
       issueId: staleIssueId,
       runId: staleRunId,
       agentId,
+      sessionId: staleRunId,
       completionContractId: staleContractId,
       completionContractSha256: "stale-finalizer-contract",
-      sourceInstanceId: "stale-runner",
+      sourceInstanceId: staleContractId,
       controlPlaneSourceInstanceId: "stale-control",
     });
     await stalePort.openRun({
       ...CONTROL_PLANE_CONFORMANCE_OPEN,
-      identity: { companyId, issueId: staleIssueId, runId: staleRunId, agentId, normalizedSessionId: "stale-session" },
-      sourceInstanceId: "stale-runner",
+      identity: { companyId, issueId: staleIssueId, runId: staleRunId, agentId, sessionId: staleRunId },
+      sourceInstanceId: staleContractId,
     });
     await stalePort.completeRun({
       result: CONTROL_PLANE_CONFORMANCE_RESULT,
@@ -248,6 +256,7 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
       agentId,
       status: "succeeded",
       runtimeMode: "native",
+      nativeIssueId: staleIssueId,
       completionContractId: staleContractId,
       completionContractSha256: "stale-finalizer-contract",
       contextSnapshot: { issueId: staleIssueId },
@@ -282,6 +291,7 @@ describe("P6-16/P6-25/P6-28 native finalization recovery", () => {
     const [newerDecision] = await db.insert(statusDecisions).values({
       companyId,
       issueId: staleIssueId,
+      runId: newerRunId,
       assessmentId: newerAssessment!.id,
       decisionVersion: 1,
       policyVersion: "phase6-v3",

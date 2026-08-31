@@ -77,7 +77,11 @@ import {
   assertIssueReviewVerdictActorAllowed,
   isIssueReviewVerdictInteraction,
 } from "./issue-review-policy.js";
-import { issueService, runWorkspaceIsFinalized } from "./issues.js";
+import {
+  issueService,
+  readAcceptedPlanConfirmationTarget,
+  runWorkspaceIsFinalized,
+} from "./issues.js";
 import { questionResponseDeliveryValues } from "./question-response-delivery.js";
 import {
   assertIssueThreadInteractionResolverAudience,

@@ -638,8 +638,15 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
       expect(token.tokenPrefix).toMatch(/^pcgw_[a-f0-9]{8}$/);
 
       const app = createGatewayRouteApp(db, gateway);
+      const publicEndpoint = created.endpointPath;
+      const queryOnly = await request(app)
+        .post(`${publicEndpoint}?paperclip_capability=${encodeURIComponent(token.token)}`)
+        .send({ jsonrpc: "2.0", id: "query-only", method: "tools/list" })
+        .expect(401);
+      expect(queryOnly.body.error).toBe("Bearer token is required");
+
       const listed = await request(app)
-        .post(`/api/tool-gateway/gateways/${created.id}/mcp`)
+        .post(publicEndpoint)
         .set("authorization", `Bearer ${token.token}`)
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" })
         .expect(200);

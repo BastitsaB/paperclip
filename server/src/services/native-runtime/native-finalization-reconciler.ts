@@ -171,9 +171,10 @@ export async function dispatchNativeSessionResumptions(input: {
 }
 
 /**
- * Claims result-less native executions for same-run recovery. Eligibility is
- * derived exclusively from persisted mode/coordinator/envelope/checkpoint
- * state; the live feature flag and legacy scheduler are intentionally absent.
+ * Claims explicit, result-less retryable failures for same-run recovery.
+ * Merely expired `observed` ownership stays blocked because lease expiry alone
+ * does not prove that the original provider owner stopped. Eligibility remains
+ * independent of the live feature flag and legacy scheduler.
  */
 export async function claimNativeSessionResumptions(input: {
   db: Db;
@@ -188,11 +189,10 @@ export async function claimNativeSessionResumptions(input: {
     .innerJoin(nativeRunFinalizations, eq(nativeRunFinalizations.runId, heartbeatRuns.id))
     .where(and(
       eq(heartbeatRuns.runtimeMode, "native"),
+      isNull(heartbeatRuns.processPid),
+      isNull(heartbeatRuns.processGroupId),
       isNull(nativeRunFinalizations.resultId),
-      or(
-        eq(nativeRunFinalizations.phase, "retryable_failure"),
-        and(eq(nativeRunFinalizations.phase, "observed"), gt(nativeRunFinalizations.attempt, 0)),
-      ),
+      eq(nativeRunFinalizations.phase, "retryable_failure"),
       or(isNull(nativeRunFinalizations.nextAttemptAt), lte(nativeRunFinalizations.nextAttemptAt, now)),
       or(
         isNull(nativeRunFinalizations.leaseOwner),
@@ -219,9 +219,10 @@ export async function claimNativeSessionResumptions(input: {
       if (!row) return false;
       if (
         row.run.runtimeMode !== "native"
+        || row.run.processPid !== null
+        || row.run.processGroupId !== null
         || row.coordinator.resultId
-        || !["observed", "retryable_failure"].includes(row.coordinator.phase)
-        || (row.coordinator.phase === "observed" && row.coordinator.attempt <= 0)
+        || row.coordinator.phase !== "retryable_failure"
         || (row.coordinator.nextAttemptAt && row.coordinator.nextAttemptAt > now)
         || (
           row.coordinator.leaseOwner

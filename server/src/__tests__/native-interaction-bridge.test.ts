@@ -406,6 +406,9 @@ describe("P6-19 native interaction bridge", () => {
         runtimeModeResolverVersion: "phase6-v1",
         runtimeModeReason: "eligible_opt_in",
         runtimeModeResolvedAt: new Date(),
+        nativeIssueId: scenario.issueId,
+        nativeSessionId: scenario.runId,
+        runnerInstanceId: scenario.contractId,
         completionContractId: scenario.contractId,
         completionContractSha256: contractSha,
         contextSnapshot: { issueId: scenario.issueId },
@@ -415,9 +418,10 @@ describe("P6-19 native interaction bridge", () => {
         issueId: scenario.issueId,
         runId: scenario.runId,
         agentId,
+        sessionId: scenario.runId,
         completionContractId: scenario.contractId,
         completionContractSha256: contractSha,
-        sourceInstanceId: `runner:${scenario.key}`,
+        sourceInstanceId: scenario.contractId,
         controlPlaneSourceInstanceId: `control:${scenario.key}`,
       });
       await port.completeRun({
@@ -561,6 +565,9 @@ describe("P6-19 native interaction bridge", () => {
         runtimeModeResolverVersion: "phase6-v1",
         runtimeModeReason: "eligible_opt_in",
         runtimeModeResolvedAt: new Date(),
+        nativeIssueId: localIssueId,
+        nativeSessionId: localRunId,
+        runnerInstanceId: localContractId,
         completionContractId: localContractId,
         completionContractSha256: contractSha,
         contextSnapshot: { issueId: localIssueId },
@@ -577,9 +584,10 @@ describe("P6-19 native interaction bridge", () => {
         issueId: localIssueId,
         runId: localRunId,
         agentId,
+        sessionId: localRunId,
         completionContractId: localContractId,
         completionContractSha256: contractSha,
-        sourceInstanceId: `audit-runner:${input.label}`,
+        sourceInstanceId: localContractId,
         controlPlaneSourceInstanceId: `audit-control:${input.label}`,
       });
       await port.completeRun({
