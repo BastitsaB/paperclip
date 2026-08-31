@@ -631,6 +631,7 @@ async function stopChildForRestart() {
 }
 
 async function startServerChild() {
+  await buildPaperclipRunner();
   await buildPluginSdk();
 
   const serverScript = mode === "watch" ? "dev:watch" : "dev";
