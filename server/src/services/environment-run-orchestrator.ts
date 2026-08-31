@@ -44,12 +44,12 @@ import {
   type AdapterWorkspaceRealization,
 } from "@paperclipai/adapter-utils/execution-target";
 import type { DuplexObservabilityRecorder } from "@paperclipai/adapter-utils/duplex-observability";
-import { buildWorkspaceRealizationRequest } from "./workspace-realization.js";
-import { executionWorkspaceService } from "./execution-workspaces.js";
+import { buildWorkspaceRealizationRequest } from "./worktree-realization.js";
+import { executionWorkspaceService } from "./execution-worktrees.js";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
-import type { RealizedExecutionWorkspace } from "./workspace-runtime.js";
+import type { RealizedExecutionWorkspace } from "./worktree-runtime.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
 // ---------------------------------------------------------------------------

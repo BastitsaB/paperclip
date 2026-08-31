@@ -69,7 +69,7 @@ import { isLoginCommandSupportedAdapterType } from "../services/login-command.js
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectAgentAdapterWorkspaceCommandPaths,
-} from "./workspace-command-authz.js";
+} from "./worktree-command-authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { resolveEnvironmentExecutionTarget } from "../services/environment-execution-target.js";

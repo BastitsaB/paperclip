@@ -9,7 +9,7 @@ import {
   ensureWorktreeSeeded,
   readWorktreeSeedManifest,
 } from "../../../cli/src/commands/worktree.ts";
-import { realizeExecutionWorkspace } from "../services/workspace-runtime.ts";
+import { realizeExecutionWorkspace } from "../services/worktree-runtime.ts";
 
 const execFileAsync = promisify(execFile);
 const cleanup: string[] = [];

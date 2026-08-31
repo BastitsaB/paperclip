@@ -183,7 +183,7 @@ function registerModuleMocks() {
     syncInstructionsBundleConfigFromFilePath: mockSyncInstructionsBundleConfigFromFilePath,
   }));
 
-  vi.doMock("../services/workspace-operations.js", () => ({
+  vi.doMock("../services/worktree-operations.js", () => ({
     workspaceOperationService: () => mockWorkspaceOperationService,
   }));
 

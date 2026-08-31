@@ -158,11 +158,11 @@ import {
   type RuntimeServiceRef,
   type UnresolvedWorkspaceBaseRefError,
   sanitizeRuntimeServiceBaseEnv,
-} from "./workspace-runtime.js";
+} from "./worktree-runtime.js";
 import {
   readManagedWorktreeInstanceOwnership,
   WORKTREE_INSTANCE_ROOT_METADATA_KEY,
-} from "./workspace-instance-cleanup.js";
+} from "./worktree-instance-cleanup.js";
 import { issueService } from "./issues.js";
 import { projectService } from "./projects.js";
 import { getEnvironmentDriverTraits } from "./environment-driver-traits.js";
@@ -188,13 +188,13 @@ import {
   refreshIssueContinuationSummary,
 } from "./issue-continuation-summary.js";
 import { buildDocumentReviewContext, buildPlanReviewContext } from "./plan-review-context.js";
-import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
+import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-worktrees.js";
 import {
   GIT_BRANCH_OWNERSHIP_METADATA_KEY,
   GIT_BRANCH_OWNERSHIP_METADATA_VERSION,
   isRuntimeOwnedGitBranch,
-} from "./execution-workspace-branch-ownership.js";
-import { workspaceOperationService, type WorkspaceOperationRecorder } from "./workspace-operations.js";
+} from "./execution-worktree-branch-ownership.js";
+import { workspaceOperationService, type WorkspaceOperationRecorder } from "./worktree-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
 import {
   HEARTBEAT_RUN_SCRATCH_MARKER,
@@ -218,7 +218,7 @@ import {
   WORKSPACE_WORKTREE_REQUIRES_PROJECT_CODE,
   WORKSPACE_WORKTREE_REQUIRES_PROJECT_MESSAGE,
   WORKSPACE_WORKTREE_REQUIRES_PROJECT_REMEDIATION,
-} from "./execution-workspace-policy.js";
+} from "./execution-worktree-policy.js";
 import {
   instanceSettingsService,
   resolveWorktreeRunExecutionActivation,
@@ -306,7 +306,7 @@ import { parseExecutionPolicyBootstrapEnv } from "./execution-policy-bootstrap.j
 import { environmentRuntimeService } from "./environment-runtime.js";
 import { skillVersionSelectionMap } from "./runtime-skill-selections.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
-import { isUnsafeSessionWorkspaceCwd } from "./session-workspace-cwd.js";
+import { isUnsafeSessionWorkspaceCwd } from "./session-worktree-cwd.js";
 import {
   clearHeartbeatRunRuntimeStatus,
   getHeartbeatRunRuntimeStatus,

@@ -36,7 +36,7 @@ import type {
 } from "../constants.js";
 import type { Goal } from "./goal.js";
 import type { Project, ProjectWorktree } from "./project.js";
-import type { ExecutionWorktree, IssueExecutionWorktreeSettings } from "./workspace-runtime.js";
+import type { ExecutionWorktree, IssueExecutionWorktreeSettings } from "./worktree-runtime.js";
 import type { IssueWorkProduct } from "./work-product.js";
 import type {
   LowTrustReviewPresetPolicy,

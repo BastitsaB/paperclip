@@ -1,4 +1,4 @@
-import type { WorktreeCommandDefinition, WorktreeRuntimeService } from "./types/workspace-runtime.js";
+import type { WorktreeCommandDefinition, WorktreeRuntimeService } from "./types/worktree-runtime.js";
 import { forceLoopbackBindInCommand } from "./runtime-exposure/loopback-bind.js";
 
 type WorktreeRuntimeServiceMatchCandidate =

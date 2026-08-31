@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   resetRuntimeServicesForTests,
   startRuntimeServicesForWorkspaceControl,
-} from "../services/workspace-runtime.js";
+} from "../services/worktree-runtime.js";
 import {
   doesLocalServiceCommandLineMatch,
   isLocalServiceCommandLineComparable,

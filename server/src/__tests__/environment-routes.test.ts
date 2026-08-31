@@ -112,7 +112,7 @@ vi.mock("../services/environment-runtime.js", () => ({
   environmentRuntimeService: () => mockEnvironmentRuntimeService,
 }));
 
-vi.mock("../services/execution-workspaces.js", () => ({
+vi.mock("../services/execution-worktrees.js", () => ({
   executionWorkspaceService: () => mockExecutionWorkspaceService,
 }));
 

@@ -135,7 +135,7 @@ vi.mock("../services/index.js", () => ({
   workProductService: () => mockWorkProductService,
 }));
 
-vi.mock("../services/execution-workspaces.js", () => ({
+vi.mock("../services/execution-worktrees.js", () => ({
   executionWorkspaceService: () => mockExecutionWorkspaceService,
   STALE_REOPEN_PENDING_CONSUMPTION_GRACE_MS: 5 * 60 * 1000,
 }));
