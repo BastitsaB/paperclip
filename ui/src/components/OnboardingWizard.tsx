@@ -92,7 +92,9 @@ import {
   onboardingStepPositionFor,
 } from "./onboarding/Stepper";
 import { AgentPreview } from "./onboarding/AgentPreview";
-import { ModelSourceTiles } from "./onboarding/ModelSourceTiles";
+import { ModelSourceTiles, type CredentialMode } from "./onboarding/ModelSourceTiles";
+import { CredentialModeLink } from "./onboarding/CredentialModeLink";
+import { ApiKeyField, ConnectInputCanvas } from "./onboarding/ConnectInputCanvas";
 import { FooterNav } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
 import { DEFAULT_AGENT_ROLE } from "../lib/onboarding-agent-role";
@@ -185,6 +187,23 @@ const MODEL_SOURCE_BRAND_MARKS: Record<string, string> = {
   claude_local: "/brands/claude-color.svg",
   codex_local: "/brands/codex-color.svg",
 };
+
+/**
+ * The environment variable each source reads its key from.
+ *
+ * Named rather than described in the field above it, because the customer knows
+ * which key they are holding and does not know where this step will put it. The
+ * mapping already existed in this file as prose inside the environment-check
+ * hint; this is the same knowledge, in a form the key field can use.
+ */
+const API_KEY_ENV_KEYS: Record<string, string> = {
+  claude_local: ANTHROPIC_API_KEY_ENV_KEY,
+  codex_local: "OPENAI_API_KEY",
+};
+
+function apiKeyEnvKeyFor(adapterType: string): string {
+  return API_KEY_ENV_KEYS[adapterType] ?? "API_KEY";
+}
 
 function ModelSourceMark({
   type,
@@ -524,6 +543,22 @@ function OnboardingWizardInner({
     useState(false);
   const [unsetAnthropicLoading, setUnsetAnthropicLoading] = useState(false);
   const [showMoreAdapters, setShowMoreAdapters] = useState(false);
+  /**
+   * Whether the connect step is asking for a subscription sign-in or an API key.
+   *
+   * Restored from the draft like everything else on this step: someone who
+   * picked keys, left, and came back should not be handed a sign-in panel they
+   * already said no to.
+   */
+  const [credentialMode, setCredentialMode] = useState<CredentialMode>(
+    (saved?.credentialMode as CredentialMode) ?? "subscription",
+  );
+  /**
+   * The key itself, held only for as long as the wizard is open. It is written
+   * into the adapter config at hire time and never into the draft — a draft is
+   * `localStorage`, and a provider key does not belong there.
+   */
+  const [apiKey, setApiKey] = useState("");
   // The owner's stored Claude subscription login, read right before the hire
   // (see handleGiveHeartbeat). Onboarding applies it with no extra control,
   // so nothing else reads this state yet.
@@ -765,6 +800,8 @@ function OnboardingWizardInner({
     const state = {
       step, companyName, companyGoal, missionPath, missionConfirmed,
       q1, q2, q3, q4, agentName, agentRole, adapterType, cwd, model, command, args, url,
+      // The mode, never the key: this blob is localStorage.
+      credentialMode,
       createdCompanyId, createdCompanyPrefix, createdAgentId,
       createdCompanyGoalId, createdProjectId, createdIssueRef,
       onboardingPath, growWorkflows, growPainPoints, growAutomate,
@@ -773,6 +810,7 @@ function OnboardingWizardInner({
   }, [
     effectiveOnboardingOpen, step, companyName, companyGoal, missionPath, missionConfirmed,
     q1, q2, q3, q4, agentName, agentRole, adapterType, cwd, model, command, args, url,
+    credentialMode,
     createdCompanyId, createdCompanyPrefix, createdAgentId,
     createdCompanyGoalId, createdProjectId, createdIssueRef,
     onboardingPath, growWorkflows, growPainPoints, growAutomate,
@@ -932,6 +970,25 @@ function OnboardingWizardInner({
       moreAdapters: all.filter((a) => !a.recommended),
     };
   }, [disabledTypes]);
+
+  /**
+   * A source chosen from the visible row. Read off the row rather than off
+   * `adapterType` alone, because a restored draft can name an adapter this step
+   * no longer offers — a selection the customer cannot see.
+   */
+  const sourceSelected = recommendedAdapters.some((opt) => opt.type === adapterType);
+
+  /**
+   * When the input canvas is open.
+   *
+   * A selected source is the ordinary reason — the card is the answer to the
+   * tile that was just pressed, so an untouched row leaves nothing under it. But
+   * it opens for a pending sign-in regardless of the row, because the adapter
+   * needing credentials does not depend on it having a tile: a restored draft
+   * naming an adapter this step no longer offers still cannot hire without one,
+   * and hiding the panel would leave that dead end with nothing to press.
+   */
+  const canvasOpen = sourceSelected || showAdapterLoginPanel;
 
   // The default (or a saved) adapterType can name an adapter the server has
   // since disabled — e.g. a cloud sandbox registry without claude_local. The
@@ -1214,6 +1271,20 @@ function OnboardingWizardInner({
           ? { ...(config.env as Record<string, unknown>) }
           : {};
       env.ANTHROPIC_API_KEY = { type: "plain", value: "" };
+      config.env = env;
+    }
+    // A key typed on this step is the credential the agent is being hired with,
+    // so it has to reach the configuration the hire sends — and the same one the
+    // environment test probes, or the test would pass on a config the hire does
+    // not use. Only when the mode asks for it: leaving a stale key in the config
+    // after switching back to a subscription is what the server rejects
+    // alongside the Claude OAuth binding.
+    if (credentialMode === "api" && apiKey.trim()) {
+      const env =
+        typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
+          ? { ...(config.env as Record<string, unknown>) }
+          : {};
+      env[apiKeyEnvKeyFor(adapterType)] = { type: "plain", value: apiKey.trim() };
       config.env = env;
     }
     return config;
@@ -2294,7 +2365,7 @@ function OnboardingWizardInner({
                         label: opt.label,
                         icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
                       }))}
-                      mode="subscription"
+                      mode={credentialMode}
                       selectedId={
                         recommendedAdapters.some((opt) => opt.type === adapterType)
                           ? adapterType
@@ -2311,92 +2382,82 @@ function OnboardingWizardInner({
                       }}
                     />
 
-                    <button
-                      className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => setShowMoreAdapters((v) => !v)}
-                    >
-                      <ChevronDown
-                        className={cn(
-                          "h-3 w-3 transition-transform",
-                          showMoreAdapters ? "rotate-0" : "-rotate-90"
-                        )}
-                      />
-                      Advanced settings
-                    </button>
+                    {/* The credential switch stands where the adapter
+                        disclosure used to. That disclosure existed to reach the
+                        adapters this step does not offer, and with the row down
+                        to the two that are supported it was a control whose
+                        whole contents were out of scope. The question actually
+                        left on this step is how the two are authenticated, so
+                        that is what the line asks.
 
-                    {showMoreAdapters && (
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        {moreAdapters.map((opt) => (
-                           <button
-                             key={opt.type}
-                             disabled={!!opt.comingSoon}
-                             className={cn(
-                               "flex flex-col items-center gap-1.5 rounded-md border p-3 text-xs transition-colors relative",
-                               opt.comingSoon
-                                 ? "border-border opacity-40 cursor-not-allowed"
-                                 : adapterType === opt.type
-                                 ? "border-foreground bg-accent"
-                                 : "border-border hover:bg-accent/50"
-                             )}
-                             onClick={() => {
-                               if (opt.comingSoon) return;
-                               const nextType = opt.type;
-                              setAdapterType(nextType);
-                              if (nextType === "gemini_local" && !model) {
-                                setModel(DEFAULT_GEMINI_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "kimi_local" && !model) {
-                                setModel(DEFAULT_KIMI_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "cursor" && !model) {
-                                setModel(DEFAULT_CURSOR_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "opencode_local") {
-                                setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
-                                return;
-                              }
-                              setModel("");
-                            }}
-                          >
-                            <opt.icon className="h-4 w-4" />
-                            <span className="font-medium">{opt.label}</span>
-                            <span className="text-muted-foreground text-(length:--text-nano)">
-                              {opt.comingSoon
-                                ? opt.disabledLabel ?? "Coming soon"
-                                : opt.description}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                        It names the destination rather than the state, which is
+                        what a sentence has to do where a checkbox does not —
+                        and it is only readable because the tiles' own tags,
+                        directly above, say where you are. */}
+                    <div className="-ml-3 mt-1">
+                      <CredentialModeLink
+                        mode={credentialMode}
+                        onChange={setCredentialMode}
+                      />
+                    </div>
+
                   </div>
 
-                  {/* Shows as soon as the cheap auth signal reports no ready
-                      credential, well before any adapter environment test
-                      runs. Reuses the same panel the agent configuration form
-                      shows after a test — see AdapterLoginPanel in
-                      AgentConfigForm.tsx. No "Use saved login" control: the
-                      hire step already applies a stored login on its own. */}
-                  {showAdapterLoginPanel && createdCompanyId && resolvedLoginEnvironmentId && (
-                    <AdapterLoginPanel
-                      key={`${adapterType}:${resolvedLoginEnvironmentId}`}
-                      companyId={createdCompanyId}
-                      adapterType={adapterType}
-                      environmentId={resolvedLoginEnvironmentId}
-                      onStored={() => {
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.agents.authSignal(
-                            createdCompanyId,
-                            adapterType,
-                            resolvedLoginEnvironmentId,
-                          ),
-                        });
-                      }}
-                    />
-                  )}
+                  {/* One canvas under the tiles, holding whatever the current
+                      choice needs: a browser-code login for Claude, a
+                      displayed-code login for Codex, or a key field for either
+                      when the mode is keys. Four inputs, one place — so the
+                      Connect button below does not move every time the answer
+                      changes.
+
+                      Closed until a source is picked. `contentKey` is the
+                      source and the mode together, because either one changing
+                      means a different input, and that is what the canvas
+                      swaps on. */}
+                  <ConnectInputCanvas
+                    open={canvasOpen}
+                    contentKey={`${adapterType}:${credentialMode}`}
+                  >
+                    {credentialMode === "api" ? (
+                      <ApiKeyField
+                        envKey={apiKeyEnvKeyFor(adapterType)}
+                        value={apiKey}
+                        onChange={setApiKey}
+                      />
+                    ) : showAdapterLoginPanel &&
+                      createdCompanyId &&
+                      resolvedLoginEnvironmentId ? (
+                      /* Shows as soon as the cheap auth signal reports no ready
+                         credential, well before any adapter environment test
+                         runs. Reuses the same panel the agent configuration
+                         form shows after a test — see AdapterLoginPanel in
+                         AgentConfigForm.tsx. No "Use saved login" control: the
+                         hire step already applies a stored login on its own. */
+                      <AdapterLoginPanel
+                        key={`${adapterType}:${resolvedLoginEnvironmentId}`}
+                        companyId={createdCompanyId}
+                        adapterType={adapterType}
+                        environmentId={resolvedLoginEnvironmentId}
+                        onStored={() => {
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.agents.authSignal(
+                              createdCompanyId,
+                              adapterType,
+                              resolvedLoginEnvironmentId,
+                            ),
+                          });
+                        }}
+                      />
+                    ) : (
+                      /* Already authenticated for this source. Saying so is
+                         better than an empty card: the canvas is open because a
+                         source is selected, and a blank one reads as something
+                         that failed to load. */
+                      <p className="text-xs text-muted-foreground">
+                        This source is already signed in on the managed sandbox.
+                      </p>
+                    )}
+                  </ConnectInputCanvas>
 
                   {/* Conditional adapter fields */}
                   {/* No model picker. Every adapter this step offers resolves

@@ -134,7 +134,12 @@ vi.mock("../adapters/metadata", () => ({ isVisualAdapterChoice: () => true }));
 vi.mock("../adapters/adapter-display-registry", () => ({
   getAdapterDisplay: (type: string) => ({
     type,
-    recommended: false,
+    // Mirrors the real registry, where these two and only these two are
+    // `recommended`. A blanket `false` used to be harmless because every adapter
+    // then sat in the "Advanced settings" disclosure and was reachable anyway;
+    // with the step down to a tile row built from this flag, it made that row
+    // empty in every test and hid the surface under it.
+    recommended: type === "claude_local" || type === "codex_local",
     label: type,
     description: "",
     icon: () => null,
@@ -1596,8 +1601,13 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
         await flushReact();
       };
 
-      await clickByText((t) => t.startsWith("Advanced settings"));
-      await clickByText((t) => t === "codex_local");
+      // Straight to the tile. The adapter change used to be reached through an
+      // "Advanced settings" disclosure listing every non-recommended adapter;
+      // the step now offers Claude and Codex as tiles and spends that line on
+      // the credential switch instead. What is asserted below is unchanged —
+      // changing the source re-reads the signal — only the route there is.
+      // The tile's text is the label plus its credential tag, hence the prefix.
+      await clickByText((t) => t.startsWith("codex_local"));
 
       expect(mockAgentsApi.getAdapterAuthSignal).toHaveBeenCalledWith(
         "company-new",

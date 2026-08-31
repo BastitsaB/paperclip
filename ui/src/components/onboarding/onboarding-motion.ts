@@ -103,3 +103,48 @@ export const LINK_LABEL_FADE_IN = {
   delay: 0.08,
   ease: TAG_SWAP_EASE,
 } as const;
+
+/**
+ * The connect step's input canvas: the card that opens under the tiles once a
+ * source is picked, and re-fills itself when the choice changes.
+ *
+ * Everything here is the tag swap's vocabulary, reused deliberately. The canvas
+ * is downstream of that control — picking a source or flipping the credential
+ * mode is what fills it — so a second easing or a second rhythm would read as a
+ * separate thing reacting rather than the same gesture continuing.
+ *
+ * Height is animated rather than left to `auto`. The canvas holds a login panel
+ * for one source and a key field for another, and they are not the same height;
+ * an unanimated swap makes the Connect button below jump. Opening from zero
+ * height also lets the card unfold rather than appear, which is what makes it
+ * read as belonging to the tile that was just pressed.
+ */
+export const CANVAS_EASE = TAG_SWAP_EASE;
+export const CANVAS_OPEN = { duration: 0.34, ease: CANVAS_EASE } as const;
+export const CANVAS_CLOSE = { duration: 0.26, ease: CANVAS_EASE } as const;
+
+/**
+ * The content swap inside the canvas, when the source or the credential mode
+ * changes while it is already open.
+ *
+ * Shorter than the canvas opening, and with the same enter/exit asymmetry as the
+ * tag: the outgoing input is mostly gone before the incoming one arrives, so two
+ * different forms are never legible on top of each other.
+ *
+ * `CANVAS_SWAP_HOLD_MS` is the beat the spinner is shown between them. It is not
+ * a fake load — the panels behind it do fetch — but it is a floor, so switching
+ * sources always reads as "fetching the right thing" rather than as a flicker
+ * when the answer happens to be cached.
+ *
+ * The hold has to be comfortably longer than the exit, and that is the whole
+ * reason these three numbers are related rather than picked separately. The
+ * swap runs through `AnimatePresence mode="wait"`, which will not mount the
+ * spinner until the outgoing input has finished leaving — so the exit is spent
+ * before the spinner exists. At a 220ms hold against a 180ms exit the spinner
+ * mounted with 40ms left and never painted at all: the swap looked instant, and
+ * the control that was supposed to explain it was invisible.
+ */
+export const CANVAS_CONTENT_ENTER = { duration: 0.26, ease: CANVAS_EASE } as const;
+export const CANVAS_CONTENT_EXIT = { duration: 0.12, ease: CANVAS_EASE } as const;
+/** Exit (120ms) + a spinner that is actually legible for a beat after it. */
+export const CANVAS_SWAP_HOLD_MS = 400;
