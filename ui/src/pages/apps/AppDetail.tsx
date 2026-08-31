@@ -480,7 +480,7 @@ export function AppDetail() {
         body: `${appName} no longer has access and its credentials are deleted. Connecting it again needs a new sign-in or key.`,
         tone: "success",
       });
-      navigate("/apps/connections");
+      navigate("/apps");
     },
     onError: (error) =>
       pushToast({
@@ -557,7 +557,7 @@ export function AppDetail() {
   };
 
   if (!connectionId || !activeTab) {
-    return <Navigate replace to={connectionId ? appTabHref(connectionId, "setup") : "/apps/connections"} />;
+    return <Navigate replace to={connectionId ? appTabHref(connectionId, "setup") : "/apps"} />;
   }
 
   if (!selectedCompanyId) {
@@ -576,8 +576,8 @@ export function AppDetail() {
     return (
       <div className="max-w-3xl p-6">
         <p className="text-sm text-muted-foreground">We couldn't find that app.</p>
-        <Button className="mt-4" variant="outline" onClick={() => navigate("/apps/connections")}>
-          Back to apps
+        <Button className="mt-4" variant="outline" onClick={() => navigate("/apps")}>
+          Back to connectors
         </Button>
       </div>
     );
