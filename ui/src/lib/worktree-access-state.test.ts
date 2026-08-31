@@ -74,7 +74,7 @@ describe("resolveWorkspaceAccessState", () => {
     });
     expect(access).toMatchObject({
       state: "ready",
-      action: { kind: "open", label: "Open workspace" },
+      action: { kind: "open", label: "Open worktree" },
       handoffAvailable: true,
     });
     expect(access.description).toContain("without a password");
@@ -121,7 +121,7 @@ describe("resolveWorkspaceAccessState", () => {
 
     expect(access).toMatchObject({
       state: "ready",
-      action: { kind: "open", label: "Open workspace" },
+      action: { kind: "open", label: "Open worktree" },
       secondaryNotice: {
         title: "Repair failed",
         action: { kind: "view_logs", label: "View repair log" },
@@ -195,7 +195,7 @@ describe("resolveWorkspaceAccessState", () => {
       runtimeServices: [],
       operations: [operation({ status: "failed", metadata: { seedFailurePhase: "restore" } })],
     });
-    expect(access).toMatchObject({ state: "failed", action: { kind: "repair", label: "Repair workspace" } });
+    expect(access).toMatchObject({ state: "failed", action: { kind: "repair", label: "Repair worktree" } });
     expect(access.description).toContain("restore");
   });
 
@@ -223,7 +223,7 @@ describe("resolveWorkspaceAccessState", () => {
 
     expect(access).toMatchObject({
       state: "ready",
-      action: { kind: "open", label: "Open workspace" },
+      action: { kind: "open", label: "Open worktree" },
       secondaryNotice: {
         title: "Database provisioning failed",
         action: { kind: "view_logs", label: "View provisioning log" },
@@ -254,7 +254,7 @@ describe("resolveWorkspaceAccessState", () => {
 
     expect(access).toMatchObject({
       state: "provisioning",
-      action: { kind: "start", label: "Start workspace" },
+      action: { kind: "start", label: "Start worktree" },
     });
   });
 
@@ -266,7 +266,7 @@ describe("resolveWorkspaceAccessState", () => {
 
     expect(access).toMatchObject({
       state: "ready",
-      action: { kind: "open", label: "Open workspace" },
+      action: { kind: "open", label: "Open worktree" },
       secondaryNotice: {
         title: "Database provisioning failed",
         action: { kind: "view_logs" },
@@ -345,7 +345,7 @@ describe("resolveWorkspaceAccessState", () => {
   it("offers start when nothing is running", () => {
     expect(
       resolveWorktreeAccessState({ runtimeServices: [], operations: [] }),
-    ).toMatchObject({ state: "provisioning", action: { kind: "start", label: "Start workspace" } });
+    ).toMatchObject({ state: "provisioning", action: { kind: "start", label: "Start worktree" } });
 
     expect(
       resolveWorktreeAccessState({

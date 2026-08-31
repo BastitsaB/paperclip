@@ -1358,7 +1358,7 @@ export function ExecutionWorktreeDetail() {
                         />
                       </Field>
 
-                      <Field label="Cleanup command" hint="Workspace-specific cleanup before teardown">
+                      <Field label="Cleanup command" hint="Worktree-specific cleanup before teardown">
                         <Textarea
                           className="min-h-16 font-mono"
                           value={form.cleanupCommand}

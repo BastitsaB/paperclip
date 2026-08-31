@@ -26,7 +26,54 @@ for (const file of files) {
 
 const displayFailures = [];
 const fixDisplay = process.argv.includes("--fix-display");
-for (const file of files.filter((name) => /^ui\/(?:src\/(?:components|pages)|storybook)\/.*\.tsx?$/.test(name))) {
+const uiDisplaySource = (name) => {
+  if (/^ui\/(?:src\/(?:components|pages)|storybook)\/.*\.tsx?$/.test(name)) return true;
+  return /^ui\/src\/(?:lib|features|adapters)\/.*\.tsx?$/.test(name)
+    && !/\.(?:test|spec)\.tsx?$/.test(name);
+};
+
+function isThirdPartyWorkspaceCopy(file, raw) {
+  return (
+    (file === "ui/src/pages/apps/AppsConnect.test.tsx" && /Workspace account/i.test(raw))
+    || (file === "ui/src/lib/app-gallery-copy.ts" && /pages in your workspace/i.test(raw))
+    || (file === "ui/src/adapters/grok-local/config-fields.tsx" && /Grok workspace/i.test(raw))
+    || (file === "ui/src/adapters/codex-local/config-fields.tsx" && /Codex.*workspace/i.test(raw))
+    || (file === "ui/src/features/connections/ConnectionSetupFlow.tsx" && /choose a workspace/i.test(raw))
+  );
+}
+
+function isMachineBoundary(file, raw) {
+  const importPath = /^["'`](?:\.{1,2}\/|@\/).*workspace/i.test(raw);
+  const testOnlyHyphenatedIdentifier = /(?:\.test\.tsx|\/storybook\/)/.test(file)
+    && /(?:workspace-|\-workspace)/i.test(raw);
+  const classifierInput = file === "ui/src/lib/system-notice-humanizer.ts"
+    && /workspace failed validation/i.test(raw);
+  return importPath
+    || isThirdPartyWorkspaceCopy(file, raw)
+    || testOnlyHyphenatedIdentifier
+    || classifierInput
+    || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:]|[_:]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
+}
+
+function looksRenderedWorkspaceCopy(raw) {
+  const visible = raw.replace(/\{[^}]*\}/g, "");
+  return /\bWorkspace(s)?\b/.test(visible)
+    || /\bworkspaces?\s+[a-z]/i.test(visible)
+    || /[a-z]\s+workspaces?\b/i.test(visible);
+}
+
+const positiveControls = [
+  ["ui/src/lib/example.ts", '"Open workspace"'],
+  ["ui/src/features/example.tsx", '"Workspace-specific cleanup"'],
+  ["ui/src/adapters/example.tsx", '"Repair this workspace"'],
+];
+for (const [file, raw] of positiveControls) {
+  if (!uiDisplaySource(file) || isMachineBoundary(file, raw) || !looksRenderedWorkspaceCopy(raw)) {
+    throw new Error(`Workspace terminology gate positive control failed: ${file}: ${raw}`);
+  }
+}
+
+for (const file of files.filter(uiDisplaySource)) {
   let source;
   try { source = readFileSync(file, "utf8"); } catch { continue; }
   const lines = source.split("\n");
@@ -37,11 +84,8 @@ for (const file of files.filter((name) => /^ui\/(?:src\/(?:components|pages)|sto
     ];
     for (const candidate of candidates) {
       const raw = candidate[0];
-      const importPath = /^["'`](?:\.{1,2}\/|@\/).*workspace/i.test(raw);
-      const thirdPartyProduct = file === "ui/src/pages/apps/AppsConnect.test.tsx" && /Workspace account/i.test(raw);
-      const machineBoundary = importPath || thirdPartyProduct || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
-      const visible = raw.replace(/\{[^}]*\}/g, "");
-      const looksRendered = /\bWorkspace(s)?\b/.test(visible) || /\bworkspaces?\s+[a-z]/i.test(visible) || /[a-z]\s+workspaces?\b/i.test(visible);
+      const machineBoundary = isMachineBoundary(file, raw);
+      const looksRendered = looksRenderedWorkspaceCopy(raw);
       if (looksRendered && !machineBoundary) {
         if (!fixDisplay) displayFailures.push(`${file}:${lineIndex + 1}: ${raw.trim().slice(0, 160)}`);
       }
@@ -51,11 +95,8 @@ for (const file of files.filter((name) => /^ui\/(?:src\/(?:components|pages)|sto
     const replaced = lines.map((lineText) => lineText.replace(
       /(["'`])(?:(?!\1).)*workspaces?(?:(?!\1).)*\1|>[^<]*workspaces?[^<]*</gi,
       (raw) => {
-        const importPath = /^["'`](?:\.{1,2}\/|@\/).*workspace/i.test(raw);
-        const thirdPartyProduct = file === "ui/src/pages/apps/AppsConnect.test.tsx" && /Workspace account/i.test(raw);
-        const machineBoundary = importPath || thirdPartyProduct || />\{workspace\b|PAPERCLIP_|enableIsolatedWorkspaces|workspace[_:-]|[_:-]workspace|\/api\/|\/workspaces?(?:\/|[`'"}]|$)|execution-workspaces|project-workspace|workspace-diff|google workspace|notion workspace/i.test(raw);
-        const visible = raw.replace(/\{[^}]*\}/g, "");
-        const looksRendered = /\bWorkspace(s)?\b/.test(visible) || /\bworkspaces?\s+[a-z]/i.test(visible) || /[a-z]\s+workspaces?\b/i.test(visible);
+        const machineBoundary = isMachineBoundary(file, raw);
+        const looksRendered = looksRenderedWorkspaceCopy(raw);
         if (!looksRendered || machineBoundary) return raw;
         return raw.replace(/\bWorkspaces\b/g, "Worktrees").replace(/\bWorkspace\b/g, "Worktree")
           .replace(/\bworkspaces\b/g, "worktrees").replace(/\bworkspace\b/g, "worktree");

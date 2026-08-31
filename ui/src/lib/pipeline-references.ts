@@ -119,7 +119,7 @@ export function extractWorkReferences(caseItem: ReferenceCaseInput): WorkReferen
 
   const worktreeRef = readRecord(caseItem.workspaceRef);
   if (worktreeRef && (worktreeRef.path || worktreeRef.folder || worktreeRef.workspacePath || worktreeRef.name)) {
-    references.push(worktreeFromRecord("workspaceRef", "Workspace folder", worktreeRef));
+    references.push(worktreeFromRecord("workspaceRef", "Worktree folder", worktreeRef));
   }
 
   for (const [key, value] of Object.entries(caseItem.fields ?? {})) {

@@ -533,7 +533,7 @@ export function getInboxSearchSupplementIssues({
 
 function formatDefaultWorktreeGroupLabel(name: string | null | undefined): string {
   const normalizedName = name?.trim();
-  return normalizedName ? `${normalizedName} (default)` : "Default workspace";
+  return normalizedName ? `${normalizedName} (default)` : "Default worktree";
 }
 
 function resolveDefaultProjectWorktreeInfo(
@@ -649,7 +649,7 @@ export function resolveIssueWorktreeGroup(
 
   return {
     key: "workspace:none",
-    label: "No workspace",
+    label: "No worktree",
   };
 }
 
