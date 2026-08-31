@@ -1097,6 +1097,10 @@ it("cold-restores a suspended provider session under a new run binding", async (
 it("surfaces a runner exit while provider-ingress readiness is still pending", async () => {
   const neverReady = new Promise<void>(() => undefined);
   const bundle = createCapabilityRunnerdCodexTransport({
+    // The external process launcher owns execution in this test. Point the
+    // artifact identity at stable local bytes so the authority still hashes a
+    // real file instead of accepting caller-supplied digest metadata.
+    runnerBinary: resolve(import.meta.dirname, "../../package.json"),
     runnerProcessLauncher: () => ({
       child: {
         pid: 42,

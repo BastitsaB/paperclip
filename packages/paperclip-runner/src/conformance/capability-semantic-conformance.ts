@@ -302,7 +302,7 @@ export function normalizeCapabilitySemanticObservation(input: {
     receipt: {
       schema: receipt.schema,
       schemaVersion: receipt.schemaVersion,
-      phase: "result",
+      phase: "result" as const,
       operationId: receipt.operationId,
       callId: receipt.callId,
       idempotencyKeyPresent: receipt.idempotencyKey !== null,

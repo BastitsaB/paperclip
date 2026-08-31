@@ -50,6 +50,7 @@ const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const MAX_NOTIFICATION_COUNT = 2_048;
 const MAX_NOTIFICATION_BYTES = 4 * 1024 * 1024;
+const RUNNER_CLIENT_VERSION = "0.3.0";
 
 const CODEX_COLLABORATION_RUNTIME_INSTRUCTIONS = `## Codex-style collaboration
 
@@ -692,6 +693,17 @@ function commandDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(durableRecoveryInternals.canonicalJson(value)).digest("hex")}`;
 }
 
+function approvedRunnerArtifact(
+  runnerBinaryPath: string,
+): { version: string; digest: string } {
+  return {
+    version: RUNNER_CLIENT_VERSION,
+    digest: `sha256:${createHash("sha256")
+      .update(readFileSync(runnerBinaryPath))
+      .digest("hex")}`,
+  };
+}
+
 function authorizedToolSet(
   tools: readonly Readonly<Record<string, unknown>>[],
 ): Record<string, unknown> {
@@ -1263,6 +1275,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       turnId: `turn_lab_${token}`,
       itemId: `item_lab_${token}`,
     };
+    const runnerBinaryPath =
+      this.options.runnerBinary ?? defaultCapabilityRunnerdBinary();
+    const runnerArtifact = approvedRunnerArtifact(runnerBinaryPath);
     this.#durableTurnId = identity.turnId;
     const dynamicTools = Array.isArray(params.dynamicTools)
       ? params.dynamicTools.map(record)
@@ -1270,6 +1285,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     const core = new DurablePrpControlPlane({
       stateDirectory: resolve(this.#root, "control-plane"),
       identity,
+      expectedRunnerVersion: runnerArtifact.version,
+      expectedRunnerDigest: runnerArtifact.digest,
       onSemanticToolInput: async (call) =>
         unwrapToolResponse(
           await this.#handler({
@@ -1486,8 +1503,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       maxRuntimeMs: 60 * 60 * 1_000,
       reconnectGraceMs: this.options.runnerReconnectGraceMs,
       lifecyclePolicy: this.options.lifecyclePolicy,
-      runnerBinaryPath:
-        this.options.runnerBinary ?? defaultCapabilityRunnerdBinary(),
+      runnerBinaryPath,
+      runnerVersion: runnerArtifact.version,
+      runnerDigest: runnerArtifact.digest,
       environment: withRunnerdProviderTrace(
         createCapabilityRunnerdProviderEnvironment({
           provider,
@@ -1561,6 +1579,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       controlPlaneDirectory,
       desiredIdentity,
     );
+    const runnerBinaryPath =
+      this.options.runnerBinary ?? defaultCapabilityRunnerdBinary();
+    const runnerArtifact = approvedRunnerArtifact(runnerBinaryPath);
     this.#durableTurnId = identity.turnId;
     const attachingNewRun = identity.runId !== desiredIdentity.runId;
     const provider = this.options.provider ?? "codex";
@@ -1596,6 +1617,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     const core = new DurablePrpControlPlane({
       stateDirectory: controlPlaneDirectory,
       identity,
+      expectedRunnerVersion: runnerArtifact.version,
+      expectedRunnerDigest: runnerArtifact.digest,
       onSemanticToolInput: async (call) =>
         unwrapToolResponse(
           await this.#handler({
@@ -1643,8 +1666,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       maxRuntimeMs: 60 * 60 * 1_000,
       reconnectGraceMs: this.options.runnerReconnectGraceMs,
       lifecyclePolicy: this.options.lifecyclePolicy,
-      runnerBinaryPath:
-        this.options.runnerBinary ?? defaultCapabilityRunnerdBinary(),
+      runnerBinaryPath,
+      runnerVersion: runnerArtifact.version,
+      runnerDigest: runnerArtifact.digest,
       environment: withRunnerdProviderTrace(
         createCapabilityRunnerdProviderEnvironment({
           provider,
@@ -2323,6 +2347,11 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
 }
 
 export function defaultCapabilityRunnerdBinary(): string {
+  const staged = resolve(
+    packageRoot,
+    `dist/bin/paperclip-runnerd${executableSuffix}`,
+  );
+  if (existsSync(staged)) return staged;
   return resolve(
     packageRoot,
     `runner/target/debug/paperclip-runnerd${executableSuffix}`,

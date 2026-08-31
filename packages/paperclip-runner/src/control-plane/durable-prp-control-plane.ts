@@ -1870,6 +1870,8 @@ export function spawnRunner(options: {
     | { mode: "per_turn"; idleTimeoutMs: null }
     | { mode: "warm"; idleTimeoutMs: number };
   runnerBinaryPath?: string;
+  runnerVersion: string;
+  runnerDigest: string;
   environment?: NodeJS.ProcessEnv;
   processLauncher?: (spec: RunnerProcessLaunchSpec) => RunnerProcessHandle;
 }): RunnerProcessHandle {
@@ -1910,9 +1912,9 @@ export function spawnRunner(options: {
     "--item-id",
     options.identity.itemId,
     "--runner-version",
-    "0.3.0",
+    options.runnerVersion,
     "--runner-digest",
-    "sha256:durable-recovery-approved",
+    options.runnerDigest,
     "--fake-harness",
     fakeHarnessBinary,
     "--fake-harness-script",
