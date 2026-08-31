@@ -232,19 +232,59 @@ function credentialMaterial(token: string): {
   };
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
+const MAX_CANONICAL_JSON_DEPTH = 64;
+const MAX_CANONICAL_JSON_NODES = 10_000;
+
+function canonicalJson(
+  value: unknown,
+  ancestors = new WeakSet<object>(),
+  state = { nodes: 0 },
+  depth = 0,
+): string {
+  state.nodes += 1;
+  if (depth > MAX_CANONICAL_JSON_DEPTH || state.nodes > MAX_CANONICAL_JSON_NODES) {
+    throw new Error("durable_prp_canonical_json_too_large");
   }
-  if (typeof value === "object" && value !== null) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("durable_prp_canonical_json_invalid");
+    return JSON.stringify(value) ?? "null";
+  }
+  if (typeof value !== "object" || ancestors.has(value)) {
+    throw new Error("durable_prp_canonical_json_invalid");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    throw new Error("durable_prp_canonical_json_invalid");
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const entries: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new Error("durable_prp_canonical_json_invalid");
+        }
+        entries.push(canonicalJson(value[index], ancestors, state, depth + 1));
+      }
+      return `[${entries.join(",")}]`;
+    }
     const object = value as Record<string, unknown>;
     return `{${Object.keys(object)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalJson(object[key], ancestors, state, depth + 1)}`,
+      )
       .join(",")}}`;
+  } finally {
+    ancestors.delete(value);
   }
-  return JSON.stringify(value) ?? "null";
 }
+
+export const durableRecoveryInternals = Object.freeze({ canonicalJson });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
