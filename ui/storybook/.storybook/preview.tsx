@@ -8,6 +8,7 @@ import {
 import { MemoryRouter } from "@/lib/router";
 import { ONBOARDING_STORAGE_KEY } from "@/components/OnboardingWizard";
 import {
+  STORYBOOK_SANDBOX_ENVIRONMENT_ID,
   storybookAuthSignal,
   storybookEnvironmentCapabilities,
   storybookEnvironments,
@@ -173,6 +174,42 @@ function installStorybookApiFixtures() {
 
     if (/^\/api\/companies\/[^/]+\/adapters\/[^/]+\/models$/.test(url.pathname)) {
       return Response.json([]);
+    }
+
+    // Claude's setup-token login, enough of it to watch the panel expand.
+    //
+    // The point is not the login — it is what the panel does to the card around
+    // it. Starting a login turns a single row into a row plus an authorization
+    // URL plus a code field, and the onboarding canvas that holds it animates
+    // its own height and clips its overflow. A canvas that measured itself once
+    // would cut that expansion off, and nothing short of driving the flow would
+    // show it.
+    if (/^\/api\/companies\/[^/]+\/setup-token-login-sessions$/.test(url.pathname)) {
+      return Response.json({
+        sessionId: "setup-token-storybook",
+        environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
+        status: "awaiting_browser_code",
+        expiresAt: null,
+        failure: null,
+      });
+    }
+    if (/^\/api\/companies\/[^/]+\/setup-token-login-sessions\/[^/]+$/.test(url.pathname)) {
+      return Response.json({
+        sessionId: "setup-token-storybook",
+        environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
+        status: "awaiting_browser_code",
+        expiresAt: null,
+        failure: null,
+        panelMode: "submitted_browser_code",
+        prompt: {
+          authorizationUrl:
+            "https://claude.ai/oauth/authorize?client_id=storybook&response_type=code&state=storybook",
+          transportAdvisory: null,
+        },
+      });
+    }
+    if (/^\/api\/companies\/[^/]+\/claude-oauth-token-status$/.test(url.pathname)) {
+      return new Response(null, { status: 404 });
     }
 
     if (

@@ -24,7 +24,11 @@ export const CAPSULE_ENTER_DURATION = 1.0;
 export const capsuleMotion = {
   initial: { opacity: 0, scale: 0.5 },
   animate: { opacity: 1, scale: 1 },
-  transition: { type: "spring" as const, duration: CAPSULE_ENTER_DURATION, bounce: 0.4 },
+  transition: {
+    type: "spring" as const,
+    duration: CAPSULE_ENTER_DURATION,
+    bounce: 0.4,
+  },
 };
 
 /** The name/role reveal: the label fade is staggered by 25% of this. */
@@ -97,7 +101,10 @@ export const TAG_SWAP_EXIT = { duration: 0.26, ease: TAG_SWAP_EASE } as const;
  * stagger it settles just inside the tag swap, so the sentence and the tags
  * finish together.
  */
-export const LINK_LABEL_FADE_OUT = { duration: 0.12, ease: TAG_SWAP_EASE } as const;
+export const LINK_LABEL_FADE_OUT = {
+  duration: 0.12,
+  ease: TAG_SWAP_EASE,
+} as const;
 export const LINK_LABEL_FADE_IN = {
   duration: 0.22,
   delay: 0.08,
@@ -113,15 +120,12 @@ export const LINK_LABEL_FADE_IN = {
  * mode is what fills it — so a second easing or a second rhythm would read as a
  * separate thing reacting rather than the same gesture continuing.
  *
- * Height is animated rather than left to `auto`. The canvas holds a login panel
- * for one source and a key field for another, and they are not the same height;
- * an unanimated swap makes the Connect button below jump. Opening from zero
- * height also lets the card unfold rather than appear, which is what makes it
- * read as belonging to the tile that was just pressed.
+ * The canvas container itself does not animate at all. It carried an open/close
+ * three times — height, then opacity — and stalled every time, once leaving the
+ * login card rendered inside a two-pixel box. The content swap below is where
+ * the motion lives, and it is enough.
  */
 export const CANVAS_EASE = TAG_SWAP_EASE;
-export const CANVAS_OPEN = { duration: 0.34, ease: CANVAS_EASE } as const;
-export const CANVAS_CLOSE = { duration: 0.26, ease: CANVAS_EASE } as const;
 
 /**
  * The content swap inside the canvas, when the source or the credential mode
