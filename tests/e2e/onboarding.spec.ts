@@ -222,7 +222,11 @@ test.describe("Onboarding wizard", () => {
     // Step 4 (Connect a model): the default adapter is claude_local, and the
     // signal above reports no ready credential, so the login panel must show
     // with no button to reuse a saved login.
-    await expect(page.getByText("Sign in to the environment")).toBeVisible({
+    //
+    // The panel names the provider rather than the plumbing it runs on, so this
+    // title is per-adapter. "Sign in to the environment" is now only the fallback
+    // for an adapter with no known provider name, which claude_local is not.
+    await expect(page.getByText("Sign in to Anthropic")).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByRole("button", { name: "Use saved login" })).toHaveCount(0);
