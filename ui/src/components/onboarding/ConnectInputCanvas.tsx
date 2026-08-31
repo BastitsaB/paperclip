@@ -1,14 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Loader2 } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 import {
   CANVAS_CLOSE,
   CANVAS_CONTENT_ENTER,
   CANVAS_CONTENT_EXIT,
+  CANVAS_CONTENT_TRAVEL,
   CANVAS_OPEN,
-  CANVAS_SWAP_HOLD_MS,
 } from "./onboarding-motion";
 
 /**
@@ -37,30 +36,13 @@ export function ConnectInputCanvas({
 }: {
   open: boolean;
   /**
-   * Identity of what is inside. Changing it swaps the contents through the
-   * spinner; it is the source and credential mode together, because either one
-   * changing means a different input is needed.
+   * Identity of what is inside, and what the swap animates between. The source
+   * and the credential mode together, because either one changing means a
+   * different input is needed.
    */
   contentKey: string;
   children: ReactNode;
 }) {
-  const [shownKey, setShownKey] = useState(contentKey);
-  const [swapping, setSwapping] = useState(false);
-
-  // A held beat between the old input leaving and the new one arriving. The
-  // panels behind this do fetch, so the spinner is not standing in for nothing —
-  // but without a floor, a cached answer swaps instantly and the change reads as
-  // a flicker rather than as the card going to get the right thing.
-  useEffect(() => {
-    if (contentKey === shownKey) return;
-    setSwapping(true);
-    const id = window.setTimeout(() => {
-      setShownKey(contentKey);
-      setSwapping(false);
-    }, CANVAS_SWAP_HOLD_MS);
-    return () => window.clearTimeout(id);
-  }, [contentKey, shownKey]);
-
   return (
     <AnimatePresence initial={false}>
       {open && (
@@ -82,47 +64,28 @@ export function ConnectInputCanvas({
             style={{ minHeight: MIN_CONTENT_HEIGHT }}
           >
             {/*
-              The spinner overlays the content rather than replacing it through
-              `AnimatePresence mode="wait"`. That arrangement sequences exit
-              before enter, and the outgoing input here never reported its exit
-              as finished — so the spinner was never mounted and the swap looked
-              instant, with the control that was meant to explain it absent.
+              `popLayout`, so the leaving input is taken out of flow while it
+              animates and the arriving one decides the card's height on its own.
+              With the default mode the two would stack and the card would jump
+              to the sum of both mid-swap.
 
-              Overlaying has no such dependency: the content fades back, the
-              spinner fades in over it, and neither waits on the other to
-              relinquish the slot.
+              `sync` semantics matter as much as the travel: an earlier version
+              used `mode="wait"`, which will not mount the next child until the
+              previous one reports its exit finished. That report never came, so
+              the swap stalled — the visible result was a card that changed
+              instantly with no transition at all.
             */}
-            <div className="relative w-full">
+            <AnimatePresence initial={false} mode="popLayout">
               <motion.div
+                key={contentKey}
                 className="w-full"
-                animate={{ opacity: swapping ? 0.15 : 1 }}
-                transition={swapping ? CANVAS_CONTENT_EXIT : CANVAS_CONTENT_ENTER}
-                // Inert while the answer behind it is being replaced: a field
-                // fading out is still focusable, and tabbing into one that is
-                // about to be swapped is a trap.
-                inert={swapping}
+                initial={{ opacity: 0, y: CANVAS_CONTENT_TRAVEL }}
+                animate={{ opacity: 1, y: 0, transition: CANVAS_CONTENT_ENTER }}
+                exit={{ opacity: 0, y: CANVAS_CONTENT_TRAVEL, transition: CANVAS_CONTENT_EXIT }}
               >
                 {children}
               </motion.div>
-
-              <AnimatePresence initial={false}>
-                {swapping && (
-                  <motion.div
-                    key="swapping"
-                    className="absolute inset-0 flex items-center justify-center"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1, transition: CANVAS_CONTENT_ENTER }}
-                    exit={{ opacity: 0, transition: CANVAS_CONTENT_EXIT }}
-                  >
-                    <Loader2
-                      aria-hidden
-                      className="size-4 animate-spin text-muted-foreground"
-                    />
-                    <span className="sr-only">Loading the sign-in for this choice</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+            </AnimatePresence>
           </div>
         </motion.div>
       )}

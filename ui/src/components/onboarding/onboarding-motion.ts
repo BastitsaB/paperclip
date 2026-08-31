@@ -131,20 +131,18 @@ export const CANVAS_CLOSE = { duration: 0.26, ease: CANVAS_EASE } as const;
  * tag: the outgoing input is mostly gone before the incoming one arrives, so two
  * different forms are never legible on top of each other.
  *
- * `CANVAS_SWAP_HOLD_MS` is the beat the spinner is shown between them. It is not
- * a fake load — the panels behind it do fetch — but it is a floor, so switching
- * sources always reads as "fetching the right thing" rather than as a flicker
- * when the answer happens to be cached.
+ * The swap itself is the tag's, not a variation on it: one input falls out of
+ * the card while the next rises into place, on the same travel and the same
+ * curve. Flipping the credential mode moves the tag and re-fills the canvas in
+ * one gesture, and giving the two ends of that gesture different motion would
+ * make them read as separate events.
  *
- * The hold has to be comfortably longer than the exit, and that is the whole
- * reason these three numbers are related rather than picked separately. The
- * swap runs through `AnimatePresence mode="wait"`, which will not mount the
- * spinner until the outgoing input has finished leaving — so the exit is spent
- * before the spinner exists. At a 220ms hold against a 180ms exit the spinner
- * mounted with 40ms left and never painted at all: the swap looked instant, and
- * the control that was supposed to explain it was invisible.
+ * There is no spinner and no hold. An earlier version had both, on the reasoning
+ * that the panels behind the canvas fetch — but they are components, available
+ * the moment the choice changes, and the 400ms floor needed to make a spinner
+ * legible was time added to a swap that had nothing to wait for. A spinner
+ * standing in for no work is a slower screen that also says something untrue.
  */
-export const CANVAS_CONTENT_ENTER = { duration: 0.26, ease: CANVAS_EASE } as const;
-export const CANVAS_CONTENT_EXIT = { duration: 0.12, ease: CANVAS_EASE } as const;
-/** Exit (120ms) + a spinner that is actually legible for a beat after it. */
-export const CANVAS_SWAP_HOLD_MS = 400;
+export const CANVAS_CONTENT_ENTER = TAG_SWAP_ENTER;
+export const CANVAS_CONTENT_EXIT = TAG_SWAP_EXIT;
+export const CANVAS_CONTENT_TRAVEL = TAG_SWAP_TRAVEL;
