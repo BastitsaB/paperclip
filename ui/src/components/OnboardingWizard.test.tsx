@@ -1555,21 +1555,21 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
     it("shows the login panel for claude_local when the signal reports no ready credential", async () => {
       mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "absent" });
       const { root } = await openStep4({ adapterType: "claude_local" });
-      expect(document.body.textContent).toContain("Sign in to the environment");
+      expect(document.body.textContent).toContain("Sign in to Anthropic");
       await act(async () => root.unmount());
     });
 
     it("shows the login panel for codex_local when the signal cannot decide", async () => {
       mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "unknown" });
       const { root } = await openStep4({ adapterType: "codex_local" });
-      expect(document.body.textContent).toContain("Sign in to the environment");
+      expect(document.body.textContent).toContain("Sign in to OpenAI");
       await act(async () => root.unmount());
     });
 
     it("hides the login panel when the signal reports a ready credential", async () => {
       mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "present" });
       const { root } = await openStep4({ adapterType: "claude_local" });
-      expect(document.body.textContent).not.toContain("Sign in to the environment");
+      expect(document.body.textContent).not.toContain("Sign in to Anthropic");
       await act(async () => root.unmount());
     });
 
@@ -1623,7 +1623,7 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       mockInstanceSettingsApi.get.mockResolvedValue({ defaultEnvironmentId: null });
       mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "absent" });
       const { root } = await openStep4({ adapterType: "claude_local" });
-      expect(document.body.textContent).not.toContain("Sign in to the environment");
+      expect(document.body.textContent).not.toContain("Sign in to Anthropic");
       expect(mockAgentsApi.getAdapterAuthSignal).not.toHaveBeenCalled();
       await act(async () => root.unmount());
     });

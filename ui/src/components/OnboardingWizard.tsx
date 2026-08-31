@@ -2342,7 +2342,7 @@ function OnboardingWizardInner({
                     <Label htmlFor="onboarding-agent-name">Name</Label>
                     <Input
                       id="onboarding-agent-name"
-                      placeholder="e.g. Chief of staff, Designer, Ron, Clippy..."
+                      placeholder="e.g. Chief of staff, Designer, Ron..."
                       value={agentName}
                       onChange={(e) => setAgentName(e.target.value)}
                       autoFocus
