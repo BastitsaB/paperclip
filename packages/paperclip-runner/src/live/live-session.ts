@@ -444,6 +444,11 @@ interface TurnWaiter {
   draftId: string | null;
 }
 
+interface PendingTurnCompletion {
+  waiter: TurnWaiter | null;
+  result: Omit<CapabilityLiveTurnResult, "snapshot">;
+}
+
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -2060,7 +2065,7 @@ export class CapabilityLiveSession {
     if (transport === null) return;
     try {
       for await (const notification of transport.notifications()) {
-        this.#handleNotification(notification);
+        await this.#handleNotification(notification);
       }
     } catch (error) {
       if (this.#transport !== transport) return;
@@ -2073,7 +2078,7 @@ export class CapabilityLiveSession {
     }
   }
 
-  #handleNotification(notification: CodexRpcNotification): void {
+  async #handleNotification(notification: CodexRpcNotification): Promise<void> {
     const params = notification.params;
     const turn = record(params.turn);
     const item = record(params.item);
@@ -2151,6 +2156,7 @@ export class CapabilityLiveSession {
         }
       }
     }
+    let pendingCompletion: PendingTurnCompletion | null = null;
     if (notification.method === "provider/budgetReached") {
       this.#status = "waiting_input";
       this.#appendEvidence("session", turnId || this.#activeTurnId, {
@@ -2187,9 +2193,29 @@ export class CapabilityLiveSession {
         this.#publishAssistantProgress(turnId || this.#activeTurnId);
       }
     } else if (notification.method === "turn/completed") {
-      this.#completeTurn(turnId, terminalStatus(turn.status));
+      pendingCompletion = this.#completeTurn(turnId, terminalStatus(turn.status));
     }
-    void this.#persist();
+    try {
+      await this.#persist();
+    } catch (error) {
+      // A terminal provider notification is not successful until its snapshot
+      // is durable. Reject the caller instead of acknowledging a completion
+      // that recovery cannot yet observe; the pump catch records and retries
+      // the authoritative failed state.
+      pendingCompletion?.waiter?.reject(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      throw error;
+    }
+    if (pendingCompletion !== null) {
+      this.#emit({
+        turnId: pendingCompletion.result.turnId,
+        kind: "terminal",
+        status: pendingCompletion.result.status,
+        assistantText: pendingCompletion.result.assistantText,
+      });
+      pendingCompletion.waiter?.resolve(pendingCompletion.result);
+    }
   }
 
   /** Streams the assembled text into the transcript draft and announces it. */
@@ -2202,14 +2228,16 @@ export class CapabilityLiveSession {
     });
   }
 
-  #completeTurn(turnId: string, status: CapabilityLiveTurnResult["status"]): void {
+  #completeTurn(
+    turnId: string,
+    status: CapabilityLiveTurnResult["status"],
+  ): PendingTurnCompletion {
     const waiter = this.#turnWaiter;
     if (waiter === null) {
       this.#recordTerminalFact(turnId, status);
       this.#activeTurnId = null;
       this.#status = "idle";
-      this.#emit({ turnId, kind: "terminal", status, assistantText: "" });
-      return;
+      return { waiter: null, result: { turnId, status, assistantText: "" } };
     }
     clearTimeout(waiter.timer);
     this.#turnWaiter = null;
@@ -2218,8 +2246,7 @@ export class CapabilityLiveSession {
     this.#recordTerminalFact(turnId, status);
     this.#activeTurnId = null;
     this.#status = "idle";
-    this.#emit({ turnId, kind: "terminal", status, assistantText });
-    waiter.resolve({ turnId, status, assistantText });
+    return { waiter, result: { turnId, status, assistantText } };
   }
 
   #recordTerminalFact(turnId: string, status: CapabilityLiveTurnResult["status"]): void {

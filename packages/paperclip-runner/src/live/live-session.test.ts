@@ -302,9 +302,14 @@ function providerState(): FakeProviderState {
 class TransientFailureLiveSessionStore implements CapabilityLiveSessionStore {
   readonly #delegate = new InMemoryCapabilityLiveSessionStore();
   #failNextSave = false;
+  #failNextTerminalSave = false;
 
   failNextSave(): void {
     this.#failNextSave = true;
+  }
+
+  failNextTerminalSave(): void {
+    this.#failNextTerminalSave = true;
   }
 
   load(sessionId: string): Promise<CapabilityLiveSessionSnapshot | null> {
@@ -315,6 +320,10 @@ class TransientFailureLiveSessionStore implements CapabilityLiveSessionStore {
     if (this.#failNextSave) {
       this.#failNextSave = false;
       throw new Error("transient live-session store failure");
+    }
+    if (this.#failNextTerminalSave && snapshot.terminalTurns.length > 0) {
+      this.#failNextTerminalSave = false;
+      throw new Error("transient terminal-notification store failure");
     }
     await this.#delegate.save(snapshot);
   }
@@ -352,6 +361,32 @@ describe("Capability live runnerd and Codex session", () => {
     expect((await store.load(session.id))?.usageLedger.map((receipt) => receipt.receiptId)).toEqual([
       "usage-before-recovery",
       "usage-after-recovery",
+    ]);
+    await service.shutdown(session.id);
+  });
+
+  it("rejects a terminal turn until its provider notification is durable", async () => {
+    const state = providerState();
+    const store = new TransientFailureLiveSessionStore();
+    const service = new CapabilityLiveSessionService({
+      store,
+      transportFactory: fakeTransportFactory(state),
+    });
+    const session = await service.create({
+      runId: "run-live-terminal-store",
+      sessionId: "session-live-terminal-store",
+    });
+
+    store.failNextTerminalSave();
+    await expect(session.sendMessage("finish durably")).rejects.toThrow(
+      "transient terminal-notification store failure",
+    );
+
+    await vi.waitFor(async () => {
+      expect((await store.load(session.id))?.status).toBe("failed");
+    });
+    expect((await store.load(session.id))?.terminalTurns).toEqual([
+      expect.objectContaining({ turnId: "turn-1", status: "completed" }),
     ]);
     await service.shutdown(session.id);
   });
