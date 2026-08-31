@@ -58,7 +58,7 @@ import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { environmentRuntimeService } from "../services/environment-runtime.js";
-import { executionWorkspaceService } from "../services/execution-workspaces.js";
+import { executionWorkspaceService } from "../services/execution-worktrees.js";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

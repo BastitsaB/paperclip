@@ -11,7 +11,7 @@ import type {
   RoutineVariableType,
 } from "../constants.js";
 import type { EnvBinding } from "./secrets.js";
-import type { ExecutionWorktreeMode, IssueExecutionWorktreeSettings } from "./workspace-runtime.js";
+import type { ExecutionWorktreeMode, IssueExecutionWorktreeSettings } from "./worktree-runtime.js";
 
 export interface RoutineDescriptionDocument {
   id: string;

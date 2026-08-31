@@ -1,4 +1,4 @@
-import type { ExecutionWorktree } from "./types/workspace-runtime.js";
+import type { ExecutionWorktree } from "./types/worktree-runtime.js";
 
 type ExecutionWorktreeGuardTarget = Pick<ExecutionWorktree, "closedAt" | "mode" | "name" | "status">;
 

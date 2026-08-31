@@ -48,7 +48,7 @@ vi.mock("../services/secrets.js", () => ({
   secretService: () => mockSecretService,
 }));
 
-vi.mock("../services/workspace-runtime.js", () => ({
+vi.mock("../services/worktree-runtime.js", () => ({
   startRuntimeServicesForWorkspaceControl: vi.fn(),
   stopRuntimeServicesForProjectWorkspace: vi.fn(),
 }));
@@ -75,7 +75,7 @@ function registerModuleMocks() {
     secretService: () => mockSecretService,
   }));
 
-  vi.doMock("../services/workspace-runtime.js", () => ({
+  vi.doMock("../services/worktree-runtime.js", () => ({
     startRuntimeServicesForWorkspaceControl: vi.fn(),
     stopRuntimeServicesForProjectWorkspace: vi.fn(),
   }));

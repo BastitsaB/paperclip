@@ -24,13 +24,13 @@ import {
   runWorkspaceJobForControl,
   startRuntimeServicesForWorkspaceControl,
   stopRuntimeServicesForProjectWorkspace,
-} from "../services/workspace-runtime.js";
+} from "../services/worktree-runtime.js";
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectProjectExecutionWorkspaceCommandPaths,
   collectProjectWorkspaceCommandPaths,
-} from "./workspace-command-authz.js";
-import { assertCanManageProjectWorkspaceRuntimeServices } from "./workspace-runtime-service-authz.js";
+} from "./worktree-command-authz.js";
+import { assertCanManageProjectWorkspaceRuntimeServices } from "./worktree-runtime-service-authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { appendWithCap } from "../adapters/utils.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";

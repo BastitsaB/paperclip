@@ -32,7 +32,7 @@ import { pluginOperationIssueOriginKind } from "@paperclipai/shared";
 import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
-import { executionWorkspaceService } from "./execution-workspaces.js";
+import { executionWorkspaceService } from "./execution-worktrees.js";
 import { issueService } from "./issues.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { goalService } from "./goals.js";

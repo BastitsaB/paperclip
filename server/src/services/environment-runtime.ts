@@ -74,7 +74,7 @@ import {
   resumePluginEnvironmentLease,
 } from "./plugin-environment-driver.js";
 import { collectSecretRefPaths } from "./json-schema-secret-refs.js";
-import { buildWorkspaceRealizationRecordFromDriverInput } from "./workspace-realization.js";
+import { buildWorkspaceRealizationRecordFromDriverInput } from "./worktree-realization.js";
 import {
   createSandboxOrphanCleanupSpool,
   type DeferredOrphanCleanupRecord,

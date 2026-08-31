@@ -74,7 +74,7 @@ vi.mock("../services/environments.js", () => ({
   environmentService: () => mockEnvironmentService,
 }));
 
-vi.mock("../services/execution-workspaces.js", () => ({
+vi.mock("../services/execution-worktrees.js", () => ({
   executionWorkspaceService: () => mockExecutionWorkspaceService,
 }));
 

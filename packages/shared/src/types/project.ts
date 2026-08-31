@@ -3,7 +3,7 @@ import type {
   ProjectExecutionWorktreePolicy,
   ProjectWorktreeRuntimeConfig,
   WorktreeRuntimeService,
-} from "./workspace-runtime.js";
+} from "./worktree-runtime.js";
 import type { AgentEnvConfig } from "./secrets.js";
 
 export type ProjectWorktreeSourceType = "local_path" | "git_repo" | "remote_managed" | "non_git_path";

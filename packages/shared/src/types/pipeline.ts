@@ -1,6 +1,6 @@
 import type { Issue } from "./issue.js";
 import type { RoutineEnvConfig } from "./routine.js";
-import type { ExecutionWorktreeMode, IssueExecutionWorktreeSettings } from "./workspace-runtime.js";
+import type { ExecutionWorktreeMode, IssueExecutionWorktreeSettings } from "./worktree-runtime.js";
 import type { SourceTrustMetadata } from "../trust-policy.js";
 
 export type PipelineCaseConversationSourceReason =

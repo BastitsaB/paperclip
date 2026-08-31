@@ -419,20 +419,20 @@ export type {
   ProjectExecutionWorktreePolicy,
   ProjectExecutionWorktreeDefaultMode,
   IssueExecutionWorktreeSettings,
-} from "./workspace-runtime.js";
+} from "./worktree-runtime.js";
 export type {
   WorktreeOperation,
   WorktreeOperationPhase,
   WorktreeOperationStatus,
 } from "./workspace-operation.js";
-export { WORKSPACE_READINESS_STATES } from "./workspace-readiness.js";
+export { WORKSPACE_READINESS_STATES } from "./worktree-readiness.js";
 export type {
   WorktreeLoginHandoffTicketResponse,
   WorktreeReadiness,
   WorktreeReadinessProbeResult,
   WorktreeReadinessState,
   WorktreeSeedReadinessState,
-} from "./workspace-readiness.js";
+} from "./worktree-readiness.js";
 export type {
   NormalizedWorktreeFileAvailabilityQuery,
   WorktreeFileAvailabilityQuery,
