@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CONTROL_PLANE_CONFORMANCE_OPEN,
+  CONTROL_PLANE_CONFORMANCE_RESULT,
+  CONTROL_PLANE_CONFORMANCE_TERMINAL,
   runControlPlanePortConformance,
 } from "../conformance/control-plane-port.js";
+import type { CompleteControlPlaneRunInput } from "../contracts/control-plane-port.js";
 import type { CapabilityFixtureSeed } from "./capability-control-plane-types.js";
 import {
   CapabilityMockControlPlaneAdapter,
@@ -227,6 +230,85 @@ describe("CapabilityMockControlPlaneAdapter", () => {
     ).rejects.toMatchObject({ code: "idempotency_conflict" });
   });
 
+  it("rolls back every state change when command execution fails", async () => {
+    const adapter = seeded({
+      faults: [{
+        id: "lost-create-ack",
+        operation: "apply_command",
+        commandKind: "create_task",
+        effect: "lost_ack",
+        remaining: 1,
+        code: "fixture_create_ack_lost",
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["delegation:tasks:create"],
+    });
+    const before = adapter.serialize();
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "invalid-child",
+      command: { kind: "create_task", title: "" },
+    })).rejects.toMatchObject({ code: "semantic_command_invalid" });
+
+    expect(adapter.serialize()).toBe(before);
+    const corrected = {
+      runId: "run-1",
+      idempotencyKey: "invalid-child",
+      command: { kind: "create_task", title: "Valid child" },
+    } as const;
+    await expect(adapter.applyCommand(corrected)).rejects.toMatchObject({
+      code: "fixture_create_ack_lost",
+      retryable: true,
+    });
+    await expect(adapter.applyCommand(corrected)).resolves.toMatchObject({
+      disposition: "duplicate",
+    });
+    expect(adapter.snapshot().tasks.map((task) => task.title)).toContain("Valid child");
+  });
+
+  it("preserves retryable command faults until semantic validation succeeds", async () => {
+    const adapter = seeded({
+      faults: [{
+        id: "retry-create",
+        operation: "apply_command",
+        commandKind: "create_task",
+        effect: "retryable_error",
+        remaining: 1,
+        code: "fixture_create_temporarily_unavailable",
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["delegation:tasks:create"],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "create-after-validation",
+      command: { kind: "create_task", title: "" },
+    })).rejects.toMatchObject({ code: "semantic_command_invalid", retryable: false });
+    expect(adapter.snapshot().faults[0]?.remaining).toBe(1);
+
+    const corrected = {
+      runId: "run-1",
+      idempotencyKey: "create-after-validation",
+      command: { kind: "create_task", title: "Valid child" },
+    } as const;
+    await expect(adapter.applyCommand(corrected)).rejects.toMatchObject({
+      code: "fixture_create_temporarily_unavailable",
+      retryable: true,
+    });
+    expect(adapter.snapshot().faults[0]?.remaining).toBe(0);
+    await expect(adapter.applyCommand(corrected)).resolves.toMatchObject({
+      disposition: "applied",
+    });
+  });
+
   it("serializes, restores, and replays gapped events without a live service", async () => {
     const adapter = seeded();
     await adapter.start();
@@ -366,6 +448,66 @@ describe("CapabilityMockControlPlaneAdapter", () => {
     expect(snapshot.runs[0]?.status).toBe("succeeded");
   });
 
+  it("preserves completion faults until a completion passes semantic validation", async () => {
+    const adapter = seeded({
+      faults: [{
+        id: "retry-completion",
+        operation: "complete_run",
+        effect: "retryable_error",
+        remaining: 1,
+        code: "completion_temporarily_unavailable",
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun(OPEN);
+
+    await expect(
+      adapter.completeRun({
+        result: {
+          ...CONTROL_PLANE_CONFORMANCE_RESULT,
+          completionClaim: null,
+        } as unknown as CompleteControlPlaneRunInput["result"],
+        terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+      }),
+    ).rejects.toMatchObject({ code: "native_result_invalid" });
+    await expect(
+      adapter.completeRun({
+        result: CONTROL_PLANE_CONFORMANCE_RESULT,
+        terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+      }),
+    ).rejects.toMatchObject({ code: "terminal_event_missing" });
+    expect(adapter.snapshot().faults[0]?.remaining).toBe(1);
+
+    await adapter.appendEvent({
+      schema: "paperclip.prp.event.v1",
+      sourceEventId: "fixture-source:terminal:completion-retry",
+      sourceSeq: 1,
+      sourceInstanceId: "fixture-source",
+      sourceKind: "runner",
+      runId: "run-1",
+      normalizedSessionId: "session-1",
+      turnId: "turn-1",
+      eventType: "run.terminal",
+      schemaVersion: 1,
+      priority: 0,
+      emittedAt: "2026-08-09T00:00:10.000Z",
+      payload: { ...CONTROL_PLANE_CONFORMANCE_TERMINAL },
+    });
+    await expect(
+      adapter.completeRun({
+        result: CONTROL_PLANE_CONFORMANCE_RESULT,
+        terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+      }),
+    ).rejects.toMatchObject({ code: "completion_temporarily_unavailable", retryable: true });
+    expect(adapter.snapshot().faults[0]?.remaining).toBe(0);
+
+    await adapter.completeRun({
+      result: CONTROL_PLANE_CONFORMANCE_RESULT,
+      terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+    });
+    expect(adapter.snapshot().runs[0]).toMatchObject({ status: "succeeded" });
+  });
+
   it("enforces budget hard stops and releases run authority", async () => {
     const adapter = seeded({
       budgets: [
@@ -409,6 +551,50 @@ describe("CapabilityMockControlPlaneAdapter", () => {
         command: { kind: "report_progress", body: "Should not be accepted." },
       }),
     ).rejects.toMatchObject({ code: "budget_hard_stop" });
+  });
+
+  it("replays a lost acknowledgement after the committed command stops its run", async () => {
+    const adapter = seeded({
+      budgets: [
+        {
+          id: "budget-company-1",
+          scope: "company",
+          scopeId: "company-1",
+          limitCents: 100,
+          spentCents: 90,
+          hardStop: true,
+        },
+        {
+          id: "budget-actor-1",
+          scope: "actor",
+          scopeId: "actor-1",
+          limitCents: 100,
+          spentCents: 90,
+          hardStop: true,
+        },
+      ],
+      faults: [{
+        id: "lost-budget-ack",
+        operation: "apply_command",
+        commandKind: "record_budget_usage",
+        effect: "lost_ack",
+        remaining: 1,
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({ ...OPEN, capabilities: ["control_plane:budget"] });
+    const envelope = {
+      runId: "run-1",
+      idempotencyKey: "budget-stop-retry",
+      command: { kind: "record_budget_usage" as const, cents: 10 },
+    };
+
+    await expect(adapter.applyCommand(envelope)).rejects.toMatchObject({ retryable: true });
+    await expect(adapter.applyCommand(envelope)).resolves.toMatchObject({
+      disposition: "duplicate",
+    });
+    expect(adapter.snapshot().budgets.map((budget) => budget.spentCents)).toEqual([100, 100]);
+    expect(adapter.snapshot().runs[0]?.status).toBe("budget_stopped");
   });
 
   it("returns typed denials when a command claim is missing", async () => {
@@ -509,6 +695,822 @@ describe("CapabilityMockControlPlaneAdapter", () => {
     expect(adapter.snapshot().comments.map((comment) => comment.body)).toEqual([
       "Ready for review.",
     ]);
+  });
+
+  it("resolves linked approvals only with an executable requester continuation", async () => {
+    const adapter = seeded({
+      actors: [
+        {
+          id: "actor-1",
+          companyId: "company-1",
+          name: "Mock Approver",
+          role: "approver",
+          status: "active",
+          budgetId: "budget-actor-1",
+          capabilityGrants: [],
+        },
+        {
+          id: "actor-2",
+          companyId: "company-1",
+          name: "Other Requester",
+          role: "engineer",
+          status: "active",
+          budgetId: "budget-actor-2",
+          capabilityGrants: [],
+        },
+      ],
+      tasks: [
+        {
+          id: "task-1",
+          companyId: "company-1",
+          identifier: "MCK-1",
+          title: "Active task",
+          description: null,
+          status: "todo",
+          priority: "high",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-1",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-2",
+          companyId: "company-1",
+          identifier: "MCK-2",
+          title: "Other task",
+          description: null,
+          status: "in_review",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-3",
+          companyId: "company-1",
+          identifier: "MCK-3",
+          title: "Terminal requester task",
+          description: null,
+          status: "done",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: "2026-08-09T00:00:00.000Z",
+          completedAt: "2026-08-09T00:01:00.000Z",
+        },
+        {
+          id: "task-4",
+          companyId: "company-1",
+          identifier: "MCK-4",
+          title: "Owned requester task",
+          description: null,
+          status: "in_review",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: "run-conflict",
+          executionRunId: "run-conflict",
+          startedAt: "2026-08-09T00:00:00.000Z",
+          completedAt: null,
+        },
+        {
+          id: "task-5",
+          companyId: "company-1",
+          identifier: "MCK-5",
+          title: "Parked requester task",
+          description: null,
+          status: "backlog",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+      ],
+      approvals: [
+        {
+          id: "approval-active-task",
+          companyId: "company-1",
+          taskIds: ["task-1"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+        {
+          id: "approval-other-task",
+          companyId: "company-1",
+          taskIds: ["task-1", "task-2"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+        {
+          id: "approval-unlinked",
+          companyId: "company-1",
+          taskIds: ["task-2"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+        {
+          id: "approval-terminal-requester",
+          companyId: "company-1",
+          taskIds: ["task-1", "task-3"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+        {
+          id: "approval-owned-requester",
+          companyId: "company-1",
+          taskIds: ["task-1", "task-4"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+        {
+          id: "approval-backlog-requester",
+          companyId: "company-1",
+          taskIds: ["task-1", "task-5"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "actor-2",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+      ],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: [
+        "governance:approvals:comment",
+        "governance:approvals:decide",
+      ],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "shared-approval-comment",
+      command: {
+        kind: "comment_on_approval",
+        approvalId: "approval-other-task",
+        body: "Scoped from the active task.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "shared-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-other-task",
+        decision: "approved",
+        note: "Shared approval is in scope.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "active-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-active-task",
+        decision: "approved",
+        note: "Active-task approval is in scope.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "terminal-requester-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-terminal-requester",
+        decision: "approved",
+        note: "A terminal task cannot receive the requester continuation.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "owned-requester-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-owned-requester",
+        decision: "approved",
+        note: "A task owned by another run cannot receive the continuation.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "backlog-requester-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-backlog-requester",
+        decision: "approved",
+        note: "A parked task cannot receive an executable continuation.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "unlinked-approval-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-unlinked",
+        decision: "approved",
+        note: "Must remain scoped.",
+      },
+    })).rejects.toMatchObject({ code: "approval_scope_violation" });
+    expect(adapter.snapshot()).toMatchObject({
+      approvals: [
+        {
+          id: "approval-active-task",
+          status: "approved",
+        },
+        {
+          id: "approval-other-task",
+          status: "approved",
+          comments: [{ body: "Scoped from the active task." }],
+        },
+        { id: "approval-unlinked", status: "pending" },
+        { id: "approval-terminal-requester", status: "approved" },
+        { id: "approval-owned-requester", status: "approved" },
+        { id: "approval-backlog-requester", status: "approved" },
+      ],
+    });
+    expect(adapter.snapshot().wakes).toHaveLength(5);
+    expect(adapter.snapshot().wakes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        actorId: "actor-2",
+        taskId: "task-2",
+        reason: "approval_resolved",
+        payload: { approvalId: "approval-other-task", decision: "approved" },
+      }),
+      ...[
+        "approval-active-task",
+        "approval-terminal-requester",
+        "approval-owned-requester",
+        "approval-backlog-requester",
+      ].map((approvalId) => expect.objectContaining({
+        actorId: "actor-2",
+        reason: "approval_resolved",
+        payload: { approvalId, decision: "approved" },
+      })),
+    ]));
+    const recoveryTaskIds = adapter.snapshot().wakes
+      .filter((wake) => wake.taskId !== "task-2")
+      .map((wake) => wake.taskId);
+    expect(recoveryTaskIds).toHaveLength(4);
+    for (const taskId of recoveryTaskIds) {
+      expect(adapter.snapshot().tasks.find((candidate) => candidate.id === taskId)).toMatchObject({
+        status: "todo",
+        assigneeActorId: "actor-2",
+        checkoutRunId: null,
+        executionRunId: null,
+      });
+    }
+    expect(adapter.snapshot().tasks.find((candidate) => candidate.id === "task-5")).toMatchObject({
+      status: "backlog",
+      assigneeActorId: "actor-2",
+      checkoutRunId: null,
+      executionRunId: null,
+    });
+    expect(adapter.snapshot().wakes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: "task-5" }),
+    ]));
+    const requesterWake = adapter.snapshot().wakes.find((wake) => wake.actorId === "actor-2");
+    expect(requesterWake).toMatchObject({ taskId: "task-2", status: "scheduled" });
+    await expect(adapter.openFixtureRun({
+      ...OPEN,
+      identity: {
+        ...OPEN.identity,
+        runId: "run-requester-wake",
+        sessionId: "session-requester-wake",
+        agentId: "actor-2",
+        issueId: requesterWake!.taskId,
+      },
+      wake: {
+        reason: requesterWake!.reason,
+        payload: requesterWake!.payload,
+      },
+    })).resolves.toMatchObject({
+      actor: { id: "actor-2" },
+      activeTask: { id: "task-2", checkoutRunId: "run-requester-wake" },
+    });
+  });
+
+  it("routes approval continuation according to unresolved blocker state", async () => {
+    const seed = {
+      actors: [
+        {
+          id: "actor-1",
+          companyId: "company-1",
+          name: "Mock Approver",
+          role: "approver",
+          status: "active",
+          budgetId: "budget-actor-1",
+          capabilityGrants: [],
+        },
+        {
+          id: "actor-2",
+          companyId: "company-1",
+          name: "Blocked Requester",
+          role: "engineer",
+          status: "active",
+          budgetId: "budget-actor-2",
+          capabilityGrants: [],
+        },
+      ],
+      tasks: [
+        {
+          id: "task-1",
+          companyId: "company-1",
+          identifier: "MCK-1",
+          title: "Approval task",
+          description: null,
+          status: "todo",
+          priority: "high",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-1",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-2",
+          companyId: "company-1",
+          identifier: "MCK-2",
+          title: "Blocked requester task",
+          description: null,
+          status: "blocked",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-3",
+          companyId: "company-1",
+          identifier: "MCK-3",
+          title: "Unfinished dependency",
+          description: null,
+          status: "todo",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-2",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+      ],
+      approvals: [{
+        id: "approval-blocked-requester",
+        companyId: "company-1",
+        taskIds: ["task-1", "task-2"],
+        type: "request_board_approval",
+        status: "pending",
+        requestedByActorId: "actor-2",
+        payload: {},
+        decisionNote: null,
+        comments: [],
+        createdAt: "2026-08-09T00:00:00.000Z",
+        decidedAt: null,
+      }],
+      blockers: [{
+        id: "blocker-requester",
+        taskId: "task-2",
+        blockedByTaskId: "task-3",
+        createdAt: "2026-08-09T00:00:00.000Z",
+      }],
+    } satisfies CapabilityFixtureSeed;
+    const adapter = seeded(seed);
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["governance:approvals:decide"],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "blocked-requester-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-blocked-requester",
+        decision: "approved",
+        note: "Record approval without bypassing dependencies.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+
+    const snapshot = adapter.snapshot();
+    expect(snapshot.tasks.find((task) => task.id === "task-2")).toMatchObject({
+      status: "blocked",
+      checkoutRunId: null,
+      executionRunId: null,
+    });
+    expect(snapshot.blockers).toEqual([
+      expect.objectContaining({
+        taskId: "task-2",
+        blockedByTaskId: "task-3",
+      }),
+    ]);
+    expect(snapshot.wakes).toHaveLength(1);
+    expect(snapshot.wakes[0]?.taskId).not.toBe("task-2");
+    expect(snapshot.tasks.find((task) => task.id === snapshot.wakes[0]?.taskId)).toMatchObject({
+      status: "todo",
+      assigneeActorId: "actor-2",
+      checkoutRunId: null,
+      executionRunId: null,
+    });
+
+    const completedBlockerAdapter = seeded({
+      ...seed,
+      tasks: seed.tasks.map((task) =>
+        task.id === "task-3"
+          ? {
+              ...task,
+              status: "done" as const,
+              completedAt: "2026-08-09T00:01:00.000Z",
+            }
+          : { ...task },
+      ),
+    });
+    await completedBlockerAdapter.start();
+    await completedBlockerAdapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["governance:approvals:decide"],
+    });
+    await expect(completedBlockerAdapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "completed-blocker-requester-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-blocked-requester",
+        decision: "approved",
+        note: "Continue the linked task after its dependency completed.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied" });
+
+    const completedBlockerSnapshot = completedBlockerAdapter.snapshot();
+    expect(completedBlockerSnapshot.blockers).toEqual([
+      expect.objectContaining({
+        taskId: "task-2",
+        blockedByTaskId: "task-3",
+      }),
+    ]);
+    expect(completedBlockerSnapshot.tasks).toHaveLength(seed.tasks.length);
+    expect(completedBlockerSnapshot.wakes).toEqual([
+      expect.objectContaining({
+        actorId: "actor-2",
+        taskId: "task-2",
+        reason: "approval_resolved",
+        payload: {
+          approvalId: "approval-blocked-requester",
+          decision: "approved",
+        },
+      }),
+    ]);
+
+    await completedBlockerAdapter.openFixtureRun({
+      ...OPEN,
+      identity: {
+        ...OPEN.identity,
+        runId: "run-completed-blocker-requester",
+        sessionId: "session-completed-blocker-requester",
+        agentId: "actor-2",
+        issueId: "task-2",
+      },
+    });
+    await completedBlockerAdapter.appendEvent({
+      schema: "paperclip.prp.event.v1",
+      sourceEventId: "fixture-source:terminal:completed-blocker-requester",
+      sourceSeq: 1,
+      sourceInstanceId: "fixture-source",
+      sourceKind: "runner",
+      runId: "run-completed-blocker-requester",
+      normalizedSessionId: "session-completed-blocker-requester",
+      turnId: "turn-completed-blocker-requester",
+      eventType: "run.terminal",
+      schemaVersion: 1,
+      priority: 0,
+      emittedAt: "2026-08-09T00:02:00.000Z",
+      payload: { ...CONTROL_PLANE_CONFORMANCE_TERMINAL },
+    });
+    await expect(completedBlockerAdapter.completeRun({
+      result: CONTROL_PLANE_CONFORMANCE_RESULT,
+      terminal: CONTROL_PLANE_CONFORMANCE_TERMINAL,
+    })).resolves.toBeUndefined();
+    const terminalSnapshot = completedBlockerAdapter.snapshot();
+    expect(terminalSnapshot.tasks.find((task) => task.id === "task-2"))
+      .toMatchObject({ status: "done", checkoutRunId: null, executionRunId: null });
+    expect(terminalSnapshot.blockers).toEqual([]);
+  });
+
+  it("does not traverse resolved blocker rows during cycle detection", async () => {
+    const adapter = seeded({
+      tasks: [
+        {
+          id: "task-1",
+          companyId: "company-1",
+          identifier: "MCK-1",
+          title: "Active task",
+          description: null,
+          status: "todo",
+          priority: "high",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-1",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-2",
+          companyId: "company-1",
+          identifier: "MCK-2",
+          title: "Candidate dependency",
+          description: null,
+          status: "todo",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-1",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          id: "task-3",
+          companyId: "company-1",
+          identifier: "MCK-3",
+          title: "Completed dependency",
+          description: null,
+          status: "done",
+          priority: "medium",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "actor-1",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: "2026-08-09T00:00:00.000Z",
+          completedAt: "2026-08-09T00:01:00.000Z",
+        },
+      ],
+      blockers: [
+        {
+          id: "resolved-blocker",
+          taskId: "task-2",
+          blockedByTaskId: "task-3",
+          createdAt: "2026-08-09T00:00:00.000Z",
+        },
+        {
+          id: "historical-return-edge",
+          taskId: "task-3",
+          blockedByTaskId: "task-1",
+          createdAt: "2026-08-09T00:00:00.000Z",
+        },
+      ],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["dependencies:write"],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "resolved-blocker-cycle-check",
+      command: { kind: "set_dependencies", blockedByTaskIds: ["task-2"] },
+    })).resolves.toMatchObject({ disposition: "applied" });
+    expect(adapter.snapshot().blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: "task-1", blockedByTaskId: "task-2" }),
+    ]));
+  });
+
+  it("does not schedule approval recovery for an inactive requester", async () => {
+    const adapter = seeded({
+      actors: [
+        {
+          id: "actor-1",
+          companyId: "company-1",
+          name: "Mock Approver",
+          role: "approver",
+          status: "active",
+          budgetId: "budget-actor-1",
+          capabilityGrants: [],
+        },
+        {
+          id: "actor-2",
+          companyId: "company-1",
+          name: "Paused Requester",
+          role: "engineer",
+          status: "paused",
+          budgetId: "budget-actor-2",
+          capabilityGrants: [],
+        },
+      ],
+      approvals: [{
+        id: "approval-paused-requester",
+        companyId: "company-1",
+        taskIds: ["task-1"],
+        type: "request_board_approval",
+        status: "pending",
+        requestedByActorId: "actor-2",
+        payload: {},
+        decisionNote: null,
+        comments: [],
+        createdAt: "2026-08-09T00:00:00.000Z",
+        decidedAt: null,
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["governance:approvals:decide"],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "paused-requester-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-paused-requester",
+        decision: "approved",
+        note: "Record the decision without an unusable continuation.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied", scheduledWakeIds: [] });
+    expect(adapter.snapshot().tasks).toHaveLength(1);
+    expect(adapter.snapshot().wakes).toEqual([]);
+  });
+
+  it("records approval decisions when the requester has no applicable budget", async () => {
+    const adapter = seeded({
+      actors: [
+        {
+          id: "actor-1",
+          companyId: "company-1",
+          name: "Mock Approver",
+          role: "approver",
+          status: "active",
+          budgetId: "budget-actor-1",
+          capabilityGrants: [],
+        },
+        {
+          id: "actor-2",
+          companyId: "company-1",
+          name: "Budgetless Requester",
+          role: "engineer",
+          status: "active",
+          budgetId: "missing-budget-actor-2",
+          capabilityGrants: [],
+        },
+      ],
+      budgets: [{
+        id: "budget-actor-1",
+        scope: "actor",
+        scopeId: "actor-1",
+        limitCents: 1_000,
+        spentCents: 0,
+        hardStop: true,
+      }],
+      approvals: [{
+        id: "approval-budgetless-requester",
+        companyId: "company-1",
+        taskIds: ["task-1"],
+        type: "request_board_approval",
+        status: "pending",
+        requestedByActorId: "actor-2",
+        payload: {},
+        decisionNote: null,
+        comments: [],
+        createdAt: "2026-08-09T00:00:00.000Z",
+        decidedAt: null,
+      }],
+    });
+    await adapter.start();
+    await adapter.openFixtureRun({
+      ...OPEN,
+      capabilities: ["governance:approvals:decide"],
+    });
+
+    await expect(adapter.applyCommand({
+      runId: "run-1",
+      idempotencyKey: "budgetless-requester-decision",
+      command: {
+        kind: "decide_approval",
+        approvalId: "approval-budgetless-requester",
+        decision: "approved",
+        note: "Record governance independently from continuation capacity.",
+      },
+    })).resolves.toMatchObject({ disposition: "applied", scheduledWakeIds: [] });
+
+    expect(adapter.snapshot()).toMatchObject({
+      approvals: [{
+        id: "approval-budgetless-requester",
+        status: "approved",
+        decisionNote: "Record governance independently from continuation capacity.",
+      }],
+      wakes: [],
+    });
+    expect(adapter.snapshot().tasks).toHaveLength(1);
+  });
+
+  it("rejects fixture wake references outside the company actor scope", () => {
+    expect(() => seeded({
+      tasks: [
+        {
+          id: "task-1",
+          companyId: "company-1",
+          identifier: "MCK-1",
+          title: "Invalid assignee",
+          description: null,
+          status: "todo",
+          priority: "high",
+          workMode: "standard",
+          parentId: null,
+          assigneeActorId: "missing-actor",
+          checkoutRunId: null,
+          executionRunId: null,
+          startedAt: null,
+          completedAt: null,
+        },
+      ],
+    })).toThrow(/invalid assignee actor/);
+
+    expect(() => seeded({
+      approvals: [
+        {
+          id: "approval-invalid-requester",
+          companyId: "company-1",
+          taskIds: ["task-1"],
+          type: "request_board_approval",
+          status: "pending",
+          requestedByActorId: "missing-actor",
+          payload: {},
+          decisionNote: null,
+          comments: [],
+          createdAt: "2026-08-09T00:00:00.000Z",
+          decidedAt: null,
+        },
+      ],
+    })).toThrow(/invalid requester actor/);
+
+    expect(() => seeded({
+      blockers: [{
+        id: "blocker-invalid-task",
+        taskId: "task-1",
+        blockedByTaskId: "missing-task",
+        createdAt: "2026-08-09T00:00:00.000Z",
+      }],
+    })).toThrow(/invalid task reference/);
   });
 
   it("rejects stale interaction targets and invalid interaction outcomes", async () => {

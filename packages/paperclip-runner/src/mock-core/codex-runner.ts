@@ -404,7 +404,7 @@ export async function runCodexCodexTracer(input: CodexCodexTracerInput): Promise
       (event) => event.eventType === "run.result.proposed",
     );
     const proposedResult = proposals.length === 1 ? structuredClone(proposals[0]!.payload) : null;
-    const resultDecision: CodexResultDecision =
+    const proposalDecision: CodexResultDecision =
       proposals.length === 1
         ? validateCodexResultProposal(proposedResult, input.taskEnvelope)
         : {
@@ -448,26 +448,50 @@ export async function runCodexCodexTracer(input: CodexCodexTracerInput): Promise
         message,
       }),
     );
+    const providerTerminal = providerEvents.findLast(isTurnTerminal);
+    if (providerTerminal === undefined) throw new Error("turn terminal invariant failed");
+    const providerRuntime = runtimeTerminal(providerTerminal);
+    const resultAccepted =
+      proposalDecision.status === "accepted" && providerRuntime.runTerminalState === "succeeded";
+    const resultDecision: CodexResultDecision = resultAccepted
+      ? proposalDecision
+      : proposalDecision.status === "rejected"
+        ? proposalDecision
+        : {
+            status: "rejected",
+            result: null,
+            issues: [{
+              code: "schema_validation",
+              path: "/turn/terminal",
+              message: `the provider turn ended as ${providerRuntime.turnTerminalState}`,
+            }],
+          };
     controlEvents.push(
-      resultDecision.status === "accepted"
+      resultAccepted
         ? controlEvent("run.result.accepted", {
             contractRevision: input.taskEnvelope.completionContract.revision,
             result: resultDecision.result,
           })
         : controlEvent("run.result.rejected", {
-            reasonCode: "semantic_result_rejected",
+            reasonCode:
+              proposalDecision.status === "rejected"
+                ? "semantic_result_rejected"
+                : "provider_turn_did_not_complete",
             issues: resultDecision.issues,
             recovery: { required: true, recoverable: true },
           }),
     );
-    const providerTerminal = providerEvents.findLast(isTurnTerminal);
-    if (providerTerminal === undefined) throw new Error("turn terminal invariant failed");
-    const runtime = runtimeTerminal(providerTerminal);
+    // A provider may complete its turn after proposing a result that the
+    // controller cannot accept. Preserve the provider's turn fact, but never
+    // promote a rejected semantic result to a successful run.
+    const runtime = resultDecision.status === "accepted" || providerRuntime.runTerminalState === "cancelled"
+      ? providerRuntime
+      : { ...providerRuntime, runTerminalState: "failed" as const };
     controlEvents.push(controlEvent("run.terminal", {
       schema: "paperclip.prp.terminal.v1",
       ...runtime,
       reportedWorkDisposition:
-        resultDecision.status === "accepted"
+        resultDecision.status === "accepted" && runtime.runTerminalState === "succeeded"
           ? resultDecision.result.reportedWorkDisposition
           : "yielded",
     }, providerTerminal.turnId ? { turnId: providerTerminal.turnId } : {}));

@@ -1,189 +1,173 @@
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-use aes_gcm::aead::{Aead, Payload};
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use base64::Engine as _;
-use hmac::{Hmac, Mac};
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-use crate::codex_provider::ProviderConfig;
-use crate::process_supervisor::SupervisedProcess;
-use crate::provider_bridge::{AuthorizedToolSet, ProviderToolBridge, ToolResult};
+use super::{DurableRunnerConfig, DurableRunnerError, PROTOCOL, PROTOCOL_VERSION};
 
 const STATE_SCHEMA: &str = "paperclip.runner.durable.state.v1";
-const PROTOCOL: &str = "paperclip.runner";
-const PROTOCOL_VERSION: u64 = 1;
-const SECURE_FRAME_SCHEMA: &str = "paperclip.runner.secure-frame.v1";
-const STATIC_WEBSOCKET_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
-const STATIC_WEBSOCKET_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
-const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
+const STATE_FILE: &str = "runner-state.json";
+const MAX_RECENT_COMMANDS: usize = 128;
 const MAX_DIAGNOSTICS: usize = 32;
-const MAX_RECENT_PROCESSED_COMMANDS: usize = 128;
-const COMPACTED_COMMAND_FILTER_BYTES: usize = 4096;
-const COMPACTED_COMMAND_FILTER_HASHES: usize = 7;
-const REVOKE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
-const TEMP_FILE_ATTEMPTS: usize = 16;
-const MAX_DURABLE_STRING_BYTES: usize = 32 * 1024;
+const MAX_COMMAND_RESULT_BYTES: usize = 64 * 1024;
+const MAX_EXECUTOR_EVENT_RECEIPTS: usize = 256;
+const STATE_OVERHEAD_BYTES: usize = 16 * 1024 * 1024;
+const TEMP_FILE_ATTEMPTS: usize = 32;
 
-type HmacSha256 = Hmac<Sha256>;
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventPriority {
+    P0,
+    P1,
+    P2,
+}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DurableRunnerError(String);
-
-impl DurableRunnerError {
-    pub fn invalid(message: impl Into<String>) -> Self {
-        Self(message.into())
+impl EventPriority {
+    fn number(self) -> u8 {
+        match self {
+            Self::P0 => 0,
+            Self::P1 => 1,
+            Self::P2 => 2,
+        }
     }
 }
 
-impl Display for DurableRunnerError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl Error for DurableRunnerError {}
-
-struct SensitiveString(Vec<u8>);
-
-impl SensitiveString {
-    fn new(value: String) -> Self {
-        Self(value.into_bytes())
-    }
-
-    fn expose(&self) -> &str {
-        std::str::from_utf8(&self.0).expect("sensitive value started as valid UTF-8")
-    }
-
-    fn clear(&mut self) {
-        self.0.fill(0);
-        self.0.clear();
-    }
-}
-
-impl Drop for SensitiveString {
-    fn drop(&mut self) {
-        self.clear();
-    }
-}
-
-pub struct BootstrapTicket(SensitiveString);
-
-impl BootstrapTicket {
-    fn expose(&self) -> &str {
-        self.0.expose()
-    }
-}
-
-pub fn capture_bootstrap_ticket() -> Result<Option<BootstrapTicket>, DurableRunnerError> {
-    let value = std::env::var_os("PAPERCLIP_RUNNER_BOOTSTRAP_TICKET");
-    std::env::remove_var("PAPERCLIP_RUNNER_BOOTSTRAP_TICKET");
-    value
-        .map(|value| {
-            value
-                .into_string()
-                .map(|value| BootstrapTicket(SensitiveString::new(value)))
-                .map_err(|_| {
-                    DurableRunnerError::invalid("runner bootstrap ticket is not valid UTF-8")
-                })
-        })
-        .transpose()
-}
-
-#[derive(Clone, Debug)]
-pub struct DurableRunnerConfig {
-    pub connect_url: String,
-    pub ca_bundle_path: Option<PathBuf>,
-    pub state_dir: PathBuf,
-    pub runner_instance_id: String,
-    pub environment_lease_id: String,
-    pub run_id: String,
-    pub normalized_session_id: String,
-    pub turn_id: String,
-    pub item_id: String,
-    pub runner_version: String,
-    pub runner_digest: String,
-    pub fake_harness_path: Option<PathBuf>,
-    pub fake_harness_script_path: Option<PathBuf>,
-    pub max_outbox_bytes: usize,
-    pub p0_reserve_bytes: usize,
-    pub max_frame_bytes: usize,
-    pub reconnect_delay: Duration,
-    pub reconnect_grace: Option<Duration>,
-    pub max_runtime: Duration,
-    pub lifecycle_mode: String,
-    pub idle_timeout: Option<Duration>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AttachmentIdentity {
-    pub run_id: String,
-    pub turn_id: String,
-    pub item_id: String,
+pub struct Command {
+    pub schema: String,
+    pub command_id: String,
+    pub controller_seq: u64,
+    #[serde(rename = "type")]
+    pub command_type: String,
+    pub issued_at: String,
+    #[serde(default)]
+    pub deadline_at: Option<String>,
+    #[serde(default)]
+    pub precondition: Option<Value>,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+impl Command {
+    pub fn validate(&self) -> Result<(), DurableRunnerError> {
+        if self.schema != "paperclip.prp.command.v1" {
+            return Err(DurableRunnerError::invalid(
+                "command requires the paperclip.prp.command.v1 schema",
+            ));
+        }
+        if self.command_id.is_empty()
+            || self.command_id.len() > 160
+            || self.command_id.chars().any(char::is_control)
+        {
+            return Err(DurableRunnerError::invalid(
+                "commandId is empty, oversized, or contains control characters",
+            ));
+        }
+        if self.issued_at.is_empty()
+            || self.issued_at.len() > 64
+            || self.issued_at.chars().any(char::is_control)
+            || self.deadline_at.as_ref().is_some_and(|deadline| {
+                deadline.is_empty() || deadline.len() > 64 || deadline.chars().any(char::is_control)
+            })
+        {
+            return Err(DurableRunnerError::invalid(
+                "command timestamps are empty, oversized, or contain control characters",
+            ));
+        }
+        if self.controller_seq == 0 {
+            return Err(DurableRunnerError::invalid(
+                "command controllerSeq must be positive",
+            ));
+        }
+        if !self.payload.is_object() {
+            return Err(DurableRunnerError::invalid(
+                "command payload must be an object",
+            ));
+        }
+        if self
+            .precondition
+            .as_ref()
+            .is_some_and(|precondition| !precondition.is_object())
+        {
+            return Err(DurableRunnerError::invalid(
+                "command precondition must be an object",
+            ));
+        }
+        if !matches!(
+            self.command_type.as_str(),
+            "run.prepare"
+                | "run.attach"
+                | "session.open"
+                | "turn.start"
+                | "turn.steer"
+                | "turn.interrupt"
+                | "turn.stop"
+                | "request.resolve"
+                | "interaction.receipt"
+                | "semantic_tool.result"
+                | "session.snapshot"
+                | "session.close"
+                | "session.budget.increase"
+                | "session.destroy"
+                | "run.cancel"
+                | "runner.drain"
+                | "runner.suspend"
+                | "runner.shutdown"
+        ) {
+            return Err(DurableRunnerError::invalid(
+                "command type is not supported by PRP v1",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredOutboxEvent {
     pub source_seq: u64,
-    pub source_event_id: String,
     pub priority: u8,
     pub event_type: String,
-    pub item_id: Option<String>,
     pub envelope: Value,
     pub byte_size: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProcessedCommand {
+pub struct StoredCommandResult {
     pub command_id: String,
     pub controller_seq: u64,
-    pub command_digest: String,
+    pub command_type: String,
     pub status: String,
-    pub logical_effect_count: u64,
     pub result: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PendingProviderRuntimeRequest {
-    pub request_id: String,
-    pub turn_id: String,
-    pub request_kind: String,
-    pub created_at_unix_ms: u64,
-    #[serde(default)]
-    pub request: Value,
+struct ExecutorEventReceipt {
+    fingerprint: String,
+    source_seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandDisposition {
+    Execute,
+    Replay(StoredCommandResult),
+    Reject(StoredCommandResult),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompletionContractBinding {
-    pub revision: String,
-    pub criterion_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DurableRunnerState {
+pub struct DurableState {
     pub schema: String,
     pub runner_instance_id: String,
     pub environment_lease_id: String,
@@ -191,69 +175,28 @@ pub struct DurableRunnerState {
     pub normalized_session_id: String,
     pub turn_id: String,
     pub item_id: String,
-    #[serde(default)]
-    pub previous_attachment_identity: Option<AttachmentIdentity>,
     pub lifecycle: String,
-    #[serde(default = "default_lifecycle_mode")]
-    pub lifecycle_mode: String,
-    #[serde(default)]
-    pub idle_timeout_ms: Option<u64>,
-    #[serde(default)]
-    pub last_activity_at_unix_ms: u64,
-    #[serde(default)]
-    pub active_turn: bool,
     pub next_source_seq: u64,
     pub acked_source_seq: u64,
     pub last_controller_command_seq: u64,
+    pub compacted_through_controller_seq: u64,
     pub reconnect_count: u64,
     pub max_outbox_bytes: usize,
+    pub p0_reserve_bytes: usize,
     pub peak_outbox_bytes: usize,
     pub outbox: Vec<StoredOutboxEvent>,
-    pub processed_commands: BTreeMap<String, ProcessedCommand>,
-    #[serde(default = "empty_compacted_command_filter")]
-    pub compacted_command_filter: String,
+    pub processed_commands: BTreeMap<String, StoredCommandResult>,
     #[serde(default)]
-    pub compacted_command_count: u64,
+    pub processed_command_fingerprints: BTreeMap<String, String>,
+    #[serde(default)]
+    executor_event_receipts: BTreeMap<String, ExecutorEventReceipt>,
     pub diagnostics: Vec<String>,
     pub backpressure: bool,
     pub recoverable_failure: Option<String>,
-    pub unrecoverable_outcome: Option<String>,
-    pub harness_generation: u64,
-    pub stop_after_flush: bool,
-    #[serde(default)]
-    pub provider_tool_bridge: ProviderToolBridge,
-    #[serde(default)]
-    pub completion_contract: Option<CompletionContractBinding>,
-    #[serde(default)]
-    pub last_agent_message: Option<String>,
-    /// First structured result emitted by the provider for the attached run.
-    /// This is per-run state: a warm session clears it when a new run attaches.
-    #[serde(default)]
-    pub semantic_result: Option<Value>,
-    #[serde(default, alias = "codexProviderConfig")]
-    pub provider_config: Option<ProviderConfig>,
-    #[serde(default, alias = "codexProviderThreadId")]
-    pub provider_session_id: Option<String>,
-    /// Provider-native backend identity (for example Codex's sessionId), kept
-    /// separately from the harness thread/record identity used to resume.
-    #[serde(default)]
-    pub provider_backend_session_id: Option<String>,
-    #[serde(default)]
-    pub provider_session_identity: Option<crate::codex_provider::ProviderSessionIdentity>,
-    #[serde(default)]
-    pub provider_event_cursor: Option<String>,
-    #[serde(default)]
-    pub provider_usage_cumulative: Option<Value>,
-    #[serde(default)]
-    pub provider_usage_run_baseline: Option<Value>,
-    #[serde(default)]
-    pub provider_budget_ceiling_usd: Option<f64>,
-    #[serde(default)]
-    pub pending_provider_runtime_requests: BTreeMap<String, PendingProviderRuntimeRequest>,
 }
 
-impl DurableRunnerState {
-    fn new(config: &DurableRunnerConfig) -> Self {
+impl DurableState {
+    pub(crate) fn new(config: &DurableRunnerConfig) -> Self {
         Self {
             schema: STATE_SCHEMA.to_owned(),
             runner_instance_id: config.runner_instance_id.clone(),
@@ -262,43 +205,22 @@ impl DurableRunnerState {
             normalized_session_id: config.normalized_session_id.clone(),
             turn_id: config.turn_id.clone(),
             item_id: config.item_id.clone(),
-            previous_attachment_identity: None,
             lifecycle: "connecting".to_owned(),
-            lifecycle_mode: config.lifecycle_mode.clone(),
-            idle_timeout_ms: config
-                .idle_timeout
-                .and_then(|duration| u64::try_from(duration.as_millis()).ok()),
-            last_activity_at_unix_ms: 0,
-            active_turn: false,
             next_source_seq: 1,
             acked_source_seq: 0,
             last_controller_command_seq: 0,
+            compacted_through_controller_seq: 0,
             reconnect_count: 0,
             max_outbox_bytes: config.max_outbox_bytes,
+            p0_reserve_bytes: config.p0_reserve_bytes,
             peak_outbox_bytes: 0,
             outbox: Vec::new(),
             processed_commands: BTreeMap::new(),
-            compacted_command_filter: empty_compacted_command_filter(),
-            compacted_command_count: 0,
+            processed_command_fingerprints: BTreeMap::new(),
+            executor_event_receipts: BTreeMap::new(),
             diagnostics: Vec::new(),
             backpressure: false,
             recoverable_failure: None,
-            unrecoverable_outcome: None,
-            harness_generation: 1,
-            stop_after_flush: false,
-            provider_tool_bridge: ProviderToolBridge::default(),
-            completion_contract: None,
-            last_agent_message: None,
-            semantic_result: None,
-            provider_config: None,
-            provider_session_id: None,
-            provider_backend_session_id: None,
-            provider_session_identity: None,
-            provider_event_cursor: None,
-            provider_usage_cumulative: None,
-            provider_usage_run_baseline: None,
-            provider_budget_ceiling_usd: None,
-            pending_provider_runtime_requests: BTreeMap::new(),
         }
     }
 
@@ -308,6 +230,213 @@ impl DurableRunnerState {
 
     pub fn highest_source_seq(&self) -> u64 {
         self.next_source_seq.saturating_sub(1)
+    }
+
+    pub fn enqueue_event(
+        &mut self,
+        config: &DurableRunnerConfig,
+        event_type: impl Into<String>,
+        priority: EventPriority,
+        payload: Value,
+    ) -> Result<u64, DurableRunnerError> {
+        let source_event_id = format!(
+            "event_{}_{:016}",
+            self.runner_instance_id, self.next_source_seq
+        );
+        self.enqueue_event_with_source_event_id(
+            config,
+            source_event_id,
+            event_type,
+            priority,
+            payload,
+        )
+    }
+
+    fn source_event_id_for_executor(
+        &self,
+        executor_event_id: &str,
+    ) -> Result<String, DurableRunnerError> {
+        if executor_event_id.is_empty()
+            || executor_event_id.len() > 160
+            || executor_event_id.chars().any(char::is_control)
+        {
+            return Err(DurableRunnerError::invalid(
+                "executor event identity is empty, oversized, or contains control characters",
+            ));
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"paperclip.executor-event.v1\0");
+        hasher.update(self.runner_instance_id.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(executor_event_id.as_bytes());
+        Ok(format!("event_executor_{:x}", hasher.finalize()))
+    }
+
+    fn has_source_event_id(&self, source_event_id: &str) -> bool {
+        self.outbox.iter().any(|event| {
+            event
+                .envelope
+                .pointer("/payload/sourceEventId")
+                .and_then(Value::as_str)
+                == Some(source_event_id)
+        })
+    }
+
+    pub(crate) fn has_executor_event_receipt(
+        &self,
+        executor_event_id: &str,
+        event_type: &str,
+        priority: EventPriority,
+        payload: &Value,
+    ) -> Result<bool, DurableRunnerError> {
+        self.source_event_id_for_executor(executor_event_id)?;
+        let Some(existing) = self.executor_event_receipts.get(executor_event_id) else {
+            return Ok(false);
+        };
+        if existing.fingerprint != executor_event_fingerprint(event_type, priority, payload) {
+            return Err(DurableRunnerError::invalid(
+                "executor event identity was reused with different event data",
+            ));
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn enqueue_executor_event(
+        &mut self,
+        config: &DurableRunnerConfig,
+        executor_event_id: String,
+        event_type: String,
+        priority: EventPriority,
+        payload: Value,
+    ) -> Result<u64, DurableRunnerError> {
+        if self.has_executor_event_receipt(&executor_event_id, &event_type, priority, &payload)? {
+            return Err(DurableRunnerError::invalid(
+                "executor event identity is already committed",
+            ));
+        }
+        let source_event_id = self.source_event_id_for_executor(&executor_event_id)?;
+        let fingerprint = executor_event_fingerprint(&event_type, priority, &payload);
+        let source_seq = self.enqueue_event_with_source_event_id(
+            config,
+            source_event_id,
+            event_type,
+            priority,
+            payload,
+        )?;
+        self.executor_event_receipts.insert(
+            executor_event_id,
+            ExecutorEventReceipt {
+                fingerprint,
+                source_seq,
+            },
+        );
+        self.compact_executor_event_receipts();
+        Ok(source_seq)
+    }
+
+    pub(crate) fn enqueue_event_with_source_event_id(
+        &mut self,
+        config: &DurableRunnerConfig,
+        source_event_id: String,
+        event_type: impl Into<String>,
+        priority: EventPriority,
+        payload: Value,
+    ) -> Result<u64, DurableRunnerError> {
+        let event_type = event_type.into();
+        if source_event_id.is_empty()
+            || source_event_id.len() > 160
+            || source_event_id.chars().any(char::is_control)
+            || self.has_source_event_id(&source_event_id)
+        {
+            return Err(DurableRunnerError::invalid(
+                "source event identity is malformed or already queued",
+            ));
+        }
+        if event_type.is_empty()
+            || event_type.len() > 160
+            || event_type.chars().any(char::is_control)
+        {
+            return Err(DurableRunnerError::invalid(
+                "event type is empty, oversized, or contains control characters",
+            ));
+        }
+        if !payload.is_object() {
+            return Err(DurableRunnerError::invalid(
+                "durable event payload must be an object",
+            ));
+        }
+
+        let source_seq = self.next_source_seq;
+        let emitted_at = current_timestamp()?;
+        let envelope = json!({
+            "protocol": PROTOCOL,
+            "version": PROTOCOL_VERSION,
+            "kind": "event",
+            "runnerInstanceId": self.runner_instance_id,
+            "environmentLeaseId": self.environment_lease_id,
+            "runId": self.run_id,
+            "normalizedSessionId": self.normalized_session_id,
+            "turnId": self.turn_id,
+            "itemId": self.item_id,
+            "payload": {
+                "schema": "paperclip.prp.event.v1",
+                "sourceEventId": source_event_id,
+                "sourceSeq": source_seq,
+                "sourceInstanceId": self.runner_instance_id,
+                "sourceKind": "runner",
+                "runId": self.run_id,
+                "normalizedSessionId": self.normalized_session_id,
+                "turnId": self.turn_id,
+                "itemId": self.item_id,
+                "eventType": event_type,
+                "schemaVersion": 1,
+                "priority": priority.number(),
+                "emittedAt": emitted_at,
+                "payload": sanitize_value(&payload),
+            },
+        });
+        let byte_size = serde_json::to_vec(&envelope)
+            .map_err(|error| DurableRunnerError::invalid(error.to_string()))?
+            .len();
+        if byte_size > config.max_frame_bytes {
+            return Err(DurableRunnerError::invalid(
+                "durable event exceeds the transport frame limit",
+            ));
+        }
+        let projected = self.outbox_bytes().saturating_add(byte_size);
+        let non_p0_limit = config
+            .max_outbox_bytes
+            .saturating_sub(config.p0_reserve_bytes);
+
+        if priority != EventPriority::P0 && projected > non_p0_limit {
+            self.backpressure = true;
+            self.lifecycle = "backpressure".to_owned();
+            self.record_diagnostic("outbox soft limit reached; non-P0 event rejected");
+            return Err(DurableRunnerError::invalid(
+                "outbox soft limit reached; reserved storage is available only to P0 events",
+            ));
+        }
+        if projected > config.max_outbox_bytes {
+            self.lifecycle = "unrecoverable".to_owned();
+            self.record_diagnostic("P0 outbox reserve exhausted; operator recovery is required");
+            return Err(DurableRunnerError::invalid(
+                "durable outbox limit exhausted",
+            ));
+        }
+
+        self.next_source_seq = self
+            .next_source_seq
+            .checked_add(1)
+            .ok_or_else(|| DurableRunnerError::invalid("source sequence exhausted"))?;
+        self.outbox.push(StoredOutboxEvent {
+            source_seq,
+            priority: priority.number(),
+            event_type,
+            envelope,
+            byte_size,
+        });
+        self.peak_outbox_bytes = self.peak_outbox_bytes.max(projected);
+        Ok(source_seq)
     }
 
     pub fn apply_ack(&mut self, acked_source_seq: u64) -> Result<(), DurableRunnerError> {
@@ -324,7 +453,134 @@ impl DurableRunnerState {
         self.acked_source_seq = acked_source_seq;
         self.outbox
             .retain(|event| event.source_seq > acked_source_seq);
+        if self.backpressure
+            && self.outbox_bytes() < self.max_outbox_bytes.saturating_sub(self.p0_reserve_bytes)
+        {
+            self.backpressure = false;
+            if self.lifecycle == "backpressure" {
+                self.lifecycle = "ready".to_owned();
+            }
+        }
         Ok(())
+    }
+
+    pub fn begin_command(
+        &mut self,
+        command: &Command,
+    ) -> Result<CommandDisposition, DurableRunnerError> {
+        command.validate()?;
+        let fingerprint = command_fingerprint(command)?;
+        if let Some(previous) = self.processed_commands.get(&command.command_id) {
+            let previous_fingerprint = self
+                .processed_command_fingerprints
+                .get(&command.command_id)
+                .ok_or_else(|| {
+                    DurableRunnerError::invalid(
+                        "durable command journal is missing its identity fingerprint",
+                    )
+                })?;
+            if previous_fingerprint != &fingerprint {
+                return Err(DurableRunnerError::invalid(
+                    "commandId was reused with different command data",
+                ));
+            }
+            return Ok(CommandDisposition::Replay(previous.clone()));
+        }
+        if command.controller_seq <= self.compacted_through_controller_seq {
+            return Ok(CommandDisposition::Reject(command_result(
+                command,
+                "rejected",
+                json!({
+                    "code": "command_history_compacted",
+                    "message": "command is older than the bounded replay journal and was not re-executed",
+                }),
+            )));
+        }
+        let expected = self
+            .last_controller_command_seq
+            .checked_add(1)
+            .ok_or_else(|| DurableRunnerError::invalid("controller sequence exhausted"))?;
+        if command.controller_seq != expected {
+            return Err(DurableRunnerError::invalid(format!(
+                "controller sequence must be contiguous: expected {expected}, received {}",
+                command.controller_seq
+            )));
+        }
+
+        self.last_controller_command_seq = command.controller_seq;
+        self.processed_commands.insert(
+            command.command_id.clone(),
+            command_result(
+                command,
+                "pending",
+                json!({
+                    "code": "execution_indeterminate",
+                    "message": "command was journaled before its effect",
+                }),
+            ),
+        );
+        self.processed_command_fingerprints
+            .insert(command.command_id.clone(), fingerprint);
+        self.compact_command_history();
+        Ok(CommandDisposition::Execute)
+    }
+
+    pub fn complete_command(
+        &mut self,
+        command: &Command,
+        result: Value,
+    ) -> Result<StoredCommandResult, DurableRunnerError> {
+        let stored = self
+            .processed_commands
+            .get_mut(&command.command_id)
+            .ok_or_else(|| {
+                DurableRunnerError::invalid("command was not journaled before completion")
+            })?;
+        if stored.controller_seq != command.controller_seq || stored.status != "pending" {
+            return Err(DurableRunnerError::invalid(
+                "command completion does not match a pending journal entry",
+            ));
+        }
+        let result = sanitize_value(&result);
+        let result_bytes = serde_json::to_vec(&result)
+            .map_err(|error| DurableRunnerError::invalid(error.to_string()))?
+            .len();
+        if result_bytes > MAX_COMMAND_RESULT_BYTES {
+            return Err(DurableRunnerError::invalid(
+                "command result exceeds the 64 KiB durable journal limit",
+            ));
+        }
+        stored.status = "completed".to_owned();
+        stored.result = result;
+        Ok(stored.clone())
+    }
+
+    pub fn reconcile_pending_commands(&mut self) -> bool {
+        let mut changed = false;
+        for command in self.processed_commands.values_mut() {
+            if command.status == "pending" {
+                command.status = "indeterminate".to_owned();
+                command.result = json!({
+                    "code": "execution_indeterminate",
+                    "message": "runner recovered after journaling this command; it will not execute twice",
+                });
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn has_legacy_command_journal(&self) -> bool {
+        !self.processed_commands.is_empty() && self.processed_command_fingerprints.is_empty()
+    }
+
+    fn compact_legacy_command_journal(&mut self) {
+        self.processed_commands.clear();
+        self.processed_command_fingerprints.clear();
+        self.compacted_through_controller_seq = self.last_controller_command_seq;
+        self.record_diagnostic(
+            "pre-fingerprint command journal was compacted; prior commands remain non-reexecutable",
+        );
     }
 
     pub(crate) fn record_diagnostic(&mut self, message: impl Into<String>) {
@@ -333,10 +589,105 @@ impl DurableRunnerState {
             self.diagnostics.remove(0);
         }
     }
+
+    fn compact_command_history(&mut self) {
+        while self.processed_commands.len() > MAX_RECENT_COMMANDS {
+            let Some(oldest_id) = self
+                .processed_commands
+                .values()
+                .min_by_key(|command| command.controller_seq)
+                .map(|command| command.command_id.clone())
+            else {
+                break;
+            };
+            if let Some(oldest) = self.processed_commands.remove(&oldest_id) {
+                self.processed_command_fingerprints.remove(&oldest_id);
+                self.compacted_through_controller_seq = self
+                    .compacted_through_controller_seq
+                    .max(oldest.controller_seq);
+            }
+        }
+    }
+
+    fn compact_executor_event_receipts(&mut self) {
+        while self.executor_event_receipts.len() > MAX_EXECUTOR_EVENT_RECEIPTS {
+            let Some(oldest_id) = self
+                .executor_event_receipts
+                .iter()
+                .min_by_key(|(_, receipt)| receipt.source_seq)
+                .map(|(event_id, _)| event_id.clone())
+            else {
+                break;
+            };
+            self.executor_event_receipts.remove(&oldest_id);
+        }
+    }
 }
 
-fn default_lifecycle_mode() -> String {
-    "per_turn".to_owned()
+fn command_result(command: &Command, status: &str, result: Value) -> StoredCommandResult {
+    StoredCommandResult {
+        command_id: command.command_id.clone(),
+        controller_seq: command.controller_seq,
+        command_type: command.command_type.clone(),
+        status: status.to_owned(),
+        result,
+    }
+}
+
+fn command_fingerprint(command: &Command) -> Result<String, DurableRunnerError> {
+    let value = serde_json::to_value(command).map_err(|error| {
+        DurableRunnerError::invalid(format!("failed to fingerprint durable command: {error}"))
+    })?;
+    let digest = Sha256::digest(canonical_json(&value).as_bytes());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut fingerprint = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        fingerprint.push(HEX[usize::from(byte >> 4)] as char);
+        fingerprint.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    Ok(fingerprint)
+}
+
+fn executor_event_fingerprint(
+    event_type: &str,
+    priority: EventPriority,
+    payload: &Value,
+) -> String {
+    let identity = json!({
+        "eventType": event_type,
+        "priority": priority.number(),
+        "payload": sanitize_value(payload),
+    });
+    format!("{:x}", Sha256::digest(canonical_json(&identity).as_bytes()))
+}
+
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => {
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).expect("JSON object key should serialize"),
+                        canonical_json(&values[key])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        _ => value.to_string(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -347,7 +698,7 @@ pub struct DurableStateStore {
 impl DurableStateStore {
     pub fn new(state_dir: &Path) -> Result<Self, DurableRunnerError> {
         if let Ok(metadata) = fs::symlink_metadata(state_dir) {
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(DurableRunnerError::invalid(format!(
                     "runner state directory {} must be a real directory",
                     state_dir.display()
@@ -369,7 +720,7 @@ impl DurableStateStore {
         })?;
         verify_private_directory(state_dir)?;
         Ok(Self {
-            path: state_dir.join("runner-state.json"),
+            path: state_dir.join(STATE_FILE),
         })
     }
 
@@ -380,66 +731,96 @@ impl DurableStateStore {
     pub fn load_or_create(
         &self,
         config: &DurableRunnerConfig,
-    ) -> Result<(DurableRunnerState, bool), DurableRunnerError> {
-        let bytes = match open_private_regular_file(&self.path) {
+    ) -> Result<(DurableState, bool), DurableRunnerError> {
+        let mut bytes = Vec::new();
+        match open_private_regular_file(&self.path) {
             Ok(mut file) => {
-                let mut bytes = Vec::new();
+                let maximum_state_bytes =
+                    config.max_outbox_bytes.saturating_add(STATE_OVERHEAD_BYTES);
+                let file_bytes = usize::try_from(
+                    file.metadata()
+                        .map_err(|error| DurableRunnerError::invalid(error.to_string()))?
+                        .len(),
+                )
+                .map_err(|_| DurableRunnerError::invalid("durable state length overflowed"))?;
+                if file_bytes > maximum_state_bytes {
+                    return Err(DurableRunnerError::invalid(
+                        "durable state exceeds its configured storage bound",
+                    ));
+                }
                 file.read_to_end(&mut bytes).map_err(|error| {
                     DurableRunnerError::invalid(format!(
-                        "failed to read durable runner state {}: {error}",
+                        "failed to read durable state {}: {error}",
                         self.path.display()
                     ))
-                })?;
-                bytes
+                })?
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let state = DurableRunnerState::new(config);
+                let state = DurableState::new(config);
                 self.save(&state)?;
                 return Ok((state, false));
             }
             Err(error) => {
                 return Err(DurableRunnerError::invalid(format!(
-                    "failed to open private durable runner state {}: {error}",
+                    "failed to open durable state {}: {error}",
                     self.path.display()
                 )))
             }
         };
-        let mut state: DurableRunnerState = serde_json::from_slice(&bytes).map_err(|error| {
+        let mut state: DurableState = serde_json::from_slice(&bytes).map_err(|error| {
             DurableRunnerError::invalid(format!(
-                "durable runner state is malformed and cannot be recovered: {error}"
+                "durable state is malformed and cannot be recovered: {error}"
             ))
         })?;
-        validate_state_binding(&state, config)?;
-        let previous_command_count = state.processed_commands.len();
-        compact_processed_commands(&mut state)?;
-        if state.processed_commands.len() != previous_command_count {
+        let has_legacy_command_journal = state.has_legacy_command_journal();
+        validate_binding(&state, config, has_legacy_command_journal)?;
+        let mut changed = false;
+        if has_legacy_command_journal {
+            state.compact_legacy_command_journal();
+            validate_binding(&state, config, false)?;
+            changed = true;
+        }
+        if state.reconcile_pending_commands() {
+            changed = true;
+        }
+        if changed {
             self.save(&state)?;
         }
         Ok((state, true))
     }
 
-    pub fn save(&self, state: &DurableRunnerState) -> Result<(), DurableRunnerError> {
+    pub fn save(&self, state: &DurableState) -> Result<(), DurableRunnerError> {
         let bytes = serde_json::to_vec_pretty(state).map_err(|error| {
-            DurableRunnerError::invalid(format!(
-                "failed to serialize durable runner state: {error}"
-            ))
+            DurableRunnerError::invalid(format!("failed to serialize durable state: {error}"))
         })?;
+        if bytes.len() > state.max_outbox_bytes.saturating_add(STATE_OVERHEAD_BYTES) {
+            return Err(DurableRunnerError::invalid(
+                "durable state exceeds its configured storage bound",
+            ));
+        }
         let (temporary, mut file) = create_private_temporary_file(&self.path)?;
         let result = (|| -> Result<(), DurableRunnerError> {
             file.write_all(&bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(|error| {
-                    DurableRunnerError::invalid(format!(
-                        "failed to commit durable runner state: {error}"
-                    ))
+                    DurableRunnerError::invalid(format!("failed to commit durable state: {error}"))
                 })?;
             drop(file);
             fs::rename(&temporary, &self.path).map_err(|error| {
                 DurableRunnerError::invalid(format!(
-                    "failed to replace durable runner state: {error}"
+                    "failed to atomically replace durable state: {error}"
                 ))
             })?;
-            sync_parent_directory(&self.path)?;
+            #[cfg(unix)]
+            if let Some(parent) = self.path.parent() {
+                File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| {
+                        DurableRunnerError::invalid(format!(
+                            "failed to sync durable state directory: {error}"
+                        ))
+                    })?;
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -449,351 +830,271 @@ impl DurableStateStore {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn effective_user_id() -> io::Result<u32> {
-    Ok(fs::metadata("/proc/self")?.uid())
-}
-
-fn verify_private_directory(path: &Path) -> Result<(), DurableRunnerError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        DurableRunnerError::invalid(format!(
-            "failed to inspect runner state directory {}: {error}",
-            path.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+fn validate_binding(
+    state: &DurableState,
+    config: &DurableRunnerConfig,
+    allow_legacy_command_journal: bool,
+) -> Result<(), DurableRunnerError> {
+    if state.schema != STATE_SCHEMA
+        || state.runner_instance_id != config.runner_instance_id
+        || state.environment_lease_id != config.environment_lease_id
+        || state.run_id != config.run_id
+        || state.normalized_session_id != config.normalized_session_id
+        || state.turn_id != config.turn_id
+        || state.item_id != config.item_id
+        || state.max_outbox_bytes != config.max_outbox_bytes
+        || state.p0_reserve_bytes != config.p0_reserve_bytes
+    {
         return Err(DurableRunnerError::invalid(
-            "runner state directory must be a real directory",
+            "durable state binding does not match this runner invocation",
         ));
     }
-    #[cfg(unix)]
-    {
-        if metadata.mode() & 0o777 != 0o700 {
-            return Err(DurableRunnerError::invalid(
-                "runner state directory permissions must be 0700",
-            ));
-        }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        if metadata.uid()
-            != effective_user_id().map_err(|error| {
-                DurableRunnerError::invalid(format!("failed to inspect daemon ownership: {error}"))
-            })?
+    let outbox_bytes = state.outbox.iter().try_fold(0_usize, |total, event| {
+        let serialized = serde_json::to_vec(&event.envelope)
+            .map_err(|error| DurableRunnerError::invalid(error.to_string()))?;
+        if event.byte_size != serialized.len()
+            || event
+                .envelope
+                .pointer("/payload/sourceSeq")
+                .and_then(Value::as_u64)
+                != Some(event.source_seq)
+            || event.priority > 2
         {
             return Err(DurableRunnerError::invalid(
-                "runner state directory must be owned by the daemon user",
+                "durable outbox metadata does not match its envelope",
             ));
         }
+        total
+            .checked_add(event.byte_size)
+            .ok_or_else(|| DurableRunnerError::invalid("durable outbox size overflowed"))
+    })?;
+    let outbox_cursors_are_valid = match (state.outbox.first(), state.outbox.last()) {
+        (None, None) => state.acked_source_seq == state.highest_source_seq(),
+        (Some(first), Some(last)) => {
+            state.acked_source_seq.checked_add(1) == Some(first.source_seq)
+                && last.source_seq == state.highest_source_seq()
+        }
+        _ => false,
+    };
+    let mut command_sequences = state
+        .processed_commands
+        .iter()
+        .map(|(key, command)| {
+            if key != &command.command_id
+                || command.controller_seq <= state.compacted_through_controller_seq
+                || command.controller_seq > state.last_controller_command_seq
+                || !matches!(
+                    command.status.as_str(),
+                    "pending" | "completed" | "indeterminate"
+                )
+            {
+                return Err(DurableRunnerError::invalid(
+                    "durable command journal metadata is inconsistent",
+                ));
+            }
+            Ok(command.controller_seq)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let command_fingerprints_are_valid = (state.processed_command_fingerprints.len()
+        == state.processed_commands.len()
+        && state
+            .processed_command_fingerprints
+            .iter()
+            .all(|(key, value)| {
+                state.processed_commands.contains_key(key)
+                    && value.len() == 64
+                    && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }))
+        || (allow_legacy_command_journal
+            && !state.processed_commands.is_empty()
+            && state.processed_command_fingerprints.is_empty());
+    let mut executor_receipt_sequences = HashSet::new();
+    let executor_event_receipts_are_valid = state.executor_event_receipts.len()
+        <= MAX_EXECUTOR_EVENT_RECEIPTS
+        && state
+            .executor_event_receipts
+            .iter()
+            .all(|(event_id, receipt)| {
+                state.source_event_id_for_executor(event_id).is_ok()
+                    && receipt.fingerprint.len() == 64
+                    && receipt
+                        .fingerprint
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    && receipt.source_seq > 0
+                    && receipt.source_seq <= state.highest_source_seq()
+                    && executor_receipt_sequences.insert(receipt.source_seq)
+            });
+    command_sequences.sort_unstable();
+    let command_cursors_are_valid = match (command_sequences.first(), command_sequences.last()) {
+        (None, None) => state.compacted_through_controller_seq == state.last_controller_command_seq,
+        (Some(first), Some(last)) => {
+            state.compacted_through_controller_seq.checked_add(1) == Some(*first)
+                && *last == state.last_controller_command_seq
+                && command_sequences
+                    .windows(2)
+                    .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
+        }
+        _ => false,
+    };
+
+    if state.next_source_seq == 0
+        || state.acked_source_seq > state.highest_source_seq()
+        || !outbox_cursors_are_valid
+        || state
+            .outbox
+            .windows(2)
+            .any(|pair| pair[0].source_seq.checked_add(1) != Some(pair[1].source_seq))
+        || outbox_bytes > state.max_outbox_bytes
+        || state.peak_outbox_bytes < outbox_bytes
+        || state.compacted_through_controller_seq > state.last_controller_command_seq
+        || !command_cursors_are_valid
+        || !command_fingerprints_are_valid
+        || !executor_event_receipts_are_valid
+    {
+        return Err(DurableRunnerError::invalid(
+            "durable state cursors, bounds, or journals are inconsistent",
+        ));
     }
     Ok(())
 }
 
-fn open_private_regular_file(path: &Path) -> io::Result<File> {
+pub(crate) fn verify_private_directory(path: &Path) -> Result<(), DurableRunnerError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| DurableRunnerError::invalid(error.to_string()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(DurableRunnerError::invalid(
+            "durable state directory must not be a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(DurableRunnerError::invalid(
+            "durable state directory must not be accessible by group or other users",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn open_private_regular_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(no_follow_flag());
     let file = options.open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.file_type().is_file() {
+    if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "state path is not a regular file",
+            "durable state path is not a regular file",
         ));
     }
     #[cfg(unix)]
-    {
-        if metadata.mode() & 0o777 != 0o600 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "state file permissions must be 0600",
-            ));
-        }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        if metadata.uid() != effective_user_id()? {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "state file must be owned by the daemon user",
-            ));
-        }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "durable state file is accessible by group or other users",
+        ));
     }
     Ok(file)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn no_follow_flag() -> i32 {
-    0x20000
+    0o400000
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
 const fn no_follow_flag() -> i32 {
-    0x100
+    0x00000100
 }
 
-fn random_suffix() -> Result<String, DurableRunnerError> {
-    let mut bytes = [0_u8; 16];
-    #[cfg(unix)]
-    {
-        File::open("/dev/urandom")
-            .and_then(|mut source| source.read_exact(&mut bytes))
-            .map_err(|error| {
-                DurableRunnerError::invalid(format!(
-                    "failed to obtain state-file randomness: {error}"
-                ))
-            })?;
-    }
-    #[cfg(windows)]
-    {
-        use std::ffi::c_void;
-        #[link(name = "bcrypt")]
-        unsafe extern "system" {
-            fn BCryptGenRandom(
-                algorithm: *mut c_void,
-                buffer: *mut u8,
-                buffer_length: u32,
-                flags: u32,
-            ) -> i32;
-        }
-        const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
-        // SAFETY: the system RNG receives a valid writable buffer for its exact length.
-        let status = unsafe {
-            BCryptGenRandom(
-                std::ptr::null_mut(),
-                bytes.as_mut_ptr(),
-                bytes.len() as u32,
-                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-            )
-        };
-        if status < 0 {
-            return Err(DurableRunnerError::invalid(
-                "failed to obtain state-file randomness from BCryptGenRandom",
-            ));
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        return Err(DurableRunnerError::invalid(
-            "secure state-file randomness is unsupported on this platform",
-        ));
-    }
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd"
+    ))
+))]
+const fn no_follow_flag() -> i32 {
+    0
 }
 
-fn create_private_temporary_file(
-    destination: &Path,
+pub(crate) fn create_private_temporary_file(
+    path: &Path,
 ) -> Result<(PathBuf, File), DurableRunnerError> {
-    let parent = destination
+    let parent = path
         .parent()
-        .ok_or_else(|| DurableRunnerError::invalid("durable state path has no parent directory"))?;
-    let filename = destination
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| DurableRunnerError::invalid("durable state filename is not valid UTF-8"))?;
-    for _ in 0..TEMP_FILE_ATTEMPTS {
-        let path = parent.join(format!(".{filename}.{}.tmp", random_suffix()?));
+        .ok_or_else(|| DurableRunnerError::invalid("durable state path has no parent"))?;
+    let process_id = std::process::id();
+    for attempt in 0..TEMP_FILE_ATTEMPTS {
+        let temporary = parent.join(format!(".{STATE_FILE}.{process_id}.{attempt}.tmp"));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600).custom_flags(no_follow_flag());
-        match options.open(&path) {
-            Ok(file) => {
-                #[cfg(unix)]
-                if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
-                    let _ = fs::remove_file(&path);
-                    return Err(DurableRunnerError::invalid(format!(
-                        "failed to secure temporary runner state: {error}"
-                    )));
-                }
-                let metadata = file.metadata().map_err(|error| {
-                    DurableRunnerError::invalid(format!(
-                        "failed to inspect temporary runner state: {error}"
-                    ))
-                })?;
-                if !metadata.file_type().is_file() {
-                    let _ = fs::remove_file(&path);
-                    return Err(DurableRunnerError::invalid(
-                        "temporary runner state is not a regular file",
-                    ));
-                }
-                #[cfg(unix)]
-                {
-                    if metadata.mode() & 0o777 != 0o600 {
-                        let _ = fs::remove_file(&path);
-                        return Err(DurableRunnerError::invalid(
-                            "temporary runner state is not private",
-                        ));
-                    }
-                    #[cfg(any(target_os = "linux", target_os = "android"))]
-                    if metadata.uid()
-                        != effective_user_id().map_err(|error| {
-                            DurableRunnerError::invalid(format!(
-                                "failed to inspect temporary state ownership: {error}"
-                            ))
-                        })?
-                    {
-                        let _ = fs::remove_file(&path);
-                        return Err(DurableRunnerError::invalid(
-                            "temporary runner state is not daemon-owned",
-                        ));
-                    }
-                }
-                return Ok((path, file));
-            }
+        match options.open(&temporary) {
+            Ok(file) => return Ok((temporary, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(DurableRunnerError::invalid(format!(
-                    "failed to create exclusive temporary runner state: {error}"
+                    "failed to create private durable state temporary file: {error}"
                 )))
             }
         }
     }
     Err(DurableRunnerError::invalid(
-        "failed to allocate a unique temporary runner state file",
+        "failed to allocate a private durable state temporary file",
     ))
 }
 
-fn sync_parent_directory(path: &Path) -> Result<(), DurableRunnerError> {
-    #[cfg(unix)]
-    {
-        let parent = path.parent().ok_or_else(|| {
-            DurableRunnerError::invalid("durable state path has no parent directory")
-        })?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                DurableRunnerError::invalid(format!(
-                    "failed to sync durable state parent directory: {error}"
-                ))
-            })?;
-    }
-    Ok(())
-}
-
-fn validate_state_binding(
-    state: &DurableRunnerState,
-    config: &DurableRunnerConfig,
-) -> Result<(), DurableRunnerError> {
-    if state.schema != STATE_SCHEMA {
-        return Err(DurableRunnerError::invalid(
-            "unsupported durable runner state schema",
-        ));
-    }
-    for (name, stored, expected) in [
-        (
-            "runnerInstanceId",
-            state.runner_instance_id.as_str(),
-            config.runner_instance_id.as_str(),
-        ),
-        (
-            "environmentLeaseId",
-            state.environment_lease_id.as_str(),
-            config.environment_lease_id.as_str(),
-        ),
-        (
-            "normalizedSessionId",
-            state.normalized_session_id.as_str(),
-            config.normalized_session_id.as_str(),
-        ),
-    ] {
-        if stored != expected {
-            return Err(DurableRunnerError::invalid(format!(
-                "durable {name} does not match the requested recovery identity"
-            )));
-        }
-    }
-    if state.lifecycle_mode != config.lifecycle_mode {
-        return Err(DurableRunnerError::invalid(
-            "durable lifecycle policy does not match the requested recovery policy",
-        ));
-    }
-    decode_compacted_command_filter(&state.compacted_command_filter)?;
-    Ok(())
-}
-
-fn redaction_key(key: &str) -> bool {
-    let lowered = key.to_ascii_lowercase().replace('-', "_");
-    // Token *counts* are accounting facts, not credentials. Keep the known
-    // Codex usage vocabulary observable while continuing to redact bearer,
-    // session, access, and other credential-shaped token fields.
-    if [
-        "authorizationboundary",
-        "authorization_boundary",
-        "tokenusage",
-        "token_usage",
-        "inputtokens",
-        "input_tokens",
-        "outputtokens",
-        "output_tokens",
-        "cachedinputtokens",
-        "cached_input_tokens",
-        "cachereadtokens",
-        "cache_read_tokens",
-        "cachewritetokens",
-        "cache_write_tokens",
-        "reasoningoutputtokens",
-        "reasoning_output_tokens",
-        "reasoningtokens",
-        "reasoning_tokens",
-        "cachewriteinputtokens",
-        "cache_write_input_tokens",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-        "totaltokens",
-        "total_tokens",
-    ]
-    .contains(&lowered.as_str())
-    {
+fn sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
+    if matches!(
+        normalized.as_str(),
+        "inputtokens"
+            | "outputtokens"
+            | "cachereadtokens"
+            | "cachewritetokens"
+            | "pretokens"
+            | "posttokens"
+    ) {
         return false;
     }
     [
         "authorization",
+        "cookie",
         "password",
         "secret",
         "token",
-        "api_key",
+        "ticket",
         "apikey",
         "credential",
     ]
     .iter()
-    .any(|needle| lowered.contains(needle))
+    .any(|needle| normalized.contains(needle))
 }
 
-pub fn redact_text(input: &str) -> String {
-    const BEARER_PREFIX: &[u8] = b"bearer ";
-    let bytes = input.as_bytes();
-    let mut output = String::with_capacity(input.len());
-    let mut cursor = 0;
-    while cursor + BEARER_PREFIX.len() <= bytes.len() {
-        let Some(relative_start) = bytes[cursor..]
-            .windows(BEARER_PREFIX.len())
-            .position(|candidate| candidate.eq_ignore_ascii_case(BEARER_PREFIX))
-        else {
-            break;
-        };
-        let start = cursor + relative_start;
-        let value_start = start + BEARER_PREFIX.len();
-        output.push_str(&input[cursor..start]);
-        output.push_str(&input[start..value_start]);
-        output.push_str("[REDACTED]");
-
-        let value_end = input[value_start..]
-            .char_indices()
-            .find_map(|(offset, character)| {
-                (character.is_whitespace()
-                    || matches!(character, '\"' | '\'' | ',' | ';' | ')' | ']' | '}'))
-                .then_some(value_start + offset)
-            })
-            .unwrap_or(input.len());
-        cursor = value_end;
-    }
-    if output.is_empty() {
-        input.to_owned()
-    } else {
-        output.push_str(&input[cursor..]);
-        output
-    }
+fn protocol_authorization_boundary(key: &str, value: &Value) -> bool {
+    key.eq_ignore_ascii_case("authorizationBoundary")
+        && value.as_str().is_some_and(|boundary| {
+            matches!(
+                boundary,
+                "company"
+                    | "actor"
+                    | "active_task"
+                    | "grant"
+                    | "governed_action"
+                    | "lock"
+                    | "revision"
+            )
+        })
 }
 
-pub fn sanitize_value(value: &Value) -> Value {
+pub(crate) fn sanitize_value(value: &Value) -> Value {
     match value {
         Value::Object(object) => Value::Object(
             object
@@ -801,7 +1102,9 @@ pub fn sanitize_value(value: &Value) -> Value {
                 .map(|(key, value)| {
                     (
                         key.clone(),
-                        if redaction_key(key) {
+                        if protocol_authorization_boundary(key, value) {
+                            value.clone()
+                        } else if sensitive_key(key) {
                             Value::String("[REDACTED]".to_owned())
                         } else {
                             sanitize_value(value)
@@ -811,1217 +1114,284 @@ pub fn sanitize_value(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(values) => Value::Array(values.iter().map(sanitize_value).collect()),
-        Value::String(text) => Value::String(sanitize_text_payload(text)),
-        other => other.clone(),
+        Value::String(value) => Value::String(redact_text(value)),
+        value => value.clone(),
     }
 }
 
-fn sanitize_text_payload(input: &str) -> String {
-    let redacted = redact_text(input);
-    if redacted.starts_with("data:") && redacted.len() > 4 * 1024 {
-        return format!("[OMITTED data URL: {} bytes]", redacted.len());
-    }
-    if redacted.len() <= MAX_DURABLE_STRING_BYTES {
-        return redacted;
-    }
-    let mut boundary = MAX_DURABLE_STRING_BYTES;
-    while !redacted.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    format!(
-        "{}\n[TRUNCATED: {} bytes omitted]",
-        &redacted[..boundary],
-        redacted.len() - boundary
-    )
-}
-
-fn canonical_json(value: &Value) -> String {
-    match value {
-        Value::Object(object) => {
-            let mut entries = object.iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(right.0));
-            let body = entries
-                .into_iter()
-                .map(|(key, value)| {
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(key).expect("JSON key serialization cannot fail"),
-                        canonical_json(value)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{{{body}}}")
-        }
-        Value::Array(values) => format!(
-            "[{}]",
-            values
-                .iter()
-                .map(canonical_json)
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        scalar => serde_json::to_string(scalar).expect("JSON scalar serialization cannot fail"),
+pub(crate) fn redact_text(input: &str) -> String {
+    let (bounded, truncated) = if input.len() > 4096 {
+        let boundary = input
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= 4096)
+            .last()
+            .unwrap_or(0);
+        (&input[..boundary], true)
+    } else {
+        (input, false)
+    };
+    let normalized = bounded.to_ascii_lowercase();
+    if [
+        "authorization",
+        "bearer ",
+        "api_key",
+        "apikey",
+        "password=",
+        "secret=",
+        "ticket=",
+        "token=",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        "[REDACTED diagnostic containing a sensitive marker]".to_owned()
+    } else if truncated {
+        format!("{bounded}…[truncated]")
+    } else {
+        bounded.to_owned()
     }
 }
 
-fn hex_encode(input: &[u8]) -> String {
-    input.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn hex_decode(input: &str) -> Result<Vec<u8>, DurableRunnerError> {
-    if input.len() % 2 != 0 {
-        return Err(DurableRunnerError::invalid("hex value has an odd length"));
-    }
-    input
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let pair = std::str::from_utf8(pair)
-                .map_err(|_| DurableRunnerError::invalid("hex value is not valid UTF-8"))?;
-            u8::from_str_radix(pair, 16)
-                .map_err(|_| DurableRunnerError::invalid("hex value contains a non-hex character"))
-        })
-        .collect()
-}
-
-fn sha256_bytes(input: &[u8]) -> [u8; 32] {
-    Sha256::digest(input).into()
-}
-
-fn sha256_digest(input: &[u8]) -> String {
-    format!("sha256:{}", hex_encode(&sha256_bytes(input)))
-}
-
-fn digest_domain(domain: &str, parts: &[&[u8]]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(domain.as_bytes());
-    digest.update([0]);
-    for part in parts {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part);
-    }
-    digest.finalize().into()
-}
-
-fn hmac_domain(key: &[u8], domain: &str, parts: &[&[u8]]) -> [u8; 32] {
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts keys of every size");
-    mac.update(domain.as_bytes());
-    mac.update(&[0]);
-    for part in parts {
-        mac.update(&(part.len() as u64).to_be_bytes());
-        mac.update(part);
-    }
-    mac.finalize().into_bytes().into()
-}
-
-fn verify_hmac_hex(
-    key: &[u8],
-    domain: &str,
-    parts: &[&[u8]],
-    supplied: &str,
-) -> Result<(), DurableRunnerError> {
-    let supplied = hex_decode(supplied)?;
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts keys of every size");
-    mac.update(domain.as_bytes());
-    mac.update(&[0]);
-    for part in parts {
-        mac.update(&(part.len() as u64).to_be_bytes());
-        mac.update(part);
-    }
-    mac.verify_slice(&supplied)
-        .map_err(|_| DurableRunnerError::invalid("transport authentication proof is invalid"))
-}
-
-fn current_unix_ms() -> Result<u64, DurableRunnerError> {
-    let millis = SystemTime::now()
+fn current_timestamp() -> Result<String, DurableRunnerError> {
+    let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| DurableRunnerError::invalid("system clock precedes the Unix epoch"))?
-        .as_millis();
-    u64::try_from(millis).map_err(|_| DurableRunnerError::invalid("system clock value overflowed"))
-}
-
-struct CredentialMaterial {
-    credential_id: String,
-    auth_key: [u8; 32],
-}
-
-impl CredentialMaterial {
-    fn from_token(token: &str) -> Self {
-        Self {
-            credential_id: format!(
-                "sha256:{}",
-                hex_encode(&digest_domain(
-                    "paperclip-runner-credential-id-v1",
-                    &[token.as_bytes()]
-                ))
-            ),
-            auth_key: digest_domain("paperclip-runner-auth-key-v1", &[token.as_bytes()]),
-        }
-    }
-}
-
-impl Drop for CredentialMaterial {
-    fn drop(&mut self) {
-        self.auth_key.fill(0);
-    }
-}
-
-fn empty_compacted_command_filter() -> String {
-    "00".repeat(COMPACTED_COMMAND_FILTER_BYTES)
-}
-
-fn command_filter_positions(command_id: &str) -> [usize; COMPACTED_COMMAND_FILTER_HASHES] {
-    let digest = digest_domain(
-        "paperclip-runner-command-replay-filter-v1",
-        &[command_id.as_bytes()],
-    );
-    let mut positions = [0_usize; COMPACTED_COMMAND_FILTER_HASHES];
-    for (index, position) in positions.iter_mut().enumerate() {
-        let offset = index * 4;
-        let word = u32::from_be_bytes(digest[offset..offset + 4].try_into().unwrap());
-        *position = word as usize % (COMPACTED_COMMAND_FILTER_BYTES * 8);
-    }
-    positions
-}
-
-fn decode_compacted_command_filter(encoded: &str) -> Result<Vec<u8>, DurableRunnerError> {
-    let filter = hex_decode(encoded)?;
-    if filter.len() != COMPACTED_COMMAND_FILTER_BYTES {
-        return Err(DurableRunnerError::invalid(
-            "durable compacted command filter has an invalid size",
-        ));
-    }
-    Ok(filter)
-}
-
-fn compacted_command_maybe_seen(
-    state: &DurableRunnerState,
-    command_id: &str,
-) -> Result<bool, DurableRunnerError> {
-    let filter = decode_compacted_command_filter(&state.compacted_command_filter)?;
-    Ok(command_filter_positions(command_id)
-        .iter()
-        .all(|position| filter[position / 8] & (1 << (position % 8)) != 0))
-}
-
-fn add_compacted_command(
-    state: &mut DurableRunnerState,
-    command_id: &str,
-) -> Result<(), DurableRunnerError> {
-    let mut filter = decode_compacted_command_filter(&state.compacted_command_filter)?;
-    for position in command_filter_positions(command_id) {
-        filter[position / 8] |= 1 << (position % 8);
-    }
-    state.compacted_command_filter = hex_encode(&filter);
-    state.compacted_command_count = state.compacted_command_count.saturating_add(1);
-    Ok(())
-}
-
-fn compact_processed_commands(state: &mut DurableRunnerState) -> Result<(), DurableRunnerError> {
-    while state.processed_commands.len() > MAX_RECENT_PROCESSED_COMMANDS {
-        let oldest = state
-            .processed_commands
-            .values()
-            .min_by_key(|command| command.controller_seq)
-            .map(|command| command.command_id.clone())
-            .ok_or_else(|| {
-                DurableRunnerError::invalid("processed command compaction lost its cursor")
-            })?;
-        state.processed_commands.remove(&oldest);
-        add_compacted_command(state, &oldest)?;
-    }
-    Ok(())
-}
-
-fn deterministic_time(sequence: u64) -> String {
-    format!(
-        "2026-08-07T23:{:02}:{:02}.{:03}Z",
-        (sequence / 60_000) % 60,
-        (sequence / 1_000) % 60,
-        sequence % 1_000
-    )
-}
-
-fn event_envelope(
-    state: &DurableRunnerState,
-    source_seq: u64,
-    event_type: &str,
-    priority: u8,
-    payload: Value,
-    item_id: Option<&str>,
-) -> Value {
-    let source_event_id = format!("event_{}_{source_seq:06}", state.runner_instance_id);
-    let mut event = json!({
-        "schema": "paperclip.prp.event.v1",
-        "sourceEventId": source_event_id,
-        "sourceSeq": source_seq,
-        "sourceInstanceId": state.runner_instance_id,
-        "sourceKind": "runner",
-        "runId": state.run_id,
-        "normalizedSessionId": state.normalized_session_id,
-        "turnId": state.turn_id,
-        "eventType": event_type,
-        "schemaVersion": 1,
-        "priority": priority,
-        "emittedAt": deterministic_time(source_seq),
-        "payload": sanitize_value(&payload),
-    });
-    if let Some(item_id) = item_id {
-        event["itemId"] = Value::String(item_id.to_owned());
-    }
-    json!({
-        "protocol": PROTOCOL,
-        "version": PROTOCOL_VERSION,
-        "envelopeId": format!("envelope_event_{source_seq:06}"),
-        "kind": "event",
-        "runnerInstanceId": state.runner_instance_id,
-        "environmentLeaseId": state.environment_lease_id,
-        "runId": state.run_id,
-        "normalizedSessionId": state.normalized_session_id,
-        "turnId": state.turn_id,
-        "itemId": state.item_id,
-        "sentAt": deterministic_time(source_seq),
-        "payload": event,
-    })
-}
-
-fn mark_backpressure(
-    state: &mut DurableRunnerState,
-    config: &DurableRunnerConfig,
-) -> Result<(), DurableRunnerError> {
-    if state.backpressure {
-        return Ok(());
-    }
-    state.backpressure = true;
-    state.lifecycle = "backpressure".to_owned();
-    enqueue_event(
-        state,
-        config,
-        "runner.backpressure",
-        0,
-        json!({
-            "reason": "outbox_soft_limit",
-            "maxOutboxBytes": config.max_outbox_bytes,
-            "p0ReserveBytes": config.p0_reserve_bytes,
-            "newTurnsAccepted": false,
-        }),
-        None,
-    )
-}
-
-fn mark_p0_storage_exhausted(state: &mut DurableRunnerState) {
-    state.lifecycle = "unrecoverable".to_owned();
-    state.unrecoverable_outcome = Some("p0_storage_exhausted".to_owned());
-    state.record_diagnostic(
-        "P0 storage reserve is exhausted; the durable session requires operator recovery",
-    );
-}
-
-fn enqueue_event(
-    state: &mut DurableRunnerState,
-    config: &DurableRunnerConfig,
-    event_type: &str,
-    priority: u8,
-    payload: Value,
-    item_id: Option<&str>,
-) -> Result<(), DurableRunnerError> {
-    if priority > 2 {
-        return Err(DurableRunnerError::invalid(
-            "event priority must be P0, P1, or P2",
-        ));
-    }
-
-    if priority == 2 {
-        if let Some(last) = state.outbox.last() {
-            if last.priority == 2
-                && last.event_type == event_type
-                && last.item_id.as_deref() == item_id
-            {
-                let previous_count = last
-                    .envelope
-                    .pointer("/payload/payload/coalescedCount")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(1);
-                // Keep every provider notification in the compacted envelope.
-                // The old `latest` shape made durability cheap by silently
-                // discarding token, reasoning, tool-output, and diff deltas
-                // whenever runnerd produced them faster than the PRP authority
-                // acknowledged the previous event. One durable envelope may
-                // still batch adjacent P2 records, but the consumer can now
-                // replay the complete ordered batch.
-                let previous_payload = last
-                    .envelope
-                    .pointer("/payload/payload")
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let mut events = previous_payload
-                    .get("events")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        previous_payload
-                            .get("latest")
-                            .cloned()
-                            .or_else(|| (!previous_payload.is_null()).then_some(previous_payload))
-                            .into_iter()
-                            .collect()
-                    });
-                events.push(sanitize_value(&payload));
-                let compacted = json!({
-                    "coalescedCount": previous_count + 1,
-                    "events": events,
-                });
-                let mut replacement = last.clone();
-                replacement.envelope["payload"]["payload"] = compacted;
-                replacement.byte_size = serde_json::to_vec(&replacement.envelope)
-                    .map_err(|error| DurableRunnerError::invalid(error.to_string()))?
-                    .len();
-                let projected = state
-                    .outbox_bytes()
-                    .saturating_sub(last.byte_size)
-                    .saturating_add(replacement.byte_size);
-                let non_p0_limit = config
-                    .max_outbox_bytes
-                    .saturating_sub(config.p0_reserve_bytes);
-                if projected > non_p0_limit {
-                    return mark_backpressure(state, config);
-                }
-                *state
-                    .outbox
-                    .last_mut()
-                    .expect("coalesced event was just read from the outbox tail") = replacement;
-                state.peak_outbox_bytes = state.peak_outbox_bytes.max(projected);
-                return Ok(());
-            }
-        }
-    }
-
-    let source_seq = state.next_source_seq;
-    let envelope = event_envelope(state, source_seq, event_type, priority, payload, item_id);
-    let bytes = serde_json::to_vec(&envelope)
-        .map_err(|error| DurableRunnerError::invalid(error.to_string()))?;
-    let byte_size = bytes.len();
-    let projected = state.outbox_bytes().saturating_add(byte_size);
-    let non_p0_limit = config
-        .max_outbox_bytes
-        .saturating_sub(config.p0_reserve_bytes);
-
-    if priority == 2 && projected > non_p0_limit {
-        return mark_backpressure(state, config);
-    }
-    if priority == 1 && projected > non_p0_limit {
-        mark_backpressure(state, config)?;
-        return Err(DurableRunnerError::invalid(
-            "P1 event cannot enter the reserved P0 storage region",
-        ));
-    }
-    if projected > config.max_outbox_bytes {
-        mark_p0_storage_exhausted(state);
-        return Err(DurableRunnerError::invalid(
-            "P0 storage reserve exhausted; durable recovery is explicit",
-        ));
-    }
-
-    state.next_source_seq += 1;
-    state.outbox.push(StoredOutboxEvent {
-        source_seq,
-        source_event_id: format!("event_{}_{source_seq:06}", state.runner_instance_id),
-        priority,
-        event_type: event_type.to_owned(),
-        item_id: item_id.map(str::to_owned),
-        envelope,
-        byte_size,
-    });
-    state.peak_outbox_bytes = state.peak_outbox_bytes.max(state.outbox_bytes());
-    Ok(())
-}
-
-fn command_result_envelope(state: &DurableRunnerState, processed: &ProcessedCommand) -> Value {
-    json!({
-        "protocol": PROTOCOL,
-        "version": PROTOCOL_VERSION,
-        "envelopeId": format!("envelope_result_{}", processed.command_id),
-        "kind": "command_result",
-        "runnerInstanceId": state.runner_instance_id,
-        "environmentLeaseId": state.environment_lease_id,
-        "runId": state.run_id,
-        "normalizedSessionId": state.normalized_session_id,
-        "turnId": state.turn_id,
-        "itemId": state.item_id,
-        "sentAt": deterministic_time(processed.controller_seq),
-        "payload": processed.result,
-    })
-}
-
-fn execute_command_effect(
-    state: &mut DurableRunnerState,
-    config: &DurableRunnerConfig,
-    command_type: &str,
-    payload: &Value,
-) -> Result<(String, u64, String), DurableRunnerError> {
-    if state.lifecycle == "revoked" {
-        return Ok((
-            "rejected".to_owned(),
-            0,
-            "connection capability is revoked; commands have no logical effect".to_owned(),
-        ));
-    }
-    match command_type {
-        "run.prepare" => {
-            if let Some(value) = payload.get("completionContract") {
-                let completion_contract: CompletionContractBinding =
-                    serde_json::from_value(value.clone()).map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.prepare completionContract is invalid: {error}"
-                        ))
-                    })?;
-                if completion_contract.revision.is_empty()
-                    || completion_contract.revision.len() > 120
-                    || completion_contract.criterion_ids.is_empty()
-                    || completion_contract.criterion_ids.len() > 256
-                    || completion_contract.criterion_ids.iter().any(|criterion| {
-                        criterion.is_empty()
-                            || criterion.len() > 240
-                            || criterion.chars().any(char::is_control)
-                    })
-                {
-                    return Err(DurableRunnerError::invalid(
-                        "run.prepare completionContract is malformed or oversized",
-                    ));
-                }
-                state.completion_contract = Some(completion_contract);
-            }
-            if let Some(value) = payload.get("authorizedTools") {
-                let tool_set: AuthorizedToolSet =
-                    serde_json::from_value(value.clone()).map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.prepare authorizedTools is invalid: {error}"
-                        ))
-                    })?;
-                state
-                    .provider_tool_bridge
-                    .prepare(tool_set)
-                    .map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.prepare tool contract rejected: {error}"
-                        ))
-                    })?;
-            }
-            if let Some(value) = payload.get("provider") {
-                if let Some(provider_session_id) = value
-                    .get("providerSessionId")
-                    .and_then(Value::as_str)
-                    .filter(|session_id| !session_id.is_empty())
-                {
-                    if provider_session_id.len() > 240
-                        || provider_session_id.chars().any(char::is_control)
-                    {
-                        return Err(DurableRunnerError::invalid(
-                            "run.prepare providerSessionId is malformed or oversized",
-                        ));
-                    }
-                    if state
-                        .provider_session_id
-                        .as_deref()
-                        .is_some_and(|existing| existing != provider_session_id)
-                    {
-                        return Err(DurableRunnerError::invalid(
-                            "provider session changed across a durable session",
-                        ));
-                    }
-                    state.provider_session_id = Some(provider_session_id.to_owned());
-                }
-                let provider: ProviderConfig =
-                    serde_json::from_value(value.clone()).map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.prepare provider is invalid: {error}"
-                        ))
-                    })?;
-                if let Some(existing) = &state.provider_config {
-                    if existing != &provider {
-                        return Err(DurableRunnerError::invalid(
-                            "provider configuration changed across a durable session",
-                        ));
-                    }
-                }
-                if state.provider_budget_ceiling_usd.is_none() {
-                    if let ProviderConfig::ClaudeManaged(managed) = &provider {
-                        state.provider_budget_ceiling_usd = Some(managed.max_session_list_cost_usd);
-                    } else if let ProviderConfig::AwsAgentcore(agentcore) = &provider {
-                        state.provider_budget_ceiling_usd =
-                            Some(agentcore.max_estimated_session_cost_usd);
-                    }
-                }
-                state.provider_config = Some(provider);
-            }
-            state.lifecycle = "ready".to_owned();
-            enqueue_event(
-                state,
-                config,
-                "workspace.ready",
-                1,
-                json!({ "workspace": "durable-recovery-durable-fixture" }),
-                None,
-            )?;
-            Ok(("completed".to_owned(), 1, "run prepared".to_owned()))
-        }
-        "run.attach" => {
-            if state.active_turn
-                || state.lifecycle == "active"
-                || state.lifecycle == "waiting_input"
-            {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    "a run cannot attach while another run or turn is active".to_owned(),
-                ));
-            }
-            let required = |name: &str| {
-                payload
-                    .get(name)
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        DurableRunnerError::invalid(format!(
-                            "run.attach payload.{name} is required"
-                        ))
-                    })
-            };
-            let run_id = required("runId")?;
-            let turn_id = required("turnId")?;
-            let item_id = required("itemId")?;
-            if let Some(value) = payload.get("authorizedTools") {
-                let tool_set: AuthorizedToolSet =
-                    serde_json::from_value(value.clone()).map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.attach authorizedTools is invalid: {error}"
-                        ))
-                    })?;
-                state
-                    .provider_tool_bridge
-                    .attach_run(tool_set)
-                    .map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.attach tool contract rejected: {error}"
-                        ))
-                    })?;
-            } else {
-                state
-                    .provider_tool_bridge
-                    .attach_existing_run()
-                    .map_err(|error| {
-                        DurableRunnerError::invalid(format!(
-                            "run.attach tool contract rejected: {error}"
-                        ))
-                    })?;
-            }
-            state.previous_attachment_identity = Some(AttachmentIdentity {
-                run_id: state.run_id.clone(),
-                turn_id: state.turn_id.clone(),
-                item_id: state.item_id.clone(),
-            });
-            state.provider_usage_run_baseline = state.provider_usage_cumulative.clone();
-            state.run_id = run_id;
-            state.turn_id = turn_id;
-            state.item_id = item_id;
-            state.last_agent_message = None;
-            state.semantic_result = None;
-            state.stop_after_flush = false;
-            state.lifecycle = "ready".to_owned();
-            enqueue_event(
-                state,
-                config,
-                "run.attached",
-                0,
-                json!({
-                    "runId": state.run_id,
-                    "turnId": state.turn_id,
-                    "itemId": state.item_id,
-                    "sameSession": true,
-                }),
-                None,
-            )?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "run attached to durable session".to_owned(),
-            ))
-        }
-        "semantic_tool.result" => {
-            let result: ToolResult = serde_json::from_value(payload.clone()).map_err(|error| {
-                DurableRunnerError::invalid(format!("semantic tool result is invalid: {error}"))
-            })?;
-            state
-                .provider_tool_bridge
-                .apply_result(result.clone())
-                .map_err(|error| {
-                    DurableRunnerError::invalid(format!("semantic tool result rejected: {error}"))
-                })?;
-            let item_id = state.item_id.clone();
-            let result_digest = sha256_digest(canonical_json(&result.result).as_bytes());
-            let outcome = if result.is_error {
-                "failed"
-            } else {
-                "succeeded"
-            };
-            let code = if result.is_error {
-                "semantic_tool_failed"
-            } else {
-                "semantic_tool_succeeded"
-            };
-            let operation_receipt_id = format!("operation_{}", result.call_id);
-            enqueue_event(
-                state,
-                config,
-                "semantic_tool.result",
-                0,
-                json!({ "semantic_tool": {
-                    "schema": "paperclip.prp.semantic_tool.v1", "schemaVersion": 1,
-                    "phase": "result", "operationId": result.operation_id,
-                    "callId": result.call_id,
-                    "correlation": {
-                        "runId": state.run_id,
-                        "normalizedSessionId": state.normalized_session_id,
-                        "turnId": state.turn_id,
-                        "itemId": state.item_id,
-                    },
-                    "idempotencyKey": Value::Null,
-                    "content": {
-                        "digest": result_digest,
-                        "redactionDisposition": "digest_only",
-                        "references": [],
-                    },
-                    "outcome": outcome,
-                    "code": code,
-                    "retryable": false,
-                    "authorizationBoundary": "active_task",
-                    "operationReceiptId": operation_receipt_id,
-                    "result": result.result,
-                    "isError": result.is_error,
-                }}),
-                Some(&item_id),
-            )?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "semantic tool result delivered to provider".to_owned(),
-            ))
-        }
-        "session.open" => {
-            if let Some(failure) = state.recoverable_failure.as_deref() {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    format!("provider bootstrap failed; session cannot open: {failure}"),
-                ));
-            }
-            if state.provider_config.is_some()
-                && (state.provider_session_id.is_none()
-                    || state.provider_backend_session_id.is_none())
-            {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    "provider bootstrap did not persist a complete session identity".to_owned(),
-                ));
-            }
-            let event_type = if state.reconnect_count > 0 {
-                "session.resumed"
-            } else {
-                "session.started"
-            };
-            enqueue_event(
-                state,
-                config,
-                event_type,
-                0,
-                json!({
-                    "normalizedSessionId": state.normalized_session_id,
-                    "driverSessionId": state.provider_session_id.as_deref().unwrap_or("driver_durable_runner_fake"),
-                    "providerSessionId": state.provider_session_id,
-                    "providerBackendSessionId": state.provider_backend_session_id,
-                    "resumed": state.reconnect_count > 0,
-                    "providerDescriptor": provider_descriptor(state.provider_config.as_ref(), None),
-                }),
-                None,
-            )?;
-            Ok(("completed".to_owned(), 1, "session bound".to_owned()))
-        }
-        "fault.harness_restart" => {
-            prove_harness_restart(config)?;
-            let previous_generation = state.harness_generation;
-            state.harness_generation += 1;
-            enqueue_event(
-                state,
-                config,
-                "harness.exited",
-                0,
-                json!({
-                    "generation": previous_generation,
-                    "reason": "fault_injection_restart",
-                    "recoverable": true,
-                }),
-                None,
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "harness.ready",
-                0,
-                json!({
-                    "generation": state.harness_generation,
-                    "driverKind": "fake",
-                }),
-                None,
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "session.reconciled",
-                0,
-                json!({
-                    "normalizedSessionId": state.normalized_session_id,
-                    "turnId": state.turn_id,
-                    "itemId": state.item_id,
-                    "outcome": "same_session_resumed",
-                }),
-                Some(&state.item_id.clone()),
-            )?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "harness restarted and reconciled".to_owned(),
-            ))
-        }
-        "fault.storage_pressure" => {
-            let item_id = state.item_id.clone();
-            for index in 0..250_u64 {
-                enqueue_event(
-                    state,
-                    config,
-                    "item.delta",
-                    2,
-                    json!({
-                        "chunk": format!("bounded-progress-{index:03}"),
-                        "secretToken": "must-not-persist",
-                    }),
-                    Some(&item_id),
-                )?;
-            }
-            mark_backpressure(state, config)?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "storage pressure applied with P2 coalescing".to_owned(),
-            ))
-        }
-        "turn.start" if state.lifecycle == "draining" || state.backpressure => Ok((
-            "rejected".to_owned(),
-            0,
-            "new turns are disabled while draining or backpressured".to_owned(),
-        )),
-        "turn.start" => {
-            state.active_turn = true;
-            state.lifecycle = "active".to_owned();
-            let item_id = state.item_id.clone();
-            enqueue_event(
-                state,
-                config,
-                "turn.accepted",
-                0,
-                json!({ "turnId": state.turn_id, "sameSession": true }),
-                None,
-            )?;
-            if state.provider_config.is_some() {
-                return Ok((
-                    "completed".to_owned(),
-                    1,
-                    "provider turn started".to_owned(),
-                ));
-            }
-            enqueue_event(
-                state,
-                config,
-                "item.started",
-                1,
-                json!({ "kind": "assistant_message" }),
-                Some(&item_id),
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "item.delta",
-                2,
-                json!({ "text": payload.get("text").cloned().unwrap_or_else(|| json!("Durable runner")) }),
-                Some(&item_id),
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "item.completed",
-                1,
-                json!({ "text": "Durable recovery completed." }),
-                Some(&item_id),
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "run.result.proposed",
-                0,
-                json!({
-                    "schema": "paperclip.run_result.v1",
-                    "reportedWorkDisposition": "done",
-                    "summary": "Durable runner durable transport recovered without duplicate effects.",
-                    "completionClaim": {
-                        "contractRevision": "durable-recovery-v1",
-                        "objectiveSatisfied": true,
-                        "criteria": [],
-                        "remainingWork": [],
-                    },
-                    "evidence": [],
-                    "verification": [{
-                        "commandOrCheck": "durable recovery scenario",
-                        "status": "passed",
-                    }],
-                    "attentionRequests": [],
-                    "artifacts": [],
-                }),
-                None,
-            )?;
-            enqueue_event(
-                state,
-                config,
-                "run.terminal",
-                0,
-                json!({
-                    "schema": "paperclip.prp.terminal.v1",
-                    "turnTerminalState": "completed",
-                    "runTerminalState": "succeeded",
-                    "reportedWorkDisposition": "done",
-                }),
-                None,
-            )?;
-            state.active_turn = false;
-            state.lifecycle = if state.lifecycle_mode == "warm" {
-                "warm_idle".to_owned()
-            } else {
-                "suspending".to_owned()
-            };
-            if state.lifecycle_mode == "per_turn" {
-                state.stop_after_flush = true;
-                enqueue_event(
-                    state,
-                    config,
-                    "runner.suspending",
-                    0,
-                    json!({ "reason": "per_turn_complete", "resumable": true }),
-                    None,
-                )?;
-            }
-            Ok(("completed".to_owned(), 1, "turn completed".to_owned()))
-        }
-        "turn.steer" => Ok((
-            "completed".to_owned(),
-            1,
-            "provider turn steering requested".to_owned(),
-        )),
-        "turn.interrupt" => Ok((
-            "completed".to_owned(),
-            1,
-            "provider turn interruption requested".to_owned(),
-        )),
-        "request.resolve" if state.provider_config.is_some() => {
-            let request_id = payload
-                .get("requestId")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    DurableRunnerError::invalid("request.resolve payload.requestId is required")
-                })?;
-            let action = payload
-                .pointer("/resolution/action")
-                .or_else(|| payload.get("action"))
-                .and_then(Value::as_str)
-                .unwrap_or("cancel");
-            if ![
-                "accept",
-                "accept_for_session",
-                "decline",
-                "cancel",
-                "submit",
-            ]
-            .contains(&action)
-            {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    "provider runtime request resolution action is unsupported".to_owned(),
-                ));
-            }
-            Ok((
-                "completed".to_owned(),
-                0,
-                format!("provider runtime request {request_id} resolution admitted"),
-            ))
-        }
-        "provider.thread.read" => Ok((
-            "completed".to_owned(),
-            1,
-            "provider thread read requested".to_owned(),
-        )),
-        "session.budget.increase" => {
-            let value = payload
-                .get("maxSessionListCostUsd")
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .ok_or_else(|| {
-                    DurableRunnerError::invalid(
-                        "session.budget.increase payload.maxSessionListCostUsd must be positive",
-                    )
-                })?;
-            if state.active_turn && state.lifecycle != "waiting_input" {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    "session budget cannot change while a turn is active".to_owned(),
-                ));
-            }
-            Ok((
-                "completed".to_owned(),
-                1,
-                format!("remote session spend ceiling increase to {value:.2} USD authorized"),
-            ))
-        }
-        "session.destroy" => {
-            if state.active_turn {
-                return Ok((
-                    "rejected".to_owned(),
-                    0,
-                    "remote session cannot be deleted while a turn is active".to_owned(),
-                ));
-            }
-            Ok((
-                "completed".to_owned(),
-                1,
-                "remote session deletion authorized".to_owned(),
-            ))
-        }
-        "runner.drain" => {
-            state.lifecycle = "draining".to_owned();
-            enqueue_event(
-                state,
-                config,
-                "runner.draining",
-                0,
-                json!({ "newWorkAccepted": false }),
-                None,
-            )?;
-            Ok(("completed".to_owned(), 1, "runner draining".to_owned()))
-        }
-        "runner.shutdown" => {
-            state.stop_after_flush = true;
-            enqueue_event(
-                state,
-                config,
-                "runner.stopped",
-                0,
-                json!({ "afterDurableFlush": true }),
-                None,
-            )?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "runner will stop after durable flush".to_owned(),
-            ))
-        }
-        "runner.suspend" => {
-            state.stop_after_flush = true;
-            state.lifecycle = "suspending".to_owned();
-            enqueue_event(
-                state,
-                config,
-                "runner.suspending",
-                0,
-                json!({ "afterDurableFlush": true, "resumable": true }),
-                None,
-            )?;
-            Ok((
-                "completed".to_owned(),
-                1,
-                "runner will suspend after durable flush".to_owned(),
-            ))
-        }
-        unsupported => Ok((
-            "rejected".to_owned(),
-            0,
-            format!("unsupported Durable runner command: {unsupported}"),
-        )),
-    }
-}
-
-fn prove_harness_restart(config: &DurableRunnerConfig) -> Result<(), DurableRunnerError> {
-    let fake_harness_path = config.fake_harness_path.as_ref().ok_or_else(|| {
-        DurableRunnerError::invalid("fake harness path is required for restart injection")
-    })?;
-    let script_path = config.fake_harness_script_path.as_ref().ok_or_else(|| {
-        DurableRunnerError::invalid("fake harness script is required for restart injection")
-    })?;
-    let args = vec![
-        "--script".to_owned(),
-        script_path.display().to_string(),
-        "--delay-ms".to_owned(),
-        "1".to_owned(),
-    ];
-    for generation in 1..=2_u64 {
-        let mut harness = SupervisedProcess::spawn(
-            fake_harness_path,
-            &args,
-            Duration::from_millis(50),
-            64 * 1024,
-        )
         .map_err(|error| {
-            DurableRunnerError::invalid(format!(
-                "failed to start fake harness generation {generation}: {error}"
-            ))
+            DurableRunnerError::invalid(format!("system clock is invalid: {error}"))
         })?;
-        let ready = harness
-            .receive_stdout_line(Duration::from_secs(2))
-            .map_err(|error| DurableRunnerError::invalid(error.to_string()))?
-            .ok_or_else(|| {
-                DurableRunnerError::invalid(format!(
-                    "fake harness generation {generation} did not become ready"
-                ))
-            })?;
-        let message: Value = serde_json::from_str(&ready).map_err(|error| {
-            DurableRunnerError::invalid(format!(
-                "fake harness generation {generation} emitted malformed ready data: {error}"
-            ))
-        })?;
-        if message.get("type").and_then(Value::as_str) != Some("ready") {
-            return Err(DurableRunnerError::invalid(format!(
-                "fake harness generation {generation} did not emit a ready message"
-            )));
-        }
-        harness
-            .terminate_group()
-            .map_err(|error| DurableRunnerError::invalid(error.to_string()))?;
+    let total_seconds = i64::try_from(duration.as_secs())
+        .map_err(|_| DurableRunnerError::invalid("system clock value overflowed"))?;
+    let days = total_seconds.div_euclid(86_400);
+    let second_of_day = total_seconds.rem_euclid(86_400);
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    if !(0..=9999).contains(&year) {
+        return Err(DurableRunnerError::invalid(
+            "system clock is outside the supported RFC 3339 range",
+        ));
     }
-    Ok(())
+    let hour = second_of_day / 3600;
+    let minute = second_of_day % 3600 / 60;
+    let second = second_of_day % 60;
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+        duration.subsec_millis()
+    ))
 }
 
-fn process_command(
-    state: &mut DurableRunnerState,
-    store: &DurableStateStore,
-    config: &DurableRunnerConfig,
-    command: &Value,
-) -> Result<ProcessedCommand, DurableRunnerError> {
-    let command_id = command
-        .get("commandId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DurableRunnerError::invalid("commandId is required"))?;
-    let controller_seq = command
-        .get("controllerSeq")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| DurableRunnerError::invalid("controllerSeq is required"))?;
-    let command_type = command
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DurableRunnerError::invalid("command type is required"))?;
-    let canonical = canonical_json(command);
-    let command_digest = sha256_digest(canonical.as_bytes());
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
 
-    if let Some(previous) = state.processed_commands.get(command_id) {
-        if previous.command_digest != command_digest {
-            return Err(DurableRunnerError::invalid(
-                "commandId was reused with a different payload",
-            ));
+    use super::*;
+
+    fn config(state_dir: PathBuf) -> DurableRunnerConfig {
+        DurableRunnerConfig {
+            connect_url: "ws://127.0.0.1:3000/api/runner/v1/connect/run_1".to_owned(),
+            state_dir,
+            runner_instance_id: "runner_1".to_owned(),
+            environment_lease_id: "environment_1".to_owned(),
+            run_id: "run_1".to_owned(),
+            normalized_session_id: "session_1".to_owned(),
+            turn_id: "turn_1".to_owned(),
+            item_id: "item_1".to_owned(),
+            runner_version: "0.0.0".to_owned(),
+            runner_digest: "sha256:test".to_owned(),
+            max_outbox_bytes: 16_384,
+            p0_reserve_bytes: 4096,
+            max_frame_bytes: 65_536,
+            reconnect_delay: Duration::from_millis(1),
+            max_runtime: Duration::from_secs(1),
         }
-        return Ok(previous.clone());
     }
-    if compacted_command_maybe_seen(state, command_id)? {
-        if controller_seq > state.last_controller_command_seq + 1 {
-            return Err(DurableRunnerError::invalid(format!(
-                "controllerSeq must be at most {}; received {controller_seq}",
-                state.last_controller_command_seq + 1
-            )));
+
+    fn command(id: &str, sequence: u64) -> Command {
+        Command {
+            schema: "paperclip.prp.command.v1".to_owned(),
+            command_id: id.to_owned(),
+            controller_seq: sequence,
+            command_type: "session.open".to_owned(),
+            issued_at: "2026-08-24T00:00:00.000Z".to_owned(),
+            deadline_at: None,
+            precondition: None,
+            payload: json!({}),
         }
-        let result = sanitize_value(&json!({
-            "commandId": command_id,
-            "controllerSeq": controller_seq,
-            "status": "rejected",
-            "logicalEffectCount": 0,
-            "detail": "command identity may have been processed before ledger compaction; replay rejected fail-closed",
+    }
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "paperclip-runner-durable-{label}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn cumulative_ack_is_monotonic_and_bounded() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        state
+            .enqueue_event(&config, "runner.connected", EventPriority::P0, json!({}))
+            .unwrap();
+        state
+            .enqueue_event(&config, "runner.reconnected", EventPriority::P1, json!({}))
+            .unwrap();
+        state.apply_ack(1).unwrap();
+        assert_eq!(state.outbox.len(), 1);
+        assert!(state.apply_ack(0).is_err());
+        assert!(state.apply_ack(3).is_err());
+    }
+
+    #[test]
+    fn duplicate_command_replays_without_executing() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        let command = command("command_1", 1);
+        assert_eq!(
+            state.begin_command(&command).unwrap(),
+            CommandDisposition::Execute
+        );
+        state
+            .complete_command(&command, json!({"ok": true}))
+            .unwrap();
+        assert!(matches!(
+            state.begin_command(&command).unwrap(),
+            CommandDisposition::Replay(result) if result.result == json!({"ok": true})
+        ));
+    }
+
+    #[test]
+    fn command_gaps_and_identifier_reuse_fail_closed() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        let mut unknown = command("command_unknown", 1);
+        unknown.command_type = "future.required.command".to_owned();
+        assert!(state.begin_command(&unknown).is_err());
+        assert!(state.begin_command(&command("command_2", 2)).is_err());
+        let first = command("command_1", 1);
+        state.begin_command(&first).unwrap();
+        state.complete_command(&first, json!({})).unwrap();
+        assert!(state.begin_command(&command("command_1", 2)).is_err());
+    }
+
+    #[test]
+    fn recovery_marks_ambiguous_effect_without_reexecution() {
+        let directory = temporary_directory("ambiguous");
+        let _ = fs::remove_dir_all(&directory);
+        let config = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        let command = command("command_1", 1);
+        state.begin_command(&command).unwrap();
+        store.save(&state).unwrap();
+
+        let (mut recovered, existed) = store.load_or_create(&config).unwrap();
+        assert!(existed);
+        assert!(matches!(
+            recovered.begin_command(&command).unwrap(),
+            CommandDisposition::Replay(result) if result.status == "indeterminate"
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn state_binding_prevents_cross_run_reuse() {
+        let directory = temporary_directory("binding");
+        let _ = fs::remove_dir_all(&directory);
+        let config = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        store.load_or_create(&config).unwrap();
+        let mut wrong = config.clone();
+        wrong.run_id = "run_2".to_owned();
+        assert!(store.load_or_create(&wrong).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn event_payloads_are_redacted_before_persistence() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        state
+            .enqueue_event(
+                &config,
+                "runner.diagnostic",
+                EventPriority::P1,
+                json!({"nested": {"api_token": "secret-value", "inputTokens": 42}}),
+            )
+            .unwrap();
+        assert_eq!(
+            state.outbox[0]
+                .envelope
+                .pointer("/payload/payload/nested/api_token"),
+            Some(&Value::String("[REDACTED]".to_owned()))
+        );
+        assert_eq!(
+            state.outbox[0]
+                .envelope
+                .pointer("/payload/payload/nested/inputTokens"),
+            Some(&json!(42))
+        );
+    }
+
+    #[test]
+    fn protocol_authorization_boundary_is_not_redacted_as_a_credential() {
+        let sanitized = sanitize_value(&json!({
+            "authorizationBoundary": "active_task",
+            "nested": {"authorizationBoundary": "Bearer secret-value"},
+            "authorization": "Bearer secret-value",
         }));
-        let processed = ProcessedCommand {
-            command_id: command_id.to_owned(),
-            controller_seq,
-            command_digest,
-            status: "rejected".to_owned(),
-            logical_effect_count: 0,
-            result,
-        };
-        if controller_seq == state.last_controller_command_seq + 1 {
-            let mut candidate = state.clone();
-            candidate.last_controller_command_seq = controller_seq;
-            candidate
-                .processed_commands
-                .insert(command_id.to_owned(), processed.clone());
-            compact_processed_commands(&mut candidate)?;
-            store.save(&candidate)?;
-            *state = candidate;
-        }
-        return Ok(processed);
-    }
-    if controller_seq != state.last_controller_command_seq + 1 {
-        return Err(DurableRunnerError::invalid(format!(
-            "controllerSeq must be {}; received {controller_seq}",
-            state.last_controller_command_seq + 1
-        )));
+        assert_eq!(sanitized["authorizationBoundary"], json!("active_task"));
+        assert_eq!(sanitized["authorization"], json!("[REDACTED]"));
+        assert_eq!(
+            sanitized["nested"]["authorizationBoundary"],
+            json!("[REDACTED]")
+        );
     }
 
-    let payload = command.get("payload").cloned().unwrap_or(Value::Null);
-    let mut candidate = state.clone();
-    let effect = execute_command_effect(&mut candidate, config, command_type, &payload);
-    let (status, logical_effect_count, detail) = match effect {
-        Ok(effect) => effect,
-        Err(error)
-            if state.unrecoverable_outcome.as_deref() != Some("p0_storage_exhausted")
-                && candidate.unrecoverable_outcome.as_deref() == Some("p0_storage_exhausted") =>
-        {
-            // The attempted command may have staged earlier events before discovering that a
-            // mandatory P0 event cannot be stored. Discard every staged logical effect and keep
-            // only the truthful terminal storage outcome plus its durable command result.
-            candidate = state.clone();
-            mark_p0_storage_exhausted(&mut candidate);
-            ("failed".to_owned(), 0, error.to_string())
-        }
-        Err(error) => return Err(error),
-    };
-    let result = sanitize_value(&json!({
-        "commandId": command_id,
-        "controllerSeq": controller_seq,
-        "status": status,
-        "logicalEffectCount": logical_effect_count,
-        "detail": detail,
-    }));
-    let processed = ProcessedCommand {
-        command_id: command_id.to_owned(),
-        controller_seq,
-        command_digest,
-        status,
-        logical_effect_count,
-        result,
-    };
-    candidate.last_controller_command_seq = controller_seq;
-    candidate
-        .processed_commands
-        .insert(command_id.to_owned(), processed.clone());
-    compact_processed_commands(&mut candidate)?;
-    store.save(&candidate)?;
-    *state = candidate;
-    Ok(processed)
+    #[test]
+    fn outbox_reserves_capacity_for_p0_and_bounds_frames() {
+        let mut bounds_config = config(PathBuf::from("unused"));
+        bounds_config.max_outbox_bytes = 1800;
+        bounds_config.p0_reserve_bytes = 600;
+        let mut state = DurableState::new(&bounds_config);
+        while state
+            .enqueue_event(
+                &bounds_config,
+                "item.delta",
+                EventPriority::P1,
+                json!({"text": "x".repeat(200)}),
+            )
+            .is_ok()
+        {}
+        assert!(state.backpressure);
+        assert!(state
+            .enqueue_event(
+                &bounds_config,
+                "runner.diagnostic",
+                EventPriority::P0,
+                json!({"message": "storage pressure"}),
+            )
+            .is_ok());
+
+        let mut frame_limited = config(PathBuf::from("unused"));
+        frame_limited.max_frame_bytes = 1024;
+        let mut state = DurableState::new(&frame_limited);
+        assert!(state
+            .enqueue_event(
+                &frame_limited,
+                "item.delta",
+                EventPriority::P1,
+                json!({"text": "x".repeat(2048)}),
+            )
+            .is_err());
+        assert!(state.outbox.is_empty());
+    }
 }

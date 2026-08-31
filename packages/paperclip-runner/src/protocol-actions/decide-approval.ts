@@ -45,6 +45,15 @@ export const decideApprovalAction = {
         "note": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "decide_approval",
+      "idempotencyKey": "example",
+      "input": {
+        "approvalId": "example",
+        "decision": "approved",
+        "note": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "decide_approval",
@@ -217,8 +226,7 @@ export const decideApprovalAction = {
             "type": "boolean"
           },
           "operationId": {
-            "type": "string",
-            "minLength": 1
+            "const": "decide_approval"
           },
           "operationResultId": {
             "type": "string",

@@ -37,7 +37,19 @@ export const registerDeliverableAction = {
         "filename": "example",
         "contentType": "example",
         "byteSize": 1,
-        "sha256": "example",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "contentRef": "example",
+        "title": "example"
+      }
+    },
+    "scenarioCall": {
+      "operationId": "register_deliverable",
+      "idempotencyKey": "example",
+      "input": {
+        "filename": "example",
+        "contentType": "example",
+        "byteSize": 1,
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "contentRef": "example",
         "title": "example"
       }
@@ -180,6 +192,21 @@ export const registerDeliverableAction = {
   },
   "scenario": {
     "order": 12,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "register_deliverable",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "register_deliverable",
       "version": 1,

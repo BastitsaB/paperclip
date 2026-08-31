@@ -36,6 +36,13 @@ export const finishTaskAction = {
         "summary": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "finish_task",
+      "idempotencyKey": "example",
+      "input": {
+        "summary": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "finish_task",
@@ -141,6 +148,21 @@ export const finishTaskAction = {
   },
   "scenario": {
     "order": 7,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "finish_task",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "finish_task",
       "version": 1,

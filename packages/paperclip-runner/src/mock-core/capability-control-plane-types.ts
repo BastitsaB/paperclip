@@ -29,7 +29,6 @@ export interface CapabilityFixtureCompany {
   status: "active" | "paused";
   budgetId: string;
 }
-
 export interface CapabilityFixtureActor {
   id: string;
   companyId: string;
@@ -255,6 +254,53 @@ export interface ScenarioChatdempotencyRecord {
   result: CapabilityCommandResult;
 }
 
+export interface CapabilitySemanticToolRuntimeSnapshot {
+  schema: "paperclip.capability.semantic-tool-runtime.v1";
+  resultSequence: number;
+  operationResults: Record<string, CapabilityJsonValue>;
+  extensions: Array<
+    | {
+        key: string;
+        input: string;
+        status: "pending";
+        /** Optional only for legacy pending snapshots, which are immediately reclaimable. */
+        ownerId?: string;
+        leaseExpiresAtMs?: number;
+        /** `executing` is recovered only from an exact prepared receipt. */
+        phase?: "reserved" | "executing";
+        /**
+         * Package-local mock extensions prepare their deterministic result
+         * before crossing the executing boundary, so executor loss can publish
+         * this exact receipt without replaying the extension.
+         */
+        preparedExecution?: {
+          value: CapabilityJsonValue;
+          commandResult: CapabilityCommandResult | null;
+          entityRefs: string[];
+        };
+      }
+    | {
+        key: string;
+        input: string;
+        /** The effect may have run, but no exact receipt is recoverable. */
+        status: "indeterminate";
+        reason: "idempotency_receipt_unavailable";
+      }
+    | {
+        key: string;
+        input: string;
+        /** Absent only in snapshots written before pending markers existed. */
+        status?: "completed";
+        resultId: string;
+        execution: {
+          value: CapabilityJsonValue;
+          commandResult: CapabilityCommandResult | null;
+          entityRefs: string[];
+        };
+      }
+  >;
+}
+
 export interface CapabilityFixtureState {
   schema: "paperclip.capability.mock-state.v1";
   revision: number;
@@ -281,6 +327,8 @@ export interface CapabilityFixtureState {
   audit: CapabilityAuditRecord[];
   decisions: CapabilityDecisionRecord[];
   idempotency: ScenarioChatdempotencyRecord[];
+  /** Durable package-local tool receipts keyed by logical run id. */
+  semanticToolRuntimes?: Record<string, CapabilitySemanticToolRuntimeSnapshot>;
   faults: CapabilityFaultRule[];
 }
 
@@ -451,6 +499,16 @@ export interface CapabilityMockControlPlanePort extends ControlPlanePort {
   applyCommand(envelope: CapabilityCommandEnvelope): Promise<CapabilityCommandResult>;
   tryApplyCommand(envelope: CapabilityCommandEnvelope): Promise<CapabilityCommandOutcome>;
   snapshot(): Readonly<CapabilityFixtureState>;
+  loadSemanticToolRuntime(runId: string): CapabilitySemanticToolRuntimeSnapshot | null;
+  saveSemanticToolRuntime(
+    runId: string,
+    snapshot: CapabilitySemanticToolRuntimeSnapshot,
+  ): void;
+  compareAndSwapSemanticToolRuntime(
+    runId: string,
+    expected: CapabilitySemanticToolRuntimeSnapshot | null,
+    snapshot: CapabilitySemanticToolRuntimeSnapshot,
+  ): boolean;
   decisionRecords(): readonly CapabilityDecisionRecord[];
   serialize(): string;
 }
@@ -554,6 +612,7 @@ export function createCapabilityFixtureState(seed: CapabilityFixtureSeed = {}): 
     audit: [],
     decisions: [],
     idempotency: [],
+    semanticToolRuntimes: {},
     faults: structuredClone(seed.faults ?? []),
   };
 }

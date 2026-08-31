@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const PAPERCLIP_WORKSPACE_FILE_REFERENCE_SCHEMA = "paperclip.workspace.file_reference.v1" as const;
@@ -19,8 +19,7 @@ export interface PaperclipWorkspaceFileReference {
 }
 
 const MAX_REFERENCES = 32;
-const MAX_PREVIEW_BYTES = 256 * 1024;
-const MAX_READ_BYTES = 1024 * 1024;
+const MAX_LINE_NUMBER = 1_000_000;
 
 function media(path: string): Pick<PaperclipWorkspaceFileReference, "mediaType" | "presentation"> {
   const extension = extname(path).toLowerCase();
@@ -37,6 +36,13 @@ function media(path: string): Pick<PaperclipWorkspaceFileReference, "mediaType" 
   return { mediaType: null, presentation: "generic" };
 }
 
+function safeLineNumber(value: string): number | null {
+  const line = Number(value);
+  return Number.isSafeInteger(line) && line > 0 && line <= MAX_LINE_NUMBER
+    ? line
+    : null;
+}
+
 function localTarget(rawTarget: string): { target: string; line: number | null } | null {
   let target = rawTarget.trim();
   if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
@@ -49,16 +55,27 @@ function localTarget(rawTarget: string): { target: string; line: number | null }
   let line: number | null = null;
   const hashLine = target.match(/#L(\d+)(?:C\d+)?$/i);
   if (hashLine) {
-    line = Number(hashLine[1]);
+    line = safeLineNumber(hashLine[1]);
     target = target.slice(0, hashLine.index);
   } else {
     const suffixLine = target.match(/:(\d+)$/);
     if (suffixLine) {
-      line = Number(suffixLine[1]);
+      line = safeLineNumber(suffixLine[1]);
       target = target.slice(0, suffixLine.index);
     }
   }
   return target.length === 0 ? null : { target, line };
+}
+
+function workspaceRelativePath(root: string, target: string): string | null {
+  const candidate = relative(root, target);
+  if (
+    !candidate ||
+    candidate === ".." ||
+    candidate.startsWith(`..${sep}`) ||
+    isAbsolute(candidate)
+  ) return null;
+  return candidate.split(sep).join("/");
 }
 
 export function paperclipWorkspaceFileReferencesFromText(
@@ -75,9 +92,8 @@ export function paperclipWorkspaceFileReferencesFromText(
     if (references.length >= MAX_REFERENCES) break;
     const parsed = localTarget(match[2] ?? "");
     if (parsed === null) continue;
-    const absolutePath = resolve(root, parsed.target);
-    const relativePath = relative(root, absolutePath).split(sep).join("/");
-    if (!relativePath || relativePath.startsWith("../") || isAbsolute(relativePath)) continue;
+    const relativePath = workspaceRelativePath(root, resolve(root, parsed.target));
+    if (relativePath === null) continue;
     const key = `${relativePath}:${parsed.line ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -103,26 +119,23 @@ export async function discoverPaperclipWorkspaceFileReferences(
   assistantText: string,
   turnId: string,
 ): Promise<PaperclipWorkspaceFileReference[]> {
-  const references = paperclipWorkspaceFileReferencesFromText(workspace, assistantText, turnId, "runner_verified");
+  let canonicalRoot: string;
+  try { canonicalRoot = await realpath(workspace); } catch { return []; }
+  // Resolve references from the same canonical root used for the containment
+  // check. Do not consult a caller-controlled workspace symlink again after
+  // canonicalizing it above.
+  const references = paperclipWorkspaceFileReferencesFromText(canonicalRoot, assistantText, turnId, "runner_verified");
   const verified: PaperclipWorkspaceFileReference[] = [];
   for (const reference of references) {
-    const absolutePath = resolve(workspace, reference.path);
-    let info;
-    try { info = await stat(absolutePath); } catch { continue; }
-    if (!info.isFile()) continue;
-    if (info.size > MAX_READ_BYTES) {
-      verified.push({ ...reference, previewTruncated: true });
-      continue;
-    }
-    let bytes: Buffer;
-    try { bytes = await readFile(absolutePath); } catch { continue; }
-    const binary = bytes.subarray(0, Math.min(bytes.length, 8_192)).includes(0);
-    verified.push({
-      ...reference,
-      preview: binary ? null : bytes.subarray(0, MAX_PREVIEW_BYTES).toString("utf8"),
-      previewTruncated: bytes.length > MAX_PREVIEW_BYTES,
-      contentDigest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-    });
+    let canonicalPath: string;
+    try { canonicalPath = await realpath(resolve(canonicalRoot, reference.path)); } catch { continue; }
+    if (workspaceRelativePath(canonicalRoot, canonicalPath) === null) continue;
+    // POSIX exposes an inode's current links, not where its bytes originated.
+    // Once an outside hard link is removed, an in-workspace link is
+    // indistinguishable from a file created inside the workspace. Keep the
+    // canonical, bounded reference metadata but do not retain bytes until a
+    // trusted workspace snapshot/manifest can prove file provenance.
+    verified.push(reference);
   }
   return verified;
 }

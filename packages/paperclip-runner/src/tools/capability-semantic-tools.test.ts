@@ -1,11 +1,15 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type {
   CapabilityFixtureApproval,
   CapabilityFixtureSeed,
   CapabilityJsonValue,
+  CapabilitySemanticToolRuntimeSnapshot,
 } from "../mock-core/capability-control-plane-types.js";
-import { CapabilityMockControlPlaneAdapter } from "../mock-core/capability-mock-control-plane-adapter.js";
+import {
+  CapabilityMockControlPlaneAdapter,
+  type CapabilitySemanticToolRuntimeStore,
+} from "../mock-core/capability-mock-control-plane-adapter.js";
 import {
   CAPABILITY_OPTIONAL_TOOL_CATALOGS,
   CAPABILITY_SEMANTIC_TOOL_CATALOG,
@@ -39,6 +43,8 @@ async function runtimeFor(options: {
   policy?: ConstructorParameters<typeof CapabilitySemanticToolRuntime>[0]["policy"];
   seed?: CapabilityFixtureSeed;
   resolveSecretValue?: (name: string) => string | null;
+  semanticToolRuntimeStore?: CapabilitySemanticToolRuntimeStore;
+  now?: () => number;
 } = {}) {
   const actor = {
     id: "actor-1",
@@ -49,26 +55,29 @@ async function runtimeFor(options: {
     budgetId: "budget-actor-1",
     capabilityGrants: options.actorGrants ?? [],
   };
-  const adapter = new CapabilityMockControlPlaneAdapter({
-    ...options.seed,
-    actors: [actor],
-    tasks: options.seed?.tasks ?? [{
-      id: "task-1",
-      companyId: "company-1",
-      identifier: "MCK-1",
-      title: "Tool boundary fixture",
-      description: "Protected task details",
-      status: "todo",
-      priority: "high",
-      workMode: options.workMode ?? "standard",
-      parentId: null,
-      assigneeActorId: "actor-1",
-      checkoutRunId: null,
-      executionRunId: null,
-      startedAt: null,
-      completedAt: null,
-    }],
-  });
+  const adapter = new CapabilityMockControlPlaneAdapter(
+    {
+      ...options.seed,
+      actors: [actor],
+      tasks: options.seed?.tasks ?? [{
+        id: "task-1",
+        companyId: "company-1",
+        identifier: "MCK-1",
+        title: "Tool boundary fixture",
+        description: "Protected task details",
+        status: "todo",
+        priority: "high",
+        workMode: options.workMode ?? "standard",
+        parentId: null,
+        assigneeActorId: "actor-1",
+        checkoutRunId: null,
+        executionRunId: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    },
+    { semanticToolRuntimeStore: options.semanticToolRuntimeStore },
+  );
   await adapter.start();
   await adapter.openFixtureRun(OPEN);
   return {
@@ -79,6 +88,7 @@ async function runtimeFor(options: {
       scenarioGrants: options.scenarioGrants,
       policy: options.policy,
       resolveSecretValue: options.resolveSecretValue,
+      now: options.now,
     }),
   };
 }
@@ -322,6 +332,1506 @@ describe("Capability exposure and authorization", () => {
       comments: [],
     });
   });
+
+  it.each([
+    ["sync_company_skills", "company_skills:write", {}, { synced: true }, "engineer"],
+    ["manage_routine", "routines:write", {}, { managed: true }, "engineer"],
+    ["upsert_case", "cases:write", { key: "case-1", body: "Case body" }, {
+      key: "case-1",
+      body: "Case body",
+      upserted: true,
+    }, "engineer"],
+    ["administer_company", "company:admin", { action: "refresh" }, {
+      action: "refresh",
+      applied: true,
+    }, "admin"],
+  ] as const)(
+    "executes the advertised %s scenario extension",
+    async (operationId, grant, input, value, role) => {
+      const { runtime } = await runtimeFor({ scenarioGrants: [grant], role });
+      await expect(runtime.invoke({
+        operationId,
+        input,
+        idempotencyKey: `extension-${operationId}`,
+      })).resolves.toMatchObject({ ok: true, operationId, value });
+    },
+  );
+
+  it("replays required-idempotency extensions without executing a second result", async () => {
+    const { adapter, runtime } = await runtimeFor({ scenarioGrants: ["cases:write"] });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-1", body: "Case body" },
+      idempotencyKey: "upsert-case-1",
+    } as const;
+
+    const first = await runtime.invoke(invocation);
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      adapter.serialize(),
+    );
+    const recreated = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+    });
+    const replay = await recreated.invoke(invocation);
+    expect(first).toMatchObject({ ok: true, value: { upserted: true } });
+    expect(replay).toMatchObject({ ok: true, value: { upserted: true } });
+    if (!first.ok || !replay.ok) throw new Error("expected extension success");
+    expect(replay.operationResultId).toBe(first.operationResultId);
+
+    await expect(recreated.invoke({
+      operationId: "inspect_operation_result",
+      input: { operationResultId: first.operationResultId },
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { key: "case-1", body: "Case body", upserted: true },
+    });
+
+    const next = await recreated.invoke({
+      ...invocation,
+      idempotencyKey: "upsert-case-2",
+    });
+    expect(next).toMatchObject({ ok: true });
+    if (!next.ok) throw new Error("expected extension success");
+    expect(next.operationResultId).not.toBe(first.operationResultId);
+
+    await expect(recreated.invoke({
+      ...invocation,
+      input: { key: "case-1", body: "Different body" },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "input_invalid", reason: "idempotency_key_conflict" },
+    });
+  });
+
+  it("persists extension completion with its inspectable result atomically", async () => {
+    const { adapter, runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+    });
+    const compareAndSwapRuntime = vi.spyOn(
+      adapter,
+      "compareAndSwapSemanticToolRuntime",
+    );
+
+    const result = await runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-atomic", body: "Case body" },
+      idempotencyKey: "upsert-case-atomic",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(compareAndSwapRuntime).toHaveBeenCalledTimes(3);
+    expect(compareAndSwapRuntime.mock.calls[0]![2].extensions).toEqual([
+      expect.objectContaining({ status: "pending", phase: "reserved" }),
+    ]);
+    expect(compareAndSwapRuntime.mock.calls[1]![2].extensions).toEqual([
+      expect.objectContaining({ status: "pending", phase: "executing" }),
+    ]);
+    const snapshot = compareAndSwapRuntime.mock.calls[2]![2];
+    expect(snapshot.extensions).toHaveLength(1);
+    const [extension] = snapshot.extensions;
+    expect(extension).toMatchObject({ status: "completed" });
+    if (extension?.status !== "completed") {
+      throw new Error("expected completed extension receipt");
+    }
+    expect(snapshot.operationResults[extension.resultId]).toEqual(
+      extension.execution.value,
+    );
+  });
+
+  it("retries the completion merge after a concurrent lease heartbeat", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    let injectedHeartbeats = 0;
+    let completionAttempts = 0;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        const completing = snapshot.extensions.some((extension) => extension.status === "completed");
+        if (completing) completionAttempts += 1;
+        if (completing && injectedHeartbeats < 12 && durableSnapshot !== null) {
+          injectedHeartbeats += 1;
+          const heartbeat = structuredClone(durableSnapshot) as CapabilitySemanticToolRuntimeSnapshot;
+          heartbeat.extensions = heartbeat.extensions.map((extension) =>
+            extension.status === "pending"
+              ? { ...extension, leaseExpiresAtMs: (extension.leaseExpiresAtMs ?? 0) + 1_000 }
+              : extension,
+          );
+          durableSnapshot = heartbeat;
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const { runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+
+    await expect(runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-raced", body: "Case body" },
+      idempotencyKey: "upsert-case-raced",
+    })).resolves.toMatchObject({ ok: true, value: { upserted: true } });
+
+    expect(injectedHeartbeats).toBe(12);
+    expect(completionAttempts).toBe(13);
+    expect(durableSnapshot?.extensions).toEqual([
+      expect.objectContaining({ status: "completed", resultId: "tool-result-1" }),
+    ]);
+    expect(durableSnapshot?.operationResults["tool-result-1"]).toEqual({
+      key: "case-raced",
+      body: "Case body",
+      upserted: true,
+    });
+  });
+
+  it("bounds completion contention and retries the fulfilled execution without rerunning it", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      let rejectCompletion = true;
+      let completionAttempts = 0;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+        save: (_runId, snapshot) => {
+          durableSnapshot = structuredClone(snapshot);
+        },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+          const completing = snapshot.extensions.some(
+            (extension) => extension.status === "completed",
+          );
+          if (completing) completionAttempts += 1;
+          if (completing && rejectCompletion) return false;
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const { adapter, runtime } = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+        now: Date.now,
+      });
+      const invocation = {
+        operationId: "upsert_case",
+        input: { key: "case-bounded-contention", body: "Case body" },
+        idempotencyKey: "upsert-case-bounded-contention",
+      } as const;
+
+      const contended = runtime.invoke(invocation);
+      for (let yieldIndex = 0; yieldIndex < 8; yieldIndex += 1) {
+        await vi.advanceTimersToNextTimerAsync();
+      }
+      await expect(contended).resolves.toMatchObject({
+        ok: false,
+        error: { code: "operation_unsupported" },
+      });
+      expect(completionAttempts).toBe(64);
+      expect(durableSnapshot?.extensions).toEqual([
+        expect.objectContaining({ status: "pending" }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      const pending = durableSnapshot?.extensions[0];
+      expect(pending?.status).toBe("pending");
+      if (pending?.status !== "pending") throw new Error("expected a pending extension");
+      expect(pending.leaseExpiresAtMs).toBeGreaterThan(Date.now());
+
+      const followerAdapter = CapabilityMockControlPlaneAdapter.restore(
+        adapter.serialize(),
+        { semanticToolRuntimeStore: durableStore },
+      );
+      const follower = new CapabilitySemanticToolRuntime({
+        adapter: followerAdapter,
+        runId: OPEN.identity.runId,
+        scenarioGrants: ["cases:write"],
+        now: Date.now,
+      });
+      await expect(follower.invoke(invocation)).resolves.toMatchObject({
+        ok: false,
+        error: { reason: "idempotency_recovery_in_flight" },
+      });
+
+      rejectCompletion = false;
+      await expect(runtime.invoke(invocation)).resolves.toMatchObject({
+        ok: true,
+        operationResultId: "tool-result-1",
+        value: { key: "case-bounded-contention", upserted: true },
+      });
+      expect(completionAttempts).toBe(65);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reclaims an expired executing marker after its owner terminates", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let now = 0;
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      let rejectCompletion = true;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+        save: (_runId, snapshot) => {
+          durableSnapshot = structuredClone(snapshot);
+        },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+          if (rejectCompletion &&
+            snapshot.extensions.some((extension) => extension.status === "completed")) {
+            return false;
+          }
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const first = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+        now: () => now,
+      });
+      const invocation = {
+        operationId: "upsert_case",
+        input: { key: "case-ambiguous-effect", body: "Case body" },
+        idempotencyKey: "upsert-case-ambiguous-effect",
+      } as const;
+
+      const contended = first.runtime.invoke(invocation);
+      for (let yieldIndex = 0; yieldIndex < 8; yieldIndex += 1) {
+        await vi.advanceTimersToNextTimerAsync();
+      }
+      await expect(contended).resolves.toMatchObject({
+        ok: false,
+        error: { code: "operation_unsupported" },
+      });
+      expect(durableSnapshot?.extensions).toEqual([
+        expect.objectContaining({ status: "pending", phase: "executing" }),
+      ]);
+
+      // Model termination of the first process: its heartbeat no longer owns
+      // the lease, and the durable store is available to the replacement.
+      vi.clearAllTimers();
+      rejectCompletion = false;
+      now = 60_000;
+      const followerAdapter = CapabilityMockControlPlaneAdapter.restore(
+        first.adapter.serialize(),
+        { semanticToolRuntimeStore: durableStore },
+      );
+      const follower = new CapabilitySemanticToolRuntime({
+        adapter: followerAdapter,
+        runId: OPEN.identity.runId,
+        scenarioGrants: ["cases:write"],
+        now: () => now,
+        resolveExpiredExtensionReceipt: async () => ({
+          value: {
+            key: "case-ambiguous-effect",
+            body: "Case body",
+            upserted: true,
+          },
+        }),
+      });
+      await expect(follower.invoke(invocation)).resolves.toMatchObject({
+        ok: true,
+        operationResultId: "tool-result-1",
+        value: { key: "case-ambiguous-effect", upserted: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries rejected-execution cleanup through snapshot contention", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    let rejectExecutionAllocation = true;
+    let injectedCleanupContention = false;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => {
+        if (
+          rejectExecutionAllocation &&
+          durableSnapshot?.extensions.some((extension) => extension.status === "pending")
+        ) {
+          rejectExecutionAllocation = false;
+          throw new Error("injected extension result allocation failure");
+        }
+        return durableSnapshot === null ? null : structuredClone(durableSnapshot);
+      },
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        const removingFailedLease =
+          durableSnapshot?.extensions.some((extension) => extension.status === "pending") &&
+          snapshot.extensions.length === 0;
+        if (removingFailedLease && !injectedCleanupContention && durableSnapshot !== null) {
+          injectedCleanupContention = true;
+          durableSnapshot = {
+            ...structuredClone(durableSnapshot),
+            resultSequence: durableSnapshot.resultSequence + 1,
+          };
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const { runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-cleanup-raced", body: "Case body" },
+      idempotencyKey: "upsert-case-cleanup-raced",
+    } as const;
+
+    await expect(runtime.invoke(invocation)).resolves.toMatchObject({ ok: false });
+    await vi.waitFor(() => expect(durableSnapshot?.extensions).toEqual([]));
+    expect(injectedCleanupContention).toBe(true);
+    await expect(runtime.invoke(invocation)).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-2",
+      value: { key: "case-cleanup-raced", upserted: true },
+    });
+  });
+
+  it("retains a failed lease until cleanup contention clears", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      let failExecutionAllocation = true;
+      let cleanupAttempts = 0;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () => {
+          if (
+            failExecutionAllocation &&
+            durableSnapshot?.extensions.some((extension) => extension.status === "pending")
+          ) {
+            failExecutionAllocation = false;
+            throw new Error("injected result allocation failure");
+          }
+          return durableSnapshot === null ? null : structuredClone(durableSnapshot);
+        },
+        save: (_runId, snapshot) => {
+          durableSnapshot = structuredClone(snapshot);
+        },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+          const removingFailedLease =
+            durableSnapshot?.extensions.some((extension) => extension.status === "pending") &&
+            snapshot.extensions.length === 0;
+          if (removingFailedLease) {
+            cleanupAttempts += 1;
+            if (cleanupAttempts <= 8) return false;
+          }
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const { runtime } = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+        now: Date.now,
+      });
+      const invocation = {
+        operationId: "upsert_case",
+        input: { key: "case-cleanup-exhausted", body: "Case body" },
+        idempotencyKey: "upsert-case-cleanup-exhausted",
+      } as const;
+
+      await expect(runtime.invoke(invocation)).resolves.toMatchObject({ ok: false });
+      expect(cleanupAttempts).toBe(8);
+      expect(durableSnapshot?.extensions).toEqual([
+        expect.objectContaining({ status: "pending" }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cleanupAttempts).toBe(9);
+      expect(durableSnapshot?.extensions).toEqual([]);
+      await expect(runtime.invoke(invocation)).resolves.toMatchObject({
+        ok: true,
+        value: { key: "case-cleanup-exhausted", upserted: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allocates read result ids from the latest shared durable sequence", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const first = await runtimeFor({ semanticToolRuntimeStore: durableStore });
+    await expect(first.runtime.invoke({ operationId: "get_task_context", input: {} }))
+      .resolves.toMatchObject({ ok: true, operationResultId: "tool-result-1" });
+    const followerAdapter = CapabilityMockControlPlaneAdapter.restore(
+      first.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const follower = new CapabilitySemanticToolRuntime({
+      adapter: followerAdapter,
+      runId: OPEN.identity.runId,
+    });
+
+    await expect(follower.invoke({ operationId: "get_task_context", input: {} }))
+      .resolves.toMatchObject({ ok: true, operationResultId: "tool-result-2" });
+    await expect(first.runtime.invoke({ operationId: "get_task_context", input: {} }))
+      .resolves.toMatchObject({ ok: true, operationResultId: "tool-result-3" });
+    expect(Object.keys(durableSnapshot?.operationResults ?? {})).toEqual([
+      "tool-result-1",
+      "tool-result-2",
+      "tool-result-3",
+    ]);
+  });
+
+  it("retries extension acquisition after an unrelated snapshot update", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    let injectedContention = false;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        const acquiring = snapshot.extensions.some((extension) => extension.status === "pending");
+        if (acquiring && !injectedContention) {
+          injectedContention = true;
+          durableSnapshot = {
+            schema: "paperclip.capability.semantic-tool-runtime.v1",
+            resultSequence: 1,
+            operationResults: {},
+            extensions: [],
+          };
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const { runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+
+    await expect(runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-acquire-raced", body: "Case body" },
+      idempotencyKey: "upsert-case-acquire-raced",
+    })).resolves.toMatchObject({ ok: true, value: { upserted: true } });
+    expect(injectedContention).toBe(true);
+    expect(durableSnapshot?.resultSequence).toBe(2);
+    expect(durableSnapshot?.extensions).toEqual([
+      expect.objectContaining({ status: "completed" }),
+    ]);
+  });
+
+  it("fails closed while a restored extension is in flight and reconciles its durable receipt", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () =>
+        durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const { adapter, runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-pending", body: "Case body" },
+      idempotencyKey: "upsert-case-pending",
+    } as const;
+
+    const inFlight = runtime.invoke(invocation);
+    const serializedWhileInFlight = adapter.serialize();
+    expect(() =>
+      CapabilityMockControlPlaneAdapter.restore(serializedWhileInFlight),
+    ).toThrow(
+      "restoring pending semantic extensions requires a process-independent runtime store",
+    );
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      serializedWhileInFlight,
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+    });
+
+    await expect(restored.invoke(invocation)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "operation_unsupported",
+        reason: "idempotency_recovery_in_flight",
+      },
+    });
+    const completed = await inFlight;
+    expect(completed).toMatchObject({ ok: true });
+
+    const recovered = await restored.invoke(invocation);
+    expect(recovered).toMatchObject({
+      ok: true,
+      operationResultId: completed.ok ? completed.operationResultId : undefined,
+      value: { key: "case-pending", body: "Case body", upserted: true },
+    });
+  });
+
+  it("does not revive a serialized pending extension when the durable store is empty", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const first = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-empty-store-pending", body: "Case body" },
+      idempotencyKey: "empty-store-pending",
+    } as const;
+
+    const inFlight = first.runtime.invoke(invocation);
+    const serializedWhilePending = first.adapter.serialize();
+    await expect(inFlight).resolves.toMatchObject({ ok: true });
+    durableSnapshot = null;
+
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      serializedWhilePending,
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+    });
+    await expect(restored.invoke(invocation)).resolves.toMatchObject({
+      ok: true,
+      value: { key: "case-empty-store-pending", upserted: true },
+    });
+    expect(durableSnapshot?.extensions).toEqual([
+      expect.objectContaining({
+        key: "run-tools:upsert_case:empty-store-pending",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  it("does not revive serialized completed extensions when the durable store is empty", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const first = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+    await expect(first.runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-stale-completed", body: "Stale body" },
+      idempotencyKey: "stale-completed",
+    })).resolves.toMatchObject({ ok: true });
+    const serializedWithCompleted = first.adapter.serialize();
+    durableSnapshot = null;
+
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      serializedWithCompleted,
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+    });
+    await expect(restored.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-after-empty-store", body: "Fresh body" },
+      idempotencyKey: "fresh-after-empty-store",
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { key: "case-after-empty-store", upserted: true },
+    });
+    expect(durableSnapshot?.extensions).toEqual([
+      expect.objectContaining({
+        key: "run-tools:upsert_case:fresh-after-empty-store",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  it("renews a live extension lease before another runtime can reclaim it", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () =>
+          durableSnapshot === null ? null : structuredClone(durableSnapshot),
+        save: (_runId, snapshot) => {
+          durableSnapshot = structuredClone(snapshot);
+        },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+            return false;
+          }
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const { adapter, runtime } = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+      });
+      const invocation = {
+        operationId: "upsert_case",
+        input: { key: "case-live", body: "Case body" },
+        idempotencyKey: "live-case",
+      } as const;
+
+      const inFlight = runtime.invoke(invocation);
+      expect(durableSnapshot?.extensions[0]).toMatchObject({
+        status: "pending",
+        leaseExpiresAtMs: 30_000,
+      });
+      vi.advanceTimersByTime(10_000);
+      expect(durableSnapshot?.extensions[0]).toMatchObject({
+        status: "pending",
+        leaseExpiresAtMs: 40_000,
+      });
+
+      const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+        adapter.serialize(),
+        { semanticToolRuntimeStore: durableStore },
+      );
+      const restored = new CapabilitySemanticToolRuntime({
+        adapter: restoredAdapter,
+        runId: OPEN.identity.runId,
+        scenarioGrants: ["cases:write"],
+        now: () => 30_001,
+      });
+      await expect(restored.invoke(invocation)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "operation_unsupported",
+          reason: "idempotency_recovery_in_flight",
+        },
+      });
+      await expect(inFlight).resolves.toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a lease heartbeat after a transient durable-store failure", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      let failNextLoad = false;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () => {
+          if (failNextLoad) {
+            failNextLoad = false;
+            throw new Error("transient store read failure");
+          }
+          return durableSnapshot === null ? null : structuredClone(durableSnapshot);
+        },
+        save: (_runId, snapshot) => {
+          durableSnapshot = structuredClone(snapshot);
+        },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+            return false;
+          }
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const { runtime } = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+      });
+      const inFlight = runtime.invoke({
+        operationId: "upsert_case",
+        input: { key: "case-heartbeat-retry", body: "Case body" },
+        idempotencyKey: "heartbeat-retry",
+      });
+
+      failNextLoad = true;
+      expect(() => vi.advanceTimersByTime(10_000)).not.toThrow();
+      expect(durableSnapshot?.extensions[0]?.leaseExpiresAtMs).toBe(30_000);
+      vi.advanceTimersByTime(10_000);
+      expect(durableSnapshot?.extensions[0]?.leaseExpiresAtMs).toBe(50_000);
+      await expect(inFlight).resolves.toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a prepared extension after repeated heartbeat failures", async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+      let failHeartbeatLoads = false;
+      const durableStore: CapabilitySemanticToolRuntimeStore = {
+        load: () => {
+          if (failHeartbeatLoads) throw new Error("persistent store read failure");
+          return durableSnapshot === null ? null : structuredClone(durableSnapshot);
+        },
+        save: (_runId, snapshot) => { durableSnapshot = structuredClone(snapshot); },
+        compareAndSwap: (_runId, expected, snapshot) => {
+          if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+          durableSnapshot = structuredClone(snapshot);
+          return true;
+        },
+      };
+      const { adapter, runtime } = await runtimeFor({
+        scenarioGrants: ["cases:write"],
+        semanticToolRuntimeStore: durableStore,
+        now: () => Date.now(),
+      });
+      const invocation = {
+        operationId: "upsert_case",
+        input: { key: "case-heartbeat-loss", body: "Case body" },
+        idempotencyKey: "heartbeat-loss",
+      } as const;
+
+      const inFlight = runtime.invoke(invocation);
+      failHeartbeatLoads = true;
+      vi.advanceTimersByTime(40_000);
+      failHeartbeatLoads = false;
+      expect(durableSnapshot?.extensions[0]).toMatchObject({
+        status: "pending",
+        phase: "executing",
+        leaseExpiresAtMs: 30_000,
+      });
+
+      const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+        adapter.serialize(),
+        { semanticToolRuntimeStore: durableStore },
+      );
+      const resolveExpiredExtensionReceipt = vi.fn(() => ({
+        value: {
+          key: "case-heartbeat-loss",
+          body: "Conflicting recovered body",
+          upserted: true,
+        },
+      }));
+      const restored = new CapabilitySemanticToolRuntime({
+        adapter: restoredAdapter,
+        runId: OPEN.identity.runId,
+        scenarioGrants: ["cases:write"],
+        now: () => Date.now(),
+        resolveExpiredExtensionReceipt,
+      });
+      const recovered = await restored.invoke(invocation);
+      const original = await inFlight;
+      expect(recovered).toMatchObject({ ok: true });
+      expect(original).toMatchObject({ ok: true });
+      if (!recovered.ok || !original.ok) throw new Error("expected recovered execution");
+      expect(recovered.operationResultId).toBe(original.operationResultId);
+      expect(recovered.value).toEqual({
+        key: "case-heartbeat-loss",
+        body: "Case body",
+        upserted: true,
+      });
+      expect(original.value).toEqual(recovered.value);
+      expect(resolveExpiredExtensionReceipt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries initial acquisition after a transient durable-store failure", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    let failNextLoad = false;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => {
+        if (failNextLoad) {
+          failNextLoad = false;
+          throw new Error("transient store read failure");
+        }
+        return durableSnapshot === null ? null : structuredClone(durableSnapshot);
+      },
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const { runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+      semanticToolRuntimeStore: durableStore,
+    });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-acquisition-retry", body: "Case body" },
+      idempotencyKey: "acquisition-retry",
+    };
+
+    failNextLoad = true;
+    await expect(runtime.invoke(invocation)).resolves.toMatchObject({
+      ok: false,
+      error: { reason: "mock_operation_rejected" },
+    });
+    await expect(runtime.invoke(invocation)).resolves.toMatchObject({
+      ok: true,
+      value: { key: "case-acquisition-retry", upserted: true },
+    });
+  });
+
+  it("reconstructs a legacy expired built-in receipt after executor loss", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: `${OPEN.identity.runId}:upsert_case:expired-case`,
+        input: '{"body":"Case body","key":"case-expired"}',
+        status: "pending",
+        ownerId: "terminated-executor",
+        leaseExpiresAtMs: 1_000,
+        phase: "executing",
+      }],
+    };
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ scenarioGrants: ["cases:write"] });
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+      now: () => 1_001,
+    });
+
+    await expect(restored.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-expired", body: "Case body" },
+      idempotencyKey: "expired-case",
+    })).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-1",
+      value: { key: "case-expired", body: "Case body", upserted: true },
+    });
+    expect(durableSnapshot.extensions[0]).toMatchObject({
+      status: "completed",
+      resultId: "tool-result-1",
+      execution: {
+        value: { key: "case-expired", body: "Case body", upserted: true },
+      },
+    });
+    expect(durableSnapshot.operationResults).toEqual({
+      "tool-result-1": { key: "case-expired", body: "Case body", upserted: true },
+    });
+  });
+
+  it("recovers an expired built-in extension from its prepared receipt", async () => {
+    const observedExport = {
+      schema: "paperclip.capability.mock-export.v1",
+      company: { id: "company-1", name: "Previously Exported Company" },
+      taskCount: 1,
+      actorCount: 1,
+    };
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: `${OPEN.identity.runId}:export_company:prepared-export`,
+        input: "{}",
+        status: "pending",
+        ownerId: "terminated-exporter",
+        leaseExpiresAtMs: 1_000,
+        phase: "executing",
+        preparedExecution: {
+          value: observedExport,
+          commandResult: null,
+          entityRefs: [],
+        },
+      }],
+    };
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => { durableSnapshot = structuredClone(snapshot); },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ scenarioGrants: ["portability:export"] });
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const resolveExpiredExtensionReceipt = vi.fn(async () => ({
+      value: {
+        ...observedExport,
+        company: { id: "company-1", name: "Conflicting Resolver Company" },
+      },
+    }));
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["portability:export"],
+      resolveExpiredExtensionReceipt,
+      now: () => 1_001,
+    });
+
+    await expect(restored.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "prepared-export",
+    })).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-1",
+      value: observedExport,
+    });
+    expect(durableSnapshot.extensions[0]).toMatchObject({
+      status: "completed",
+      resultId: "tool-result-1",
+      execution: { value: observedExport },
+    });
+    expect(resolveExpiredExtensionReceipt).not.toHaveBeenCalled();
+  });
+
+  it("terminally marks a legacy export without an exact receipt", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: `${OPEN.identity.runId}:export_company:expired-export`,
+        input: "{}",
+        status: "pending",
+        ownerId: "terminated-exporter",
+        leaseExpiresAtMs: 1_000,
+        phase: "executing",
+      }],
+    };
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({
+      scenarioGrants: ["portability:export"],
+      seed: { company: { name: "Company State Changed After Execution" } },
+    });
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["portability:export"],
+      now: () => 1_001,
+    });
+
+    await expect(restored.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "expired-export",
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "operation_unsupported",
+        reason: "idempotency_receipt_unavailable",
+      },
+    });
+    expect(durableSnapshot.extensions).toEqual([{
+      key: `${OPEN.identity.runId}:export_company:expired-export`,
+      input: "{}",
+      status: "indeterminate",
+      reason: "idempotency_receipt_unavailable",
+    }]);
+    expect(durableSnapshot.operationResults).toEqual({});
+
+    const retriedAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const retried = new CapabilitySemanticToolRuntime({
+      adapter: retriedAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["portability:export"],
+      now: () => 2_001,
+    });
+    await expect(retried.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "expired-export",
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "operation_unsupported",
+        reason: "idempotency_receipt_unavailable",
+      },
+    });
+    expect(durableSnapshot.operationResults).toEqual({});
+
+    const authoritativeExport = {
+      schema: "paperclip.capability.mock-export.v1",
+      company: { id: "company-1", name: "Originally Exported Company" },
+      taskCount: 1,
+      actorCount: 1,
+    };
+    const resolvingAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const resolving = new CapabilitySemanticToolRuntime({
+      adapter: resolvingAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["portability:export"],
+      resolveExpiredExtensionReceipt: async () => ({ value: authoritativeExport }),
+      now: () => 3_001,
+    });
+    await expect(resolving.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "expired-export",
+    })).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-1",
+      value: authoritativeExport,
+    });
+    expect(durableSnapshot.extensions[0]).toMatchObject({
+      status: "completed",
+      resultId: "tool-result-1",
+    });
+  });
+
+  it("adopts an authoritative completion that wins the recovery publication race", async () => {
+    const authoritative = {
+      key: "case-publication-race",
+      body: "Original executor body",
+      upserted: true,
+    };
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 1,
+      operationResults: { "tool-result-1": authoritative },
+      extensions: [{
+        key: `${OPEN.identity.runId}:upsert_case:publication-race`,
+        input: '{"body":"Case body","key":"case-publication-race"}',
+        status: "completed",
+        resultId: "tool-result-1",
+        execution: {
+          value: authoritative,
+          commandResult: null,
+          entityRefs: ["case:case-publication-race"],
+        },
+      }],
+    };
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => { durableSnapshot = structuredClone(snapshot); },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ scenarioGrants: ["cases:write"] });
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["cases:write"],
+    });
+
+    expect(restored.reconcileExpiredExtensionReceipt({
+      operationId: "upsert_case",
+      input: { key: "case-publication-race", body: "Case body" },
+      idempotencyKey: "publication-race",
+      value: {
+        key: "case-publication-race",
+        body: "Stale recovery observation",
+        upserted: true,
+      },
+      entityRefs: ["case:stale-observation"],
+    })).toEqual({ resultId: "tool-result-1" });
+    await expect(restored.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-publication-race", body: "Case body" },
+      idempotencyKey: "publication-race",
+    })).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-1",
+      value: authoritative,
+    });
+    expect(durableSnapshot.operationResults).toEqual({
+      "tool-result-1": authoritative,
+    });
+  });
+
+  it("resolves an expired mutable export receipt during a restored retry", async () => {
+    const observedExport = {
+      schema: "paperclip.capability.mock-export.v1",
+      company: { id: "company-1", name: "Previously Exported Company" },
+      taskCount: 1,
+      actorCount: 1,
+    };
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: `${OPEN.identity.runId}:export_company:recovered-export`,
+        input: "{}",
+        status: "pending",
+        ownerId: "terminated-exporter",
+        leaseExpiresAtMs: 1_000,
+        phase: "executing",
+      }],
+    };
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => { durableSnapshot = structuredClone(snapshot); },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) return false;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ scenarioGrants: ["portability:export"] });
+    const restoredAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const resolveExpiredExtensionReceipt = vi.fn(async () => ({ value: observedExport }));
+    const restored = new CapabilitySemanticToolRuntime({
+      adapter: restoredAdapter,
+      runId: OPEN.identity.runId,
+      scenarioGrants: ["portability:export"],
+      now: () => 1_001,
+      resolveExpiredExtensionReceipt,
+    });
+
+    await expect(restored.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "recovered-export",
+    })).resolves.toMatchObject({
+      ok: true,
+      operationResultId: "tool-result-1",
+      value: observedExport,
+    });
+    expect(resolveExpiredExtensionReceipt).toHaveBeenCalledOnce();
+    expect(durableSnapshot.extensions[0]).toMatchObject({
+      status: "completed",
+      resultId: "tool-result-1",
+    });
+
+    await restored.invoke({
+      operationId: "export_company",
+      input: {},
+      idempotencyKey: "recovered-export",
+    });
+    expect(resolveExpiredExtensionReceipt).toHaveBeenCalledOnce();
+  });
+
+  it("allows only one restored runtime to reclaim an expired extension lease", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: `${OPEN.identity.runId}:upsert_case:contended-case`,
+        input: '{"body":"Case body","key":"case-contended"}',
+        status: "pending",
+        ownerId: "terminated-executor",
+        leaseExpiresAtMs: 1_000,
+      }],
+    };
+    let successfulClaims = 0;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () => structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        if (snapshot.extensions.some((extension) =>
+          extension.status === "pending" &&
+          extension.ownerId !== "terminated-executor" &&
+          extension.phase === "reserved"
+        )) successfulClaims += 1;
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ scenarioGrants: ["cases:write"] });
+    const serialized = base.adapter.serialize();
+    const runtimes = [0, 1].map(() => {
+      const adapter = CapabilityMockControlPlaneAdapter.restore(serialized, {
+        semanticToolRuntimeStore: durableStore,
+      });
+      return new CapabilitySemanticToolRuntime({
+        adapter,
+        runId: OPEN.identity.runId,
+        scenarioGrants: ["cases:write"],
+        now: () => 1_001,
+      });
+    });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-contended", body: "Case body" },
+      idempotencyKey: "contended-case",
+    } as const;
+
+    const results = await Promise.all(
+      runtimes.map((runtime) => runtime.invoke(invocation)),
+    );
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "operation_unsupported",
+          reason: "idempotency_recovery_in_flight",
+        }),
+      }),
+    ]);
+    expect(successfulClaims).toBe(1);
+  });
+
+  it("preserves a durable extension lease when a stale runtime saves another result", async () => {
+    let durableSnapshot: CapabilitySemanticToolRuntimeSnapshot | null = null;
+    const durableStore: CapabilitySemanticToolRuntimeStore = {
+      load: () =>
+        durableSnapshot === null ? null : structuredClone(durableSnapshot),
+      save: (_runId, snapshot) => {
+        durableSnapshot = structuredClone(snapshot);
+      },
+      compareAndSwap: (_runId, expected, snapshot) => {
+        if (JSON.stringify(durableSnapshot) !== JSON.stringify(expected)) {
+          return false;
+        }
+        durableSnapshot = structuredClone(snapshot);
+        return true;
+      },
+    };
+    const base = await runtimeFor({ semanticToolRuntimeStore: durableStore });
+    const staleAdapter = CapabilityMockControlPlaneAdapter.restore(
+      base.adapter.serialize(),
+      { semanticToolRuntimeStore: durableStore },
+    );
+    const staleRuntime = new CapabilitySemanticToolRuntime({
+      adapter: staleAdapter,
+      runId: OPEN.identity.runId,
+    });
+    const pendingKey = `${OPEN.identity.runId}:upsert_case:owned-elsewhere`;
+    durableSnapshot = {
+      schema: "paperclip.capability.semantic-tool-runtime.v1",
+      resultSequence: 0,
+      operationResults: {},
+      extensions: [{
+        key: pendingKey,
+        input: '{"body":"Case body","key":"case-owned"}',
+        status: "pending",
+        ownerId: "other-runtime",
+        leaseExpiresAtMs: 30_000,
+      }],
+    };
+
+    await expect(staleRuntime.invoke({
+      operationId: "get_task_context",
+      input: {},
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(durableSnapshot.extensions).toEqual([
+      expect.objectContaining({
+        key: pendingKey,
+        status: "pending",
+        ownerId: "other-runtime",
+      }),
+    ]);
+  });
+
+  it("rejects incomplete or malformed restored extension executions", async () => {
+    const { adapter, runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+    });
+    await runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-1", body: "Case body" },
+      idempotencyKey: "upsert-case-1",
+    });
+
+    for (const mutate of [
+      (execution: Record<string, unknown>) => delete execution.value,
+      (execution: Record<string, unknown>) => {
+        execution.commandResult = { disposition: "applied" };
+      },
+    ]) {
+      const snapshot = JSON.parse(adapter.serialize()) as {
+        semanticToolRuntimes: Record<
+          string,
+          { extensions: Array<{ execution: Record<string, unknown> }> }
+        >;
+      };
+      const execution =
+        snapshot.semanticToolRuntimes[OPEN.identity.runId]!.extensions[0]!
+          .execution;
+      mutate(execution);
+      expect(() =>
+        CapabilityMockControlPlaneAdapter.restore(JSON.stringify(snapshot)),
+      ).toThrow("semantic tool runtime for run-tools is invalid");
+    }
+  });
+
+  it("rejects restored extension receipts that disagree with inspection", async () => {
+    const { adapter, runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+    });
+    const result = await runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-1", body: "Case body" },
+      idempotencyKey: "upsert-case-1",
+    });
+    if (!result.ok) throw new Error("expected extension success");
+
+    const snapshot = JSON.parse(adapter.serialize()) as {
+      semanticToolRuntimes: Record<
+        string,
+        { operationResults: Record<string, unknown> }
+      >;
+    };
+    snapshot.semanticToolRuntimes[OPEN.identity.runId]!
+      .operationResults[result.operationResultId] = { upserted: false };
+
+    expect(() =>
+      CapabilityMockControlPlaneAdapter.restore(JSON.stringify(snapshot)),
+    ).toThrow("semantic tool runtime for run-tools is invalid");
+  });
+
+  it("rejects a restored result sequence that can reuse a prior result id", async () => {
+    const { adapter, runtime } = await runtimeFor({
+      scenarioGrants: ["cases:write"],
+    });
+    const result = await runtime.invoke({
+      operationId: "upsert_case",
+      input: { key: "case-1", body: "Case body" },
+      idempotencyKey: "upsert-case-1",
+    });
+    expect(result).toMatchObject({ operationResultId: "tool-result-1" });
+
+    const snapshot = JSON.parse(adapter.serialize()) as {
+      semanticToolRuntimes: Record<string, { resultSequence: number }>;
+    };
+    snapshot.semanticToolRuntimes[OPEN.identity.runId]!.resultSequence = 0;
+    expect(() =>
+      CapabilityMockControlPlaneAdapter.restore(JSON.stringify(snapshot)),
+    ).toThrow("semantic tool runtime for run-tools is invalid");
+  });
+
+  it("serializes concurrent retries for required-idempotency extensions", async () => {
+    const { runtime } = await runtimeFor({ scenarioGrants: ["cases:write"] });
+    const invocation = {
+      operationId: "upsert_case",
+      input: { key: "case-concurrent", body: "Case body" },
+      idempotencyKey: "upsert-case-concurrent",
+    } as const;
+
+    const [first, replay] = await Promise.all([
+      runtime.invoke(invocation),
+      runtime.invoke(invocation),
+    ]);
+    expect(first).toMatchObject({ ok: true });
+    expect(replay).toMatchObject({ ok: true });
+    if (!first.ok || !replay.ok) throw new Error("expected extension success");
+    expect(replay.operationResultId).toBe(first.operationResultId);
+
+    const [accepted, conflicting] = await Promise.all([
+      runtime.invoke({ ...invocation, idempotencyKey: "shared-key" }),
+      runtime.invoke({
+        ...invocation,
+        input: { key: "case-concurrent", body: "Different body" },
+        idempotencyKey: "shared-key",
+      }),
+    ]);
+    expect(accepted).toMatchObject({ ok: true });
+    expect(conflicting).toMatchObject({
+      ok: false,
+      error: { code: "input_invalid", reason: "idempotency_key_conflict" },
+    });
+  });
 });
 
 describe("Capability security policy", () => {
@@ -329,7 +1839,7 @@ describe("Capability security policy", () => {
     expectTypeOf<CapabilityModelToolSuccess>().not.toMatchTypeOf<CapabilityToolSuccess>();
 
     const secret = "CAPABILITY_SECRET_SENTINEL_f42d4fbc";
-    const { runtime } = await runtimeFor({
+    const { adapter, runtime } = await runtimeFor({
       scenarioGrants: ["secrets:values:read"],
       policy: { allowSecretValueAccess: true },
       resolveSecretValue: (name) => name === "DEPLOY_TOKEN" ? secret : null,
@@ -347,6 +1857,8 @@ describe("Capability security policy", () => {
     expect(result.authorization.redactions).toEqual([
       { path: "$.value", replacement: "[SECRET_VALUE]" },
     ]);
+    expect(adapter.loadSemanticToolRuntime(OPEN.identity.runId)?.extensions)
+      .toEqual([]);
 
     const inspected = await runtime.invoke({
       operationId: "inspect_operation_result",

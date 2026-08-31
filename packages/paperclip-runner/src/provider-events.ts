@@ -1,5 +1,24 @@
 import { createHash } from "node:crypto";
-import type { AcpRuntimeEvent } from "acpx/runtime";
+
+/**
+ * Structural subset of an ACP runtime event consumed by the canonical event
+ * mapper. Keeping the protocol layer vendor-neutral avoids making ACPX a
+ * runtime dependency merely to describe events; the ACPX provider can pass
+ * its richer event objects directly because they satisfy this shape.
+ */
+export interface AcpRuntimeEventShape {
+  type: string;
+  toolCallId?: string;
+  title?: string;
+  kind?: string;
+  locations?: unknown[];
+  text?: string;
+  status?: string;
+  rawOutput?: unknown;
+  tag?: string;
+  entries?: Array<{ content: string; status?: string }>;
+  [key: string]: unknown;
+}
 
 export const PROVIDER_EVENT_FAMILIES = [
   "plan", "tool_execution", "research", "delegation", "model_identity",
@@ -108,16 +127,18 @@ function isGenericAcpToolName(value: unknown): boolean {
 function meaningfulAcpToolProgress(value: string, title: string | undefined, status: string | undefined): boolean {
   const progress = value.trim();
   if (!progress || /^tool(?:\s+|_)call\b/i.test(progress)) return false;
-  const normalizedStatus = (status ?? "").replaceAll("_", "[ _-]?");
-  if (!title || !normalizedStatus) return true;
+  const statusPattern = (status ?? "")
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replaceAll("_", "[ _-]?");
+  if (!title || !statusPattern) return true;
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return !new RegExp(`^${escapedTitle}\\s*\\(${normalizedStatus}\\)\\s*$`, "i").test(progress);
+  return !new RegExp(`^${escapedTitle}\\s*\\(${statusPattern}\\)\\s*$`, "i").test(progress);
 }
 
 interface AcpxToolLifecycleIdentity {
   title?: string;
-  kind?: Extract<AcpRuntimeEvent, { type: "tool_call" }>["kind"];
-  locations?: Extract<AcpRuntimeEvent, { type: "tool_call" }>["locations"];
+  kind?: string;
+  locations?: unknown[];
   progress?: string;
 }
 
@@ -127,7 +148,7 @@ interface AcpxToolLifecycleIdentity {
  * title as the literal `tool call`, so consumers must restore lifecycle
  * identity before translating the event into a durable protocol record.
  */
-export function createAcpxToolEventNormalizer(): (event: AcpRuntimeEvent) => AcpRuntimeEvent {
+export function createAcpxToolEventNormalizer<T extends AcpRuntimeEventShape>(): (event: T) => T {
   const lifecycle = new Map<string, AcpxToolLifecycleIdentity>();
   return (event) => {
     if (event.type !== "tool_call" || !event.toolCallId) return event;
@@ -138,8 +159,9 @@ export function createAcpxToolEventNormalizer(): (event: AcpRuntimeEvent) => Acp
       ? previous.kind
       : event.kind ?? previous.kind;
     const locations = event.locations?.length ? event.locations : previous.locations;
-    const progress = meaningfulAcpToolProgress(event.text, incomingTitle, event.status)
-      ? event.text
+    const eventText = text(event.text);
+    const progress = meaningfulAcpToolProgress(eventText, incomingTitle, event.status)
+      ? eventText
       : previous.progress;
     lifecycle.set(event.toolCallId, { title, kind, locations, progress });
     return {
@@ -148,7 +170,7 @@ export function createAcpxToolEventNormalizer(): (event: AcpRuntimeEvent) => Acp
       kind,
       locations,
       ...(progress && canonicalStatus(event.status, "running") === "running" ? { text: progress } : {}),
-    };
+    } as T;
   };
 }
 
@@ -252,11 +274,12 @@ function turnPlanPayload(params: Record<string, unknown>): Record<string, unknow
   });
   const planComplete = steps.length > 0 && steps.every((step) => step.status === "completed");
   const planId = safeId(text(params.turnId), "turn-plan");
+  const revision = Number(params.revision);
   return {
     schema: "paperclip.plan.updated.v1",
     planId,
-    revision: Number.isSafeInteger(params.revision) ? Number(params.revision) : 1,
-    explanation: text(params.explanation) || null,
+    revision: Number.isSafeInteger(revision) && revision > 0 ? revision : 1,
+    explanation: text(params.explanation).slice(0, 4000) || null,
     steps,
     complete: planComplete,
     syncStatus: "not_applicable",
@@ -403,7 +426,7 @@ export function canonicalProviderEventsFromOpenCodePart(partValue: unknown): Can
 
 /** Maps ACPX's bounded public runtime events; raw ACP JSON-RPC never enters PRP. */
 export function canonicalProviderEventsFromAcpxRuntimeEvent(
-  event: AcpRuntimeEvent,
+  event: AcpRuntimeEventShape,
   fallbackItemId: string,
   turnId?: string,
 ): CanonicalProviderEvent[] {
@@ -433,7 +456,7 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
     "acpx-item",
   );
   if (event.type === "plan") {
-    const steps = event.entries.slice(0, 256).flatMap((entry, index) => {
+    const steps = (event.entries ?? []).slice(0, 256).flatMap((entry, index) => {
       const body = entry.content.trim().slice(0, 4000);
       return body
         ? [{
@@ -482,7 +505,7 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
       status,
       durationMs: null,
       exitCode: null,
-      progress: status === "running" ? event.text.slice(0, 4000) || null : null,
+      progress: status === "running" ? text(event.text).slice(0, 4000) || null : null,
       ...boundedOutput(output),
     };
     const terminal = status !== "running";
@@ -493,14 +516,15 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
     }];
   }
   if (event.type === "status" && event.tag === "current_mode_update") {
-    const state = /review|plan/i.test(event.text) ? "entered" : "exited";
+    const statusText = text(event.text);
+    const state = /review|plan/i.test(statusText) ? "entered" : "exited";
     return [{
       eventType: "review.mode.changed",
       payload: {
         schema: "paperclip.review.mode_changed.v1",
         reviewId: itemId,
         state,
-        scope: event.text.slice(0, 4000) || null,
+        scope: statusText.slice(0, 4000) || null,
       },
       itemId,
     }];
@@ -521,7 +545,7 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
         scope: "turn",
         recoverable: true,
         userActionable: false,
-        summary: event.text.slice(0, 4000) || "ACP provider update",
+        summary: text(event.text).slice(0, 4000) || "ACP provider update",
       },
       itemId,
     }];

@@ -1,7 +1,6 @@
 import type {
   HeartbeatRun,
   HeartbeatRunEvent,
-  InstanceSchedulerHeartbeatAgent,
   WorkspaceOperation,
   ProviderTraceFrame,
   ProviderTraceMetadata,
@@ -18,6 +17,7 @@ export interface RunLivenessFields {
 
 export interface ActiveRunForIssue {
   id: string;
+  runtimeMode?: "legacy" | "native";
   status: string;
   invocationSource: string;
   triggerDetail: string | null;
@@ -47,6 +47,7 @@ export interface ActiveRunForIssue {
 
 export interface LiveRunForIssue {
   id: string;
+  runtimeMode?: "legacy" | "native";
   status: string;
   invocationSource: string;
   triggerDetail: string | null;
@@ -232,8 +233,4 @@ export const heartbeatsApi = {
       `/companies/${companyId}/live-runs${qs ? `?${qs}` : ""}`,
     );
   },
-  listInstanceSchedulerAgents: () =>
-    api.get<InstanceSchedulerHeartbeatAgent[]>(
-      "/instance/scheduler-heartbeats",
-    ),
 };

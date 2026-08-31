@@ -40,6 +40,16 @@ export const writeDocumentAction = {
         "baseRevisionId": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "write_document",
+      "idempotencyKey": "example",
+      "input": {
+        "key": "example",
+        "title": "example",
+        "body": "example",
+        "baseRevisionId": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "write_document",
@@ -177,6 +187,21 @@ export const writeDocumentAction = {
   },
   "scenario": {
     "order": 10,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "write_document",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "write_document",
       "version": 1,

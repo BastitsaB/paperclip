@@ -80,16 +80,21 @@ export function CodexLocalConfigFields({
   mark,
   models,
   hideInstructionsFile,
+  managedSandboxOnly,
 }: AdapterConfigFieldsProps) {
   const runnerManaged = adapterType === "paperclip_runner";
+  // The execution engine picks which binary runs on the execution host, and the
+  // ACP sub-fields below name host paths. The platform-managed environment owns
+  // both, so the managed-sandbox-only policy hides them the same way
+  // `runnerManaged` already does for the Paperclip Runner.
+  const hideEngineChoice = runnerManaged || managedSandboxOnly === true;
   const runnerProvider = runnerManaged
     ? isCreate
       ? values!.paperclipRunnerProvider ?? "codex"
       : eff("adapterConfig", "provider", String(config.provider ?? "codex"))
     : "codex";
-  const normalizedRunnerProvider: PaperclipRunnerProvider = isPaperclipRunnerProvider(runnerProvider)
-    ? runnerProvider
-    : "codex";
+  const normalizedRunnerProvider: PaperclipRunnerProvider =
+    isPaperclipRunnerProvider(runnerProvider) ? runnerProvider : "codex";
   const openCodeRunner = runnerManaged && runnerProvider === "opencode";
   const acpxRunner = runnerManaged && runnerProvider === "acpx";
   const acpxAgent = acpxRunner
@@ -97,25 +102,38 @@ export function CodexLocalConfigFields({
       ? values!.paperclipRunnerAcpxAgent ?? "pi"
       : eff("adapterConfig", "acpxAgent", String(config.acpxAgent ?? "pi"))
     : "pi";
-  const permissionCapability = PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES[normalizedRunnerProvider];
-  const managedProviderConfigFields = normalizedRunnerProvider === "claude_managed"
-    ? claudeManagedConfigFields
-    : normalizedRunnerProvider === "aws_agentcore"
-      ? awsAgentCoreConfigFields
-      : [];
+  const permissionCapability =
+    PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES[normalizedRunnerProvider];
+  const managedProviderConfigFields =
+    normalizedRunnerProvider === "claude_managed"
+      ? claudeManagedConfigFields
+      : normalizedRunnerProvider === "aws_agentcore"
+        ? awsAgentCoreConfigFields
+        : [];
   const permissionMode = permissionCapability.configurable
     ? isCreate
-      ? String((values as unknown as Record<string, unknown>)[permissionCapability.configKey] ?? permissionCapability.defaultMode)
+      ? String(
+          (values as unknown as Record<string, unknown>)[
+            permissionCapability.configKey
+          ] ?? permissionCapability.defaultMode,
+        )
       : eff(
           "adapterConfig",
           permissionCapability.configKey,
-          String(config[permissionCapability.configKey] ?? permissionCapability.defaultMode),
+          String(
+            config[permissionCapability.configKey] ??
+              permissionCapability.defaultMode,
+          ),
         )
     : permissionCapability.defaultMode;
   const runnerLifecycleMode = runnerManaged
     ? isCreate
       ? values!.paperclipRunnerLifecycleMode ?? "per_turn"
-      : eff("adapterConfig", "lifecycleMode", String(config.lifecycleMode ?? "per_turn"))
+      : eff(
+          "adapterConfig",
+          "lifecycleMode",
+          String(config.lifecycleMode ?? "per_turn"),
+        )
     : "per_turn";
   const rawEngine = runnerManaged ? "cli" : isCreate
     ? values!.codexEngine ?? "auto"
@@ -141,7 +159,7 @@ export function CodexLocalConfigFields({
 
   return (
     <>
-      {!runnerManaged && <Field label="Execution engine" hint="Auto uses ACP when prerequisites pass and falls back to Codex CLI with diagnostics.">
+      {!hideEngineChoice && <Field label="Execution engine" hint="Auto uses ACP when prerequisites pass and falls back to Codex CLI with diagnostics.">
         <select
           className={inputClass}
           value={engine}
@@ -358,26 +376,28 @@ export function CodexLocalConfigFields({
       )}
       {acpSelected && (
         <>
-          <Field
-            label="ACP server command"
-            hint="Optional override for the Codex ACP server command. Defaults to the package-local codex-acp binary."
-          >
-            <DraftInput
-              value={
-                isCreate
-                  ? values!.codexAcpAgentCommand ?? ""
-                  : eff("adapterConfig", "agentCommand", String(config.agentCommand ?? ""))
-              }
-              onCommit={(v) =>
-                isCreate
-                  ? set!({ codexAcpAgentCommand: v })
-                  : mark("adapterConfig", "agentCommand", v || undefined)
-              }
-              immediate
-              className={inputClass}
-              placeholder="codex-acp"
-            />
-          </Field>
+          {!managedSandboxOnly && (
+            <Field
+              label="ACP server command"
+              hint="Optional override for the Codex ACP server command. Defaults to the package-local codex-acp binary."
+            >
+              <DraftInput
+                value={
+                  isCreate
+                    ? values!.codexAcpAgentCommand ?? ""
+                    : eff("adapterConfig", "agentCommand", String(config.agentCommand ?? ""))
+                }
+                onCommit={(v) =>
+                  isCreate
+                    ? set!({ codexAcpAgentCommand: v })
+                    : mark("adapterConfig", "agentCommand", v || undefined)
+                }
+                immediate
+                className={inputClass}
+                placeholder="codex-acp"
+              />
+            </Field>
+          )}
           <Field label="ACP session mode" hint="Persistent keeps ACP session state between runs. One-shot starts fresh each run.">
             <select
               className={inputClass}
@@ -419,29 +439,31 @@ export function CodexLocalConfigFields({
               <option value="fail">Fail</option>
             </select>
           </Field>
-          <Field
-            label="ACP state directory"
-            hint="Optional ACP session state directory. Defaults to Paperclip-managed company/agent scoped storage."
-          >
-            <div className="flex items-center gap-2">
-              <DraftInput
-                value={
-                  isCreate
-                    ? values!.codexAcpStateDir ?? ""
-                    : eff("adapterConfig", "stateDir", String(config.stateDir ?? ""))
-                }
-                onCommit={(v) =>
-                  isCreate
-                    ? set!({ codexAcpStateDir: v })
-                    : mark("adapterConfig", "stateDir", v || undefined)
-                }
-                immediate
-                className={inputClass}
-                placeholder="/path/to/acp-state"
-              />
-              <ChoosePathButton />
-            </div>
-          </Field>
+          {!managedSandboxOnly && (
+            <Field
+              label="ACP state directory"
+              hint="Optional ACP session state directory. Defaults to Paperclip-managed organization/agent scoped storage."
+            >
+              <div className="flex items-center gap-2">
+                <DraftInput
+                  value={
+                    isCreate
+                      ? values!.codexAcpStateDir ?? ""
+                      : eff("adapterConfig", "stateDir", String(config.stateDir ?? ""))
+                  }
+                  onCommit={(v) =>
+                    isCreate
+                      ? set!({ codexAcpStateDir: v })
+                      : mark("adapterConfig", "stateDir", v || undefined)
+                  }
+                  immediate
+                  className={inputClass}
+                  placeholder="/path/to/acp-state"
+                />
+                <ChoosePathButton />
+              </div>
+            </Field>
+          )}
           <Field
             label="ACP warm process idle ms"
             hint="Defaults to 0, which closes the ACP process after each run while retaining persistent session state."

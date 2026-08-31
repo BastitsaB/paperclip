@@ -34,8 +34,11 @@ export const queryKeys = {
       ["tools", "connection", connectionId] as const,
     connectionInstalls: (connectionId: string) =>
       ["tools", "connection", connectionId, "installs"] as const,
-    catalog: (connectionId: string) =>
-      ["tools", "connection", connectionId, "catalog"] as const,
+    connectionGrants: (connectionId: string) =>
+      ["tools", "connection", connectionId, "grants"] as const,
+    composioServices: (connectionId: string) =>
+      ["tools", "connection", connectionId, "composio-services"] as const,
+    catalog: (connectionId: string) => ["tools", "connection", connectionId, "catalog"] as const,
     connectionActivity: (connectionId: string) =>
       ["tools", "connection", connectionId, "activity"] as const,
     testAgents: (connectionId: string) =>
@@ -73,18 +76,13 @@ export const queryKeys = {
       ["tools", companyId, "audit", limit] as const,
     activity: (
       companyId: string,
-      filters: {
-        app?: string;
-        agent?: string;
-        outcome?: string;
-        window?: string;
-        search?: string;
-      },
+      filters: { gateway?: string; app?: string; agent?: string; outcome?: string; window?: string; search?: string },
     ) =>
       [
         "tools",
         companyId,
         "activity",
+        filters.gateway ?? "__all",
         filters.app ?? "__all",
         filters.agent ?? "__all",
         filters.outcome ?? "__all",
@@ -217,6 +215,8 @@ export const queryKeys = {
       ["agents", companyId, "adapter-model-profiles", adapterType] as const,
     detectModel: (companyId: string, adapterType: string) =>
       ["agents", companyId, "detect-model", adapterType] as const,
+    authSignal: (companyId: string, adapterType: string, environmentId?: string | null) =>
+      ["agents", companyId, "auth-signal", adapterType, environmentId ?? null] as const,
   },
   builtInAgents: {
     list: (companyId: string) => ["built-in-agents", companyId] as const,
@@ -584,7 +584,6 @@ export const queryKeys = {
   instance: {
     settings: ["instance", "settings"] as const,
     generalSettings: ["instance", "general-settings"] as const,
-    schedulerHeartbeats: ["instance", "scheduler-heartbeats"] as const,
     experimentalSettings: ["instance", "experimental-settings"] as const,
   },
   health: ["health"] as const,

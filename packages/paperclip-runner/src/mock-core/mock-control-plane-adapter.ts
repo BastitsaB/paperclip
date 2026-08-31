@@ -197,6 +197,3 @@ function canonicalJson(value: unknown): string {
   }
   return JSON.stringify(value) ?? "undefined";
 }
-
-export * from "./capability-control-plane-types.js";
-export * from "./capability-mock-control-plane-adapter.js";

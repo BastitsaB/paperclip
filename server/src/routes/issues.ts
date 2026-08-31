@@ -171,9 +171,10 @@ import {
 } from "./workspace-command-authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import {
+  formatAttachmentSize,
   GENERIC_ATTACHMENT_CONTENT_TYPES,
   isInlineAttachmentContentType,
-  normalizeIssueAttachmentMaxBytes,
+  MAX_ATTACHMENT_BYTES,
   normalizeContentType,
   normalizeUploadAttachmentContentType,
   SVG_CONTENT_TYPE,
@@ -204,6 +205,7 @@ import {
   ISSUE_WAKE_DIAGNOSTICS_MAX_ACTIVITY_RECORDS,
   ISSUE_WAKE_DIAGNOSTICS_MAX_WAKE_REQUESTS,
   readAcceptedPlanConfirmationTarget,
+  type IssuePostCommitAction,
 } from "../services/issues.js";
 import { authorizationDeniedDetails } from "../services/authorization.js";
 import { stalledReviewDecisionService } from "../services/stalled-review-decisions.js";
@@ -211,6 +213,11 @@ import { environmentService } from "../services/environments.js";
 import { environmentRuntimeService } from "../services/environment-runtime.js";
 import { redactSensitiveText } from "../redaction.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
+import {
+  deliverNativeQuestionResponse,
+  requestNativeQuestionRunCancellation,
+  validateNativeQuestionResponseInput,
+} from "../services/native-runtime/native-question-bridge.js";
 import {
   createCompanySearchRateLimiter,
   type CompanySearchRateLimiter,
@@ -2043,6 +2050,18 @@ function readToolActionContinuationContext(interaction: {
     };
   }
 
+  if (executionStatus === "expired") {
+    const expirationMessage = error ? `: ${error}` : "";
+    return {
+      toolName,
+      actionRequestId,
+      decision: "accepted",
+      executionStatus,
+      ...(error ? { error } : {}),
+      instructions: `the approved ${toolName} action expired before execution${expirationMessage}; if the task still requires it, call the tool again to request a fresh approval.`,
+    };
+  }
+
   return {
     toolName,
     actionRequestId,
@@ -2902,7 +2921,6 @@ export function issueRoutes(
       sourceRun.agentId === assigneeAgentId
     );
   };
-  const questionResponseDeliveries = questionResponseDeliveryService(db, { heartbeat });
   const enqueueStalledReviewDecisionWakeup = opts.stalledReviewDecisionEnqueueWakeup ?? heartbeat.wakeup;
   const enqueueRecoveryActionWakeup = opts.recoveryActionEnqueueWakeup ?? heartbeat.wakeup;
   const feedback = feedbackService(db);
@@ -2928,6 +2946,16 @@ export function issueRoutes(
   const decisionTrainingSvc = decisionTrainingService(db);
   const issueReferencesSvc = issueReferenceService(db);
   const issueThreadInteractionsSvc = issueThreadInteractionService(db);
+  const questionResponseDeliveries = questionResponseDeliveryService(db, {
+    heartbeat,
+    resolveNativeQuestion: (interaction) => deliverNativeQuestionResponse(db, interaction),
+  });
+  const flushIssuePostCommitActions = async (actions: readonly IssuePostCommitAction[]) => {
+    if (actions.length === 0) return;
+    const { executeIssuePostCommitActions } = await import("../services/issues.js");
+    await executeIssuePostCommitActions(db, actions);
+  };
+
   const memoizeIssueRead = createRequestPromiseMemo<Request, Awaited<ReturnType<typeof svc.getById>>>({
     shouldCache: (issue) => issue !== null,
   });
@@ -4417,6 +4445,7 @@ export function issueRoutes(
       effectiveResolverPolicy: string;
       resolverPolicyProvenance?: string | null;
       addresseeAgentId?: string | null;
+      addresseeUserId?: string | null;
       kind: string;
       status: string;
       payload?: unknown;
@@ -7377,6 +7406,7 @@ export function issueRoutes(
     const actor = getActorInfo(req);
     const actionStatus = outcome === "cancelled" ? "cancelled" : "resolved";
     const postCommitActivityPublications: ActivityPublication[] = [];
+    const postCommitIssueActions: IssuePostCommitAction[] = [];
     const result = await db.transaction(async (tx) => {
       const lockedIssue = await tx
         .select()
@@ -7497,16 +7527,20 @@ export function issueRoutes(
           }
         }
 
-        const updatedIssue = await svc.update(
-          id,
-          {
-            ...updateFields,
-            actorAgentId: actor.agentId ?? null,
-            actorUserId: actor.actorType === "user" ? actor.actorId : null,
-          },
-          tx,
-          postCommitActivityPublications,
-        );
+        const issueUpdate = {
+          ...updateFields,
+          actorAgentId: actor.agentId ?? null,
+          actorUserId: actor.actorType === "user" ? actor.actorId : null,
+        };
+        const updatedIssue = sourceIssueStatus === "done" || sourceIssueStatus === "cancelled"
+          ? await svc.update(
+              id,
+              issueUpdate,
+              tx,
+              postCommitActivityPublications,
+              postCommitIssueActions,
+            )
+          : await svc.update(id, issueUpdate, tx, postCommitActivityPublications);
         if (!updatedIssue) throw notFound("Issue not found");
         issue = updatedIssue;
       }
@@ -7536,6 +7570,7 @@ export function issueRoutes(
       return { issue, recoveryAction };
     });
     for (const publication of postCommitActivityPublications) publishActivity(publication);
+    await flushIssuePostCommitActions(postCommitIssueActions);
 
     await routinesSvc.syncRunStatusForIssue(result.issue.id);
 
@@ -10353,6 +10388,7 @@ export function issueRoutes(
       value: Awaited<ReturnType<typeof svc.addStopRelayCommentIfNeeded>>;
     } = { value: null };
     const postCommitActivityPublications: ActivityPublication[] = [];
+    const postCommitIssueActions: IssuePostCommitAction[] = [];
     const issueUpdateData = {
       ...updateFields,
       actorAgentId: actor.agentId ?? null,
@@ -10360,10 +10396,15 @@ export function issueRoutes(
     };
     const shouldCollectCompletionPublication =
       actor.actorType === "user" && existing.status !== "done" && updateFields.status === "done";
+    const shouldCollectTerminalIssueActions =
+      updateFields.status === "done" || updateFields.status === "cancelled";
     const updateIssue = (tx?: Parameters<typeof svc.update>[2]) => {
       if (tx) {
-        return shouldCollectCompletionPublication
-          ? svc.update(id, issueUpdateData, tx, postCommitActivityPublications)
+        if (shouldCollectCompletionPublication) {
+          return svc.update(id, issueUpdateData, tx, postCommitActivityPublications, postCommitIssueActions);
+        }
+        return shouldCollectTerminalIssueActions
+          ? svc.update(id, issueUpdateData, tx, undefined, postCommitIssueActions)
           : svc.update(id, issueUpdateData, tx);
       }
       return shouldCollectCompletionPublication
@@ -10534,6 +10575,7 @@ export function issueRoutes(
       return;
     }
     for (const publication of postCommitActivityPublications) publishActivity(publication);
+    await flushIssuePostCommitActions(postCommitIssueActions);
 
     if (enteringBlocked) {
       const blockedIssue = issue;
@@ -12095,6 +12137,7 @@ export function issueRoutes(
         interactionStatus: interaction.status,
         continuationPolicy: interaction.continuationPolicy,
         addresseeAgentId: interaction.addresseeAgentId ?? null,
+        addresseeUserId: interaction.addresseeUserId ?? null,
         requestedResolverPolicy: interaction.requestedResolverPolicy,
         effectiveResolverPolicy: interaction.effectiveResolverPolicy,
         resolverPolicyProvenance: interaction.resolverPolicyProvenance,
@@ -12166,6 +12209,9 @@ export function issueRoutes(
       );
       if (!authorizedResolution) return;
       const { interactionSvc, current, resolutionAuthorization } = authorizedResolution;
+      if (current.kind === "connection_intent") {
+        throw unprocessable("Connection intents must be resolved through the connection intent endpoints");
+      }
       const suggestedTaskEffectsAuthorized = current.kind === "suggest_tasks"
         ? await assertSuggestedTaskEffectsAllowed(
             req,
@@ -12416,7 +12462,10 @@ export function issueRoutes(
         interactionId,
       );
       if (!authorizedResolution) return;
-      const { interactionSvc, resolutionAuthorization } = authorizedResolution;
+      const { interactionSvc, current, resolutionAuthorization } = authorizedResolution;
+      if (current.kind === "connection_intent") {
+        throw unprocessable("Connection intents must be resolved through the connection intent endpoints");
+      }
 
       const actor = getActorInfo(req);
       const interaction = await interactionSvc.rejectInteraction(issue, interactionId, req.body, {
@@ -12485,9 +12534,12 @@ export function issueRoutes(
         interactionId,
       );
       if (!authorizedResolution) return;
-      const { interactionSvc, resolutionAuthorization } = authorizedResolution;
+      const { interactionSvc, current, resolutionAuthorization } = authorizedResolution;
 
       const actor = getActorInfo(req);
+      if (current.kind === "ask_user_questions") {
+        validateNativeQuestionResponseInput(current, req.body);
+      }
       const interaction = await interactionSvc.answerQuestions(issue, interactionId, req.body, {
         agentId: actor.agentId,
         runId: actor.runId,
@@ -12632,11 +12684,42 @@ export function issueRoutes(
       await assertPendingReviewInteractionVerdictAllowed(req, issue, current);
 
       const actor = getActorInfo(req);
-      const interaction = await interactionSvc.withdrawInteraction(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        runId: actor.runId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
+      let nativeRunId: string | null = null;
+      const interaction = await interactionSvc.withdrawInteraction(
+        issue,
+        interactionId,
+        req.body,
+        {
+          agentId: actor.agentId,
+          runId: actor.runId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+        {
+          afterResolveInTransaction: async (tx, resolved) => {
+            if (resolved.kind !== "ask_user_questions") return;
+            nativeRunId = await requestNativeQuestionRunCancellation(tx, resolved, {
+              kind: "interaction_withdrawn",
+              interactionId: resolved.id,
+            });
+          },
+        },
+      );
+      if (nativeRunId) {
+        try {
+          await heartbeat.cancelRun(nativeRunId, "Question withdrawn while waiting for operator input", {
+            resultJson: {
+              withdrawnInteractionId: interaction.id,
+              withdrawnByActorType: actor.actorType,
+              withdrawnByActorId: actor.actorId,
+            },
+          });
+        } catch (err) {
+          logger.warn(
+            { err, runId: nativeRunId, interactionId: interaction.id },
+            "native question withdrawal cancellation deferred to recovery sweep",
+          );
+        }
+      }
       await logActivity(db, {
         companyId: issue.companyId,
         actorType: actor.actorType,
@@ -12731,10 +12814,25 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await issueThreadInteractionService(db).cancelQuestions(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
+      let nativeRunId: string | null = null;
+      const interaction = await issueThreadInteractionService(db).cancelQuestions(
+        issue,
+        interactionId,
+        req.body,
+        {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+        {
+          afterResolveInTransaction: async (tx, resolved) => {
+            if (resolved.kind !== "ask_user_questions") return;
+            nativeRunId = await requestNativeQuestionRunCancellation(tx, resolved, {
+              kind: "interaction_cancelled",
+              interactionId: resolved.id,
+            });
+          },
+        },
+      );
 
       await logActivity(db, {
         companyId: issue.companyId,
@@ -12756,6 +12854,23 @@ export function issueRoutes(
               : null,
         },
       });
+
+      if (nativeRunId) {
+        try {
+          await heartbeat.cancelRun(nativeRunId, "Cancelled while waiting for operator input", {
+            resultJson: {
+              cancelledByActorType: "user",
+              cancelledByUserId: req.actor.userId ?? null,
+              cancelledInteractionId: interaction.id,
+            },
+          });
+        } catch (err) {
+          logger.warn(
+            { err, runId: nativeRunId, interactionId: interaction.id },
+            "native question board cancellation deferred to recovery sweep",
+          );
+        }
+      }
 
       await queueResolvedInteractionContinuationWakeup({
         db,
@@ -13321,6 +13436,7 @@ export function issueRoutes(
       };
       let txResult: { comment: Awaited<ReturnType<typeof svc.addComment>>; issue: NonNullable<Awaited<ReturnType<typeof svc.update>>> };
       const postCommitActivityPublications: ActivityPublication[] = [];
+      const postCommitIssueActions: IssuePostCommitAction[] = [];
       try {
         txResult = await db.transaction(async (tx) => {
           const insertedComment = await svc.addComment(
@@ -13336,8 +13452,8 @@ export function issueRoutes(
             tx,
           );
           const updated = actor.actorType === "user" && currentIssue.status !== "done"
-            ? await svc.update(id, updatePatch, tx, postCommitActivityPublications)
-            : await svc.update(id, updatePatch, tx);
+            ? await svc.update(id, updatePatch, tx, postCommitActivityPublications, postCommitIssueActions)
+            : await svc.update(id, updatePatch, tx, undefined, postCommitIssueActions);
           // Throw (not return null) so drizzle rolls back the inserted comment when the issue
           // has been concurrently deleted between the initial fetch and the in-transaction update.
           if (!updated) throw new AutoApprovalIssueMissingError();
@@ -13367,6 +13483,7 @@ export function issueRoutes(
         throw err;
       }
       for (const publication of postCommitActivityPublications) publishActivity(publication);
+      await flushIssuePostCommitActions(postCommitIssueActions);
       comment = txResult.comment;
       currentIssue = txResult.issue;
       // Mirror the normal status-change audit trail: every other in_review -> done path
@@ -13917,15 +14034,14 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     if (!(await assertDeliverableMutationAllowedByRunContext(req, res, issue))) return;
 
-    const company = await companiesSvc.getById(companyId);
-    const attachmentMaxBytes = normalizeIssueAttachmentMaxBytes(company?.attachmentMaxBytes);
-
     try {
-      await runSingleFileUpload(req, res, attachmentMaxBytes);
+      await runSingleFileUpload(req, res, MAX_ATTACHMENT_BYTES);
     } catch (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === "LIMIT_FILE_SIZE") {
-          res.status(422).json({ error: `Attachment exceeds ${attachmentMaxBytes} bytes` });
+          res.status(422).json({
+            error: `Attachment is larger than the ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} limit`,
+          });
           return;
         }
         res.status(400).json({ error: err.message });

@@ -52,6 +52,13 @@ export interface OpenHarnessSessionInput {
   runId: string;
   normalizedSessionId: string;
   workingDirectory: string;
+  /** Abort provider bootstrap and release any not-yet-returned provider state. */
+  signal?: AbortSignal;
+}
+
+export interface HarnessSessionRecoveryOptions {
+  /** Abort provider recovery and release any not-yet-returned provider state. */
+  signal: AbortSignal;
 }
 
 export class HarnessCapabilityUnavailableError extends Error {
@@ -131,6 +138,16 @@ export type HarnessRuntimeRequestResolution =
 export type HarnessRuntimeRequestAction = HarnessRuntimeRequestResolution["action"];
 
 export type HarnessRuntimeRequestHandoffResult = "handed_off" | "already_settled";
+
+/**
+ * A runtime-input handoff commits its durable state transition before the
+ * method returns. Provider interruption is cleanup only: it remains observed,
+ * but cannot acquire mutation authority or reverse an already committed turn.
+ */
+export interface HarnessRuntimeRequestHandoff {
+  result: HarnessRuntimeRequestHandoffResult;
+  cleanup: Promise<void>;
+}
 
 const RUNTIME_REQUEST_ACTIONS: readonly HarnessRuntimeRequestAction[] = [
   "accept",
@@ -428,6 +445,10 @@ export interface PersistedHarnessSession {
   activeTurnId?: string | null;
   semanticResult?: PersistedHarnessSemanticResult | null;
   terminalTurns?: PersistedHarnessTurnTerminal[];
+  /** A result-less terminal task may spend this fail-closed one-shot recovery allowance. */
+  dispositionOnlyRecoveryConsumed?: boolean;
+  /** Exact accepted provider turn that spent the disposition-only allowance. */
+  dispositionOnlyRecoveryTurnId?: string | null;
   pendingRuntimeRequests?: HarnessRuntimeRequest[];
   goal?: HarnessThreadGoal | null;
   lineage?: HarnessThreadLineageEntry[];
@@ -460,7 +481,7 @@ export interface HarnessSession {
     requestedCollaborationMode?: "default" | "plan";
   }): Promise<{ turnId: string; effectiveCollaborationMode?: "default" | "plan" }>;
   steer?(input: { turnId: string; message: NativeUserMessage; correlationId?: string }): Promise<void>;
-  interrupt?(input: { turnId?: string; reason?: string }): Promise<void>;
+  interrupt?(input: { turnId?: string; reason?: string; signal?: AbortSignal }): Promise<void>;
   pendingRuntimeRequests?(): HarnessRuntimeRequest[];
   resolveRuntimeRequest?(input: {
     requestId: string;
@@ -471,7 +492,9 @@ export interface HarnessSession {
     requestId: string;
     turnId: string;
     reason: "durable_handoff";
-  }): Promise<HarnessRuntimeRequestHandoffResult>;
+    /** Do not synchronously commit if runtime ownership is already revoked. */
+    signal: AbortSignal;
+  }): HarnessRuntimeRequestHandoff;
   goal?(input: HarnessGoalOperation): Promise<HarnessThreadGoal | null>;
   lineage?(): HarnessThreadLineageEntry[];
   read?(): Promise<Record<string, unknown>>;
@@ -489,5 +512,6 @@ export interface HarnessDriver {
   openSession(input: OpenHarnessSessionInput): Promise<HarnessSession>;
   recoverSession?(
     snapshot: PersistedHarnessSession,
+    options: HarnessSessionRecoveryOptions,
   ): Promise<HarnessSessionRecoveryResult>;
 }

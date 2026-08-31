@@ -1,8 +1,48 @@
-// Development and test builds resolve the workspace package here. Rebuild the package and restart
-// the server after changing runner internals; the workspace export resolves through dist. The
-// server build replaces this compiled shim with the package's built distribution, so published
-// server installs do not need a separate paperclip-runner npm bootstrap.
-// Keep runtime behavior in the package; this file is only the server build boundary. Native
-// driver, adapter, and generated protocol-action changes must be compiled before restarting this
-// development boundary; this prevents both stale workspace-package and adapter runtime exports.
-export * from "@paperclipai/paperclip-runner";
+/**
+ * Development shim for the package-local runner runtime.
+ *
+ * Source-mode server entry points do not build workspace dependencies first,
+ * so this shim loads the package source through the TypeScript runtime. The
+ * server build replaces the emitted shim with the package's compiled `dist`
+ * tree so published server packages have no workspace runtime dependency.
+ * Keep server imports pointed at this relative boundary.
+ */
+type RunnerModule = typeof import("@paperclipai/paperclip-runner");
+
+export type {
+  PaperclipJsonValue,
+  PaperclipQuestionResponse,
+  PaperclipSemanticActionBinding,
+  PaperclipSemanticActionId,
+  PaperclipSemanticAuthorizationRecord,
+  PaperclipSemanticRunContext,
+  PaperclipSemanticToolCall,
+  PaperclipSemanticToolDefinition,
+  PaperclipSemanticToolResult,
+  PaperclipRunnerAuthorizedToolSet,
+  PaperclipQuestionSet,
+  PaperclipRuntimeInputRequest,
+  PrpEvent,
+  PrpStructuredRunResult,
+  PrpTerminalState,
+} from "@paperclipai/paperclip-runner";
+export type DurablePrpControlPlane =
+  import("@paperclipai/paperclip-runner").DurablePrpControlPlane;
+export type PaperclipSemanticDispatcher =
+  import("@paperclipai/paperclip-runner").PaperclipSemanticDispatcher;
+
+const sourceUrl = new URL(
+  "../../../../packages/paperclip-runner/src/index.ts",
+  import.meta.url,
+);
+const runner = await import(sourceUrl.href) as RunnerModule;
+
+export const DurablePrpControlPlane = runner.DurablePrpControlPlane;
+export const PaperclipSemanticDispatcher = runner.PaperclipSemanticDispatcher;
+export const createPaperclipRunnerAuthorizedToolSet =
+  runner.createPaperclipRunnerAuthorizedToolSet;
+export const parsePaperclipQuestionSet = runner.parsePaperclipQuestionSet;
+export const parsePaperclipQuestionResponse = runner.parsePaperclipQuestionResponse;
+export const validatePrpEvent = runner.validatePrpEvent;
+export const validatePrpStructuredRunResult =
+  runner.validatePrpStructuredRunResult;

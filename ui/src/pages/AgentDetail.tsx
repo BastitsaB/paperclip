@@ -2789,9 +2789,9 @@ function ConfigurationTab({
       : taskAssignSource === "agent_creator"
         ? "Enabled automatically while this agent can create new agents."
         : taskAssignSource === "explicit_grant"
-          ? "Enabled via explicit company permission grant."
+          ? "Enabled via explicit organization permission grant."
           : taskAssignSource === "simple_default"
-            ? "Enabled by simple company-wide task assignment defaults."
+            ? "Enabled by simple organization-wide task assignment defaults."
             : "Disabled unless explicitly granted.";
 
   return (
@@ -2873,25 +2873,24 @@ function ConfigurationTab({
                 disabled={updatePermissions.isPending}
               />
             </div>
-            <div className="flex items-center justify-between gap-4 text-sm">
-              <div className="space-y-1">
-                <div>Can create/import skills</div>
-                <p className="text-xs text-muted-foreground">
-                  Lets this agent install, import, create, and scan company
-                  skills without creating agents.
-                </p>
-              </div>
-              <ToggleSwitch
-                checked={canCreateSkills}
-                onCheckedChange={() =>
-                  updatePermissions.mutate({
-                    canCreateAgents,
-                    canCreateSkills: !canCreateSkills,
-                    canAssignTasks,
-                  })
-                }
-                disabled={updatePermissions.isPending}
-              />
+            <ToggleSwitch
+              checked={canCreateAgents}
+              onCheckedChange={() =>
+                updatePermissions.mutate({
+                  canCreateAgents: !canCreateAgents,
+                  canCreateSkills,
+                  canAssignTasks: !canCreateAgents ? true : canAssignTasks,
+                })
+              }
+              disabled={updatePermissions.isPending}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <div className="space-y-1">
+              <div>Can create/import skills</div>
+              <p className="text-xs text-muted-foreground">
+                Lets this agent install, import, create, and scan organization skills without creating agents.
+              </p>
             </div>
             <div className="flex items-center justify-between gap-4 text-sm">
               <div className="space-y-1">
@@ -2939,7 +2938,7 @@ export function PromptsTab({
   const queryClient = useQueryClient();
   const { selectedCompanyId } = useCompany();
   const { isMobile } = useSidebar();
-  const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
+  const [selectedFile, setSelectedFileState] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [bundleDraft, setBundleDraft] = useState<{
@@ -2963,8 +2962,20 @@ export function PromptsTab({
     entryFile: string;
     selectedFile: string;
   } | null>(null);
+  // MDXEditor can normalize markdown and emit onChange while it mounts. Only
+  // treat editor output as a draft after a real interaction so merely opening
+  // an instructions file cannot mark the agent dirty.
+  const editorInteractedRef = useRef(false);
+  const markEditorInteracted = useCallback(() => {
+    editorInteractedRef.current = true;
+  }, []);
+  const setSelectedFile = useCallback((filePath: string) => {
+    editorInteractedRef.current = false;
+    setSelectedFileState(filePath);
+  }, []);
 
   useEffect(() => {
+    editorInteractedRef.current = false;
     setSelectedFile("AGENTS.md");
     setShowFilePanel(false);
     setDraft(null);
@@ -3040,7 +3051,10 @@ export function PromptsTab({
       entryFile?: string;
       clearLegacyPromptTemplate?: boolean;
     }) => agentsApi.updateInstructionsBundle(agent.id, data, companyId),
-    onMutate: () => setAwaitingRefresh(true),
+    onMutate: () => {
+      editorInteractedRef.current = false;
+      setAwaitingRefresh(true);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.agents.instructionsBundle(agent.id),
@@ -3056,12 +3070,12 @@ export function PromptsTab({
   });
 
   const saveFile = useMutation({
-    mutationFn: (data: {
-      path: string;
-      content: string;
-      clearLegacyPromptTemplate?: boolean;
-    }) => agentsApi.saveInstructionsFile(agent.id, data, companyId),
-    onMutate: () => setAwaitingRefresh(true),
+    mutationFn: (data: { path: string; content: string; clearLegacyPromptTemplate?: boolean }) =>
+      agentsApi.saveInstructionsFile(agent.id, data, companyId),
+    onMutate: () => {
+      editorInteractedRef.current = false;
+      setAwaitingRefresh(true);
+    },
     onSuccess: (_, variables) => {
       setPendingFiles((prev) => prev.filter((f) => f !== variables.path));
       queryClient.invalidateQueries({
@@ -3081,9 +3095,11 @@ export function PromptsTab({
   });
 
   const deleteFile = useMutation({
-    mutationFn: (relativePath: string) =>
-      agentsApi.deleteInstructionsFile(agent.id, relativePath, companyId),
-    onMutate: () => setAwaitingRefresh(true),
+    mutationFn: (relativePath: string) => agentsApi.deleteInstructionsFile(agent.id, relativePath, companyId),
+    onMutate: () => {
+      editorInteractedRef.current = false;
+      setAwaitingRefresh(true);
+    },
     onSuccess: (_, relativePath) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.agents.instructionsBundle(agent.id),
@@ -3102,15 +3118,8 @@ export function PromptsTab({
   });
 
   const uploadMarkdownImage = useMutation({
-    mutationFn: async ({
-      file,
-      namespace,
-    }: {
-      file: File;
-      namespace: string;
-    }) => {
-      if (!selectedCompanyId)
-        throw new Error("Select a company to upload images");
+    mutationFn: async ({ file, namespace }: { file: File; namespace: string }) => {
+      if (!selectedCompanyId) throw new Error("Select an organization to upload images");
       return assetsApi.uploadImage(selectedCompanyId, file, namespace);
     },
   });
@@ -3256,6 +3265,13 @@ export function PromptsTab({
     saveFile.isPending ||
     deleteFile.isPending ||
     awaitingRefresh;
+
+  useEffect(() => () => {
+    onSaveActionChange(null);
+    onCancelActionChange(null);
+    onDirtyChange(false);
+    onSavingChange(false);
+  }, [onCancelActionChange, onDirtyChange, onSaveActionChange, onSavingChange]);
 
   useEffect(() => {
     onSavingChange(isSaving);
@@ -3787,22 +3803,31 @@ export function PromptsTab({
           {selectedFileExists && fileLoading && !selectedFileDetail ? (
             <PromptEditorSkeleton />
           ) : useMarkdownEditor ? (
-            <MarkdownEditor
-              key={selectedOrEntryFile}
-              value={displayValue}
-              onChange={(value) => setDraft(value ?? "")}
-              placeholder="# Agent instructions"
-              className="min-w-0 overflow-hidden"
-              contentClassName="min-h-(--sz-420px) max-w-full break-words text-sm leading-7"
-              imageUploadHandler={async (file) => {
-                const namespace = `agents/${agent.id}/instructions/${selectedOrEntryFile.replaceAll("/", "-")}`;
-                const asset = await uploadMarkdownImage.mutateAsync({
-                  file,
-                  namespace,
-                });
-                return asset.contentPath;
-              }}
-            />
+            <div
+              onBeforeInputCapture={markEditorInteracted}
+              onDropCapture={markEditorInteracted}
+              onInput={markEditorInteracted}
+              onKeyDownCapture={markEditorInteracted}
+              onPasteCapture={markEditorInteracted}
+              onPointerDownCapture={markEditorInteracted}
+            >
+              <MarkdownEditor
+                key={selectedOrEntryFile}
+                value={displayValue}
+                onChange={(value) => {
+                  if (!editorInteractedRef.current) return;
+                  setDraft(value ?? "");
+                }}
+                placeholder="# Agent instructions"
+                className="min-w-0 overflow-hidden"
+                contentClassName="min-h-(--sz-420px) max-w-full break-words text-sm leading-7"
+                imageUploadHandler={async (file) => {
+                  const namespace = `agents/${agent.id}/instructions/${selectedOrEntryFile.replaceAll("/", "-")}`;
+                  const asset = await uploadMarkdownImage.mutateAsync({ file, namespace });
+                  return asset.contentPath;
+                }}
+              />
+            </div>
           ) : (
             <textarea
               value={displayValue}

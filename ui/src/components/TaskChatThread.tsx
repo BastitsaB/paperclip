@@ -15,6 +15,7 @@ import {
   useLiveRunTranscripts,
   type RunTranscriptSource,
 } from "@/components/transcript/useLiveRunTranscripts";
+import { useNativeRunTranscripts } from "@/components/transcript/useNativeRunTranscripts";
 import { TaskChatLiveTail } from "@/components/task-chat/TaskChatLiveTail";
 import { TaskChatRunnerTurn } from "@/components/task-chat/TaskChatRunnerTurn";
 import {
@@ -57,7 +58,10 @@ import {
 } from "@/components/task-chat/task-chat-model";
 import { TaskChatInteractionCard } from "@/components/task-chat/TaskChatInteractionCard";
 import { TaskChatProtocolCard } from "@/components/task-chat/TaskChatProtocolCard";
-import { interactionThreadAnchorMs } from "@/components/task-chat/interaction-thread-order";
+import {
+  interactionThreadAnchorMs,
+  isSuppressedThreadInteraction,
+} from "@/components/task-chat/interaction-thread-order";
 import {
   interactionReplacesComposerSkip,
   shouldHideInteractionCard,
@@ -657,6 +661,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
         id: r.runId,
         status: r.status,
         adapterType: r.adapterType ?? "",
+        runtimeMode: r.runtimeMode,
         hasStoredOutput: r.hasStoredOutput,
         logBytes: r.logBytes,
       });
@@ -666,6 +671,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
         id: r.id,
         status: r.status,
         adapterType: r.adapterType,
+        runtimeMode: r.runtimeMode,
         hasStoredOutput: map.get(r.id)?.hasStoredOutput,
         logBytes: r.logBytes,
         lastOutputBytes: r.lastOutputBytes,
@@ -676,6 +682,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
         id: activeRun.id,
         status: activeRun.status,
         adapterType: activeRun.adapterType,
+        runtimeMode: activeRun.runtimeMode,
         logBytes: activeRun.logBytes,
         lastOutputBytes: activeRun.lastOutputBytes,
       });
@@ -683,7 +690,23 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     return [...map.values()];
   }, [linkedRuns, liveRuns, activeRun]);
 
-  const { transcriptByRun } = useLiveRunTranscripts({ runs, companyId });
+  const legacyRuns = useMemo(
+    () => runs.filter((run) => run.runtimeMode !== "native"),
+    [runs],
+  );
+  const nativeRuns = useMemo(
+    () => runs.filter((run) => run.runtimeMode === "native"),
+    [runs],
+  );
+  const { transcriptByRun: legacyTranscriptByRun } = useLiveRunTranscripts({
+    runs: legacyRuns,
+    companyId,
+  });
+  const { transcriptByRun: nativeTranscriptByRun } = useNativeRunTranscripts(nativeRuns);
+  const transcriptByRun = useMemo(
+    () => new Map([...legacyTranscriptByRun, ...nativeTranscriptByRun]),
+    [legacyTranscriptByRun, nativeTranscriptByRun],
+  );
 
   // The single in-flight run whose turn we stream live (non-terminal).
   const liveRun = useMemo(() => {
@@ -918,6 +941,9 @@ export function TaskChatThread(props: TaskChatThreadProps) {
       });
     });
     for (const interaction of interactions ?? []) {
+      // Withdrawn/superseded confirmations are retracted calls to action — drop
+      // them so a dead card never stacks above the one that replaced it.
+      if (isSuppressedThreadInteraction(interaction)) continue;
       // A never-rendered card — a degenerate `ask_user_questions` (e.g. the
       // onboarding `Test / A` placeholder) or a stale sibling superseded by a
       // newer question (PAP-437) — is filtered here so it leaves no empty slot
@@ -1557,6 +1583,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     (interactions ?? []).some(
       (interaction) =>
         interaction.sourceRunId === settlingRun.id &&
+        !isSuppressedThreadInteraction(interaction) &&
         !shouldHideInteractionCard(interaction),
     );
   const settledRunRendered =

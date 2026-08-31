@@ -11,6 +11,20 @@ export interface ParsedCodexTurnDiffFile {
 const MAX_TURN_DIFF_FILES = 2_000;
 const MAX_TURN_DIFF_CHARS_PER_FILE = 256 * 1024;
 
+function gitDiffHunkCounts(line: string): { old: number; new: number } | null {
+  const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/);
+  if (!match) return null;
+  const oldStart = Number(match[1]);
+  const oldCount = match[2] === undefined ? 1 : Number(match[2]);
+  const newStart = Number(match[3]);
+  const newCount = match[4] === undefined ? 1 : Number(match[4]);
+  if (
+    !Number.isSafeInteger(oldStart) || !Number.isSafeInteger(oldCount) ||
+    !Number.isSafeInteger(newStart) || !Number.isSafeInteger(newCount)
+  ) return null;
+  return { old: oldCount, new: newCount };
+}
+
 function gitDiffPath(value: string): string | null {
   let candidate = value.trim();
   if (candidate === "/dev/null") return null;
@@ -21,6 +35,10 @@ function gitDiffPath(value: string): string | null {
       return null;
     }
   }
+  if (candidate.startsWith("a/") || candidate.startsWith("b/")) candidate = candidate.slice(2);
+  // Reject a native Windows drive path before slash normalization so the
+  // workspace boundary is explicit for either separator spelling.
+  if (/^[A-Za-z]:[\\/]/u.test(candidate)) return null;
   candidate = candidate.replaceAll("\\", "/");
   if (candidate.startsWith("a/") || candidate.startsWith("b/")) candidate = candidate.slice(2);
   if (
@@ -50,10 +68,16 @@ export function parseCodexTurnDiff(value: unknown): ParsedCodexTurnDiffFile[] {
     binary: boolean;
     modeChange: boolean;
     inHunk: boolean;
+    oldHunkLinesRemaining: number | null;
+    newHunkLinesRemaining: number | null;
+    valid: boolean;
   } | null = null;
 
   const finish = () => {
-    if (!current || files.length >= MAX_TURN_DIFF_FILES) return;
+    const incompleteHunk = current !== null && current.inHunk && (
+      current.oldHunkLinesRemaining !== 0 || current.newHunkLinesRemaining !== 0
+    );
+    if (!current || !current.valid || incompleteHunk || files.length >= MAX_TURN_DIFF_FILES) return;
     const path = current.renameTo ?? current.newPath ?? current.oldPath;
     if (!path) return;
     const previousPath = current.renameFrom ?? (current.renameTo ? current.oldPath : null);
@@ -79,13 +103,17 @@ export function parseCodexTurnDiff(value: unknown): ParsedCodexTurnDiffFile[] {
   };
 
   for (const line of patch.split("\n")) {
-    if (line.startsWith("diff --git ")) {
+    const hunkComplete = current !== null && current.inHunk &&
+      current.oldHunkLinesRemaining === 0 && current.newHunkLinesRemaining === 0;
+    const header = line.startsWith("diff --git ")
+      ? line.match(/^diff --git ("(?:\\.|[^"])*"|\S+) ("(?:\\.|[^"])*"|\S+)$/)
+      : null;
+    if ((!current || !current.inHunk || hunkComplete) && header) {
       finish();
-      const header = line.match(/^diff --git ("(?:\\.|[^"])*"|\S+) ("(?:\\.|[^"])*"|\S+)$/);
       current = {
         lines: [line],
-        oldPath: header ? gitDiffPath(header[1] ?? "") : null,
-        newPath: header ? gitDiffPath(header[2] ?? "") : null,
+        oldPath: gitDiffPath(header[1] ?? ""),
+        newPath: gitDiffPath(header[2] ?? ""),
         renameFrom: null,
         renameTo: null,
         additions: 0,
@@ -93,20 +121,86 @@ export function parseCodexTurnDiff(value: unknown): ParsedCodexTurnDiffFile[] {
         binary: false,
         modeChange: false,
         inHunk: false,
+        oldHunkLinesRemaining: null,
+        newHunkLinesRemaining: null,
+        valid: true,
       };
       continue;
     }
     if (!current) continue;
     current.lines.push(line);
-    if (line.startsWith("--- ")) current.oldPath = gitDiffPath(line.slice(4));
-    else if (line.startsWith("+++ ")) current.newPath = gitDiffPath(line.slice(4));
-    else if (line.startsWith("rename from ")) current.renameFrom = gitDiffPath(line.slice(12));
-    else if (line.startsWith("rename to ")) current.renameTo = gitDiffPath(line.slice(10));
-    else if (line.startsWith("old mode ") || line.startsWith("new mode ")) current.modeChange = true;
-    else if (line.startsWith("Binary files ") || line === "GIT binary patch") current.binary = true;
-    else if (line.startsWith("@@")) current.inHunk = true;
-    else if (current.inHunk && line.startsWith("+") && !line.startsWith("+++")) current.additions += 1;
-    else if (current.inHunk && line.startsWith("-") && !line.startsWith("---")) current.deletions += 1;
+    if (!current.inHunk && line.startsWith("diff --git ") && !header) {
+      current.valid = false;
+      continue;
+    }
+    if (!current.inHunk && line.startsWith("--- ")) current.oldPath = gitDiffPath(line.slice(4));
+    else if (!current.inHunk && line.startsWith("+++ ")) current.newPath = gitDiffPath(line.slice(4));
+    else if (!current.inHunk && line.startsWith("rename from ")) current.renameFrom = gitDiffPath(line.slice(12));
+    else if (!current.inHunk && line.startsWith("rename to ")) current.renameTo = gitDiffPath(line.slice(10));
+    else if (!current.inHunk && (line.startsWith("old mode ") || line.startsWith("new mode "))) current.modeChange = true;
+    else if (!current.inHunk && (line.startsWith("Binary files ") || line === "GIT binary patch")) current.binary = true;
+    else if ((!current.inHunk || hunkComplete) && line.startsWith("@@")) {
+      const counts = gitDiffHunkCounts(line);
+      if (!counts) {
+        current.valid = false;
+        current.inHunk = true;
+        current.oldHunkLinesRemaining = null;
+        current.newHunkLinesRemaining = null;
+        continue;
+      }
+      current.inHunk = true;
+      current.oldHunkLinesRemaining = counts.old;
+      current.newHunkLinesRemaining = counts.new;
+    } else if (current.inHunk) {
+      if (!current.valid || line === "\\ No newline at end of file") {
+        continue;
+      } else if (line.startsWith("+")) {
+        if (current.newHunkLinesRemaining === null || current.newHunkLinesRemaining === 0) {
+          current.valid = false;
+          current.oldHunkLinesRemaining = null;
+          current.newHunkLinesRemaining = null;
+          continue;
+        }
+        current.additions += 1;
+        current.newHunkLinesRemaining -= 1;
+      } else if (line.startsWith("-")) {
+        if (current.oldHunkLinesRemaining === null || current.oldHunkLinesRemaining === 0) {
+          current.valid = false;
+          current.oldHunkLinesRemaining = null;
+          current.newHunkLinesRemaining = null;
+          continue;
+        }
+        current.deletions += 1;
+        current.oldHunkLinesRemaining -= 1;
+      } else if (line.startsWith(" ")) {
+        if (
+          current.oldHunkLinesRemaining === null || current.oldHunkLinesRemaining === 0 ||
+          current.newHunkLinesRemaining === null || current.newHunkLinesRemaining === 0
+        ) {
+          current.valid = false;
+          current.oldHunkLinesRemaining = null;
+          current.newHunkLinesRemaining = null;
+          continue;
+        }
+        current.oldHunkLinesRemaining -= 1;
+        current.newHunkLinesRemaining -= 1;
+      } else if (line.startsWith("@@")) {
+        current.valid = false;
+        current.oldHunkLinesRemaining = null;
+        current.newHunkLinesRemaining = null;
+        continue;
+      } else if (!hunkComplete) {
+        current.valid = false;
+        current.oldHunkLinesRemaining = null;
+        current.newHunkLinesRemaining = null;
+        continue;
+      } else if (hunkComplete && line.startsWith("diff --git ")) {
+        current.valid = false;
+        current.oldHunkLinesRemaining = null;
+        current.newHunkLinesRemaining = null;
+        continue;
+      }
+    }
   }
   finish();
   return files;

@@ -21,10 +21,6 @@ import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import type { heartbeatService } from "./heartbeat.js";
 import { nativeSha256 } from "./native-runtime/canonical.js";
-import {
-  NativeSessionSteeringError,
-  steerNativeSession,
-} from "./native-runtime/native-session-executor.js";
 
 const DELIVERY_CLAIM_STALE_MS = 30_000;
 const DELIVERY_CLAIM_REFRESH_MS = 10_000;
@@ -54,6 +50,14 @@ const DURABLE_WAKE_REQUEST_STATUSES = [
 type QuestionInteractionRow = typeof issueThreadInteractions.$inferSelect;
 type DeliveryRow = typeof issueQuestionResponseDeliveries.$inferSelect;
 type Heartbeat = Pick<ReturnType<typeof heartbeatService>, "wakeup">;
+type QuestionResponseSteer = (input: {
+  runId: string;
+  message: string;
+  correlationId: string;
+}) => Promise<{ turnId?: string | null }>;
+type NativeQuestionResponseResolver = (
+  interaction: AskUserQuestionsInteraction,
+) => Promise<"not_native" | "pending" | "queued">;
 
 export interface QuestionResponseDeliveryEnvelope {
   schema: "paperclip.question_response_delivery.v1";
@@ -74,11 +78,26 @@ export interface QuestionResponseDeliveryOutcome {
 
 export interface QuestionResponseDeliveryServiceOptions {
   heartbeat: Heartbeat;
-  steer?: typeof steerNativeSession;
+  /** Optional native steering seam. Direct adapters use the durable wake fallback. */
+  steer?: QuestionResponseSteer;
+  /** Resolve the original in-flight native input request before considering a continuation run. */
+  resolveNativeQuestion?: NativeQuestionResponseResolver;
   now?: () => Date;
   /** Test-only lease timings. Production callers use the bounded defaults. */
   claimStaleMs?: number;
   claimRefreshMs?: number;
+}
+
+function readSteeringErrorCode(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    return error.code;
+  }
+  return "steering_rejected";
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -245,7 +264,8 @@ export function questionResponseDeliveryService(
   db: Db,
   options: QuestionResponseDeliveryServiceOptions,
 ) {
-  const steer = options.steer ?? steerNativeSession;
+  const steer = options.steer;
+  const resolveNativeQuestion = options.resolveNativeQuestion;
   const now = options.now ?? (() => new Date());
   const claimStaleMs = Math.max(2, options.claimStaleMs ?? DELIVERY_CLAIM_STALE_MS);
   const claimRefreshMs = Math.max(
@@ -554,7 +574,8 @@ export function questionResponseDeliveryService(
     const queuedSuccessor = issueRuns.find((run) =>
       (run.status === "queued" || run.status === "scheduled_retry") && run.id !== interaction.sourceRunId,
     ) ?? null;
-    const envelope = buildQuestionResponseDeliveryEnvelope(hydrateQuestionInteraction(interaction));
+    const hydratedInteraction = hydrateQuestionInteraction(interaction);
+    const envelope = buildQuestionResponseDeliveryEnvelope(hydratedInteraction);
     if (nativeSha256(envelope) !== claimed.payloadSha256) {
       return recordTerminal({
         delivery: claimed,
@@ -567,8 +588,55 @@ export function questionResponseDeliveryService(
       });
     }
 
+    if (resolveNativeQuestion) {
+      try {
+        const nativeDisposition = await withClaimLease(
+          claimed,
+          () => resolveNativeQuestion(hydratedInteraction),
+        );
+        if (nativeDisposition === "queued") {
+          return recordTerminal({
+            delivery: claimed,
+            interaction,
+            status: "delivered",
+            mode: "steered",
+            targetRunId: interaction.sourceRunId,
+            adapter,
+          });
+        }
+        if (nativeDisposition === "pending") {
+          await releaseForRetry(claimed, "native_question_session_unavailable", { bounded: false });
+          return null;
+        }
+      } catch (error) {
+        if (error instanceof DeliveryClaimUnavailableError) return terminalOutcome(interactionId);
+        const errorCode = error instanceof Error && compactLine(error.message)
+          ? compactLine(error.message)!.slice(0, 160)
+          : "native_question_delivery_failed";
+        const exhausted = await releaseForRetry(claimed, errorCode);
+        logger.warn({
+          err: error,
+          deliveryId: claimed.id,
+          interactionId,
+          attemptCount: claimed.attemptCount,
+          errorCount: claimed.errorCount + 1,
+          exhausted,
+        }, "native question response delivery will retry");
+        if (!exhausted) return null;
+        return recordTerminal({
+          delivery: claimed,
+          interaction,
+          status: "failed",
+          mode: null,
+          targetRunId: interaction.sourceRunId,
+          adapter,
+          errorCode,
+        });
+      }
+    }
+
     let steeringErrorCode: string | null = null;
-    if (successorRunning?.runtimeMode === "native") {
+    if (successorRunning?.runtimeMode === "native" && steer) {
       try {
         const acknowledgement = await withClaimLease(claimed, () => steer({
           runId: successorRunning.id,
@@ -586,9 +654,7 @@ export function questionResponseDeliveryService(
         });
       } catch (error) {
         if (error instanceof DeliveryClaimUnavailableError) return terminalOutcome(interactionId);
-        steeringErrorCode = error instanceof NativeSessionSteeringError
-          ? error.code
-          : "steering_rejected";
+        steeringErrorCode = readSteeringErrorCode(error);
       }
     } else if (successorRunning) {
       steeringErrorCode = "steering_unsupported";

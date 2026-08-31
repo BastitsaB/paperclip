@@ -5109,7 +5109,7 @@ their completion semantics were identical.
 | MIG-05 | Shadow comparison | Complete Status-authority conformance corpus passes and divergence dashboard labels expected legacy/native differences | Compare proposed native decisions with existing behavior; reconcile or classify every unexplained divergence. |
 | MIG-06 | Internal canary | QA accepts the complete matrix; Security/CTO gates remain satisfied | Enable application for allowlisted company + adapter profile + policy version; keep per-run mode immutable. |
 | MIG-07 | Cohort rollout | Canary has no unreconciled coordinator, liveness-integrity, cross-company, or duplicate-effect failures | Increase cohorts by company/adapter profile; pin policy/algorithm versions for in-flight runs. |
-| MIG-08 | Disable/rollback | Kill-switch drill and active-run inventory are available | Stop new native dispatch/application, retain read visibility, let active native runs finish/reconcile as native, and send later attempts to legacy only when their profile is newly selected as legacy. |
+| MIG-08 | Disable/rollback | Kill-switch drill and active-run inventory are available | Stop new native dispatch/application, retain read visibility, let active native runs finish/reconcile as native, and reject fresh runner starts without changing direct-adapter execution. |
 | MIG-09 | Contract migration or cleanup | Explicit reviewed migration exists for each adapter family | Only then migrate a legacy adapter or remove compatibility columns/flags; never infer contracts from exit codes or delete audit lineage. |
 
 Schema rollback is expand/contract, never destructive in the incident window.

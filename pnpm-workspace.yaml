@@ -14,26 +14,16 @@ packages:
   - cli
 
 # Keep in sync with package.json#pnpm.overrides while packageManager pins pnpm 9.
-# pnpm 11 reads these settings only from pnpm-workspace.yaml.
+# Newer pnpm versions read override and patch configuration only from the
+# workspace manifest.
 overrides:
   rollup: ">=4.59.0"
   react: ^19.2.8
   react-dom: ^19.2.8
-  lexical: 0.49.0
-  '@lexical/clipboard': 0.49.0
-  '@lexical/extension': 0.49.0
-  '@lexical/history': 0.49.0
-  '@lexical/link': 0.49.0
-  '@lexical/list': 0.49.0
-  '@lexical/markdown': 0.49.0
-  '@lexical/plain-text': 0.49.0
-  '@lexical/react': 0.49.0
-  '@lexical/rich-text': 0.49.0
-  '@lexical/selection': 0.49.0
-  '@lexical/utils': 0.49.0
 
 patchedDependencies:
   embedded-postgres@18.1.0-beta.16: patches/embedded-postgres@18.1.0-beta.16.patch
+  acpx@0.12.0: patches/acpx@0.12.0.patch
   acpx@0.13.1: patches/acpx@0.13.1.patch
   pi-acp@0.0.33: patches/pi-acp@0.0.33.patch
   '@agentclientprotocol/claude-agent-acp@0.70.0': patches/@agentclientprotocol__claude-agent-acp@0.70.0.patch

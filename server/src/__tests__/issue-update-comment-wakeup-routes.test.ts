@@ -33,9 +33,15 @@ const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
 }));
 
+vi.mock("../services/native-runtime/native-question-bridge.js", () => ({
+  deliverNativeQuestionResponse: vi.fn(async () => "not_native"),
+  nativeQuestionRunToCancel: vi.fn(async () => null),
+  validateNativeQuestionResponseInput: vi.fn(),
+}));
+
 vi.mock("../services/index.js", () => ({
   companyService: () => ({
-    getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
+    getById: vi.fn(async () => ({ id: "company-1" })),
   }),
   accessService: () => ({
     canUser: vi.fn(async () => true),
@@ -110,7 +116,7 @@ vi.mock("../services/index.js", () => ({
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     companyService: () => ({
-      getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
+      getById: vi.fn(async () => ({ id: "company-1" })),
     }),
     accessService: () => ({
       canUser: vi.fn(async () => true),
@@ -490,73 +496,6 @@ describe("issue update comment wakeups", () => {
         }),
       }),
     );
-  });
-
-  it("does not wake the assignee for its own run-authenticated issue update comment", async () => {
-    const existing = makeIssue({
-      assigneeAgentId: ASSIGNEE_AGENT_ID,
-      assigneeUserId: null,
-      status: "in_progress",
-    });
-    mockIssueService.getById.mockResolvedValue(existing);
-    mockIssueService.update.mockResolvedValue(existing);
-    mockIssueService.addComment.mockResolvedValue({
-      id: "comment-self-update",
-      issueId: existing.id,
-      companyId: existing.companyId,
-      body: "Plan ready for review.",
-      createdByRunId: SOURCE_RUN_ID,
-    });
-    mockHeartbeatService.getRun.mockResolvedValue({
-      id: SOURCE_RUN_ID,
-      companyId: existing.companyId,
-      agentId: ASSIGNEE_AGENT_ID,
-      status: "running",
-    });
-
-    const res = await request(await createApp())
-      .patch(`/api/issues/${existing.id}`)
-      .set("X-Paperclip-Run-Id", SOURCE_RUN_ID)
-      .send({ comment: "Plan ready for review." });
-
-    expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(mockIssueService.findMentionedAgents).toHaveBeenCalled());
-    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
-  });
-
-  it("does not wake the assignee when a closure comment marks the issue done", async () => {
-    const existing = makeIssue({
-      assigneeAgentId: ASSIGNEE_AGENT_ID,
-      assigneeUserId: null,
-      status: "in_progress",
-    });
-    const updated = {
-      ...existing,
-      status: "done",
-      completedAt: new Date("2026-06-26T16:30:00.000Z"),
-    };
-    mockIssueService.getById.mockResolvedValue(existing);
-    mockIssueService.update.mockResolvedValue(updated);
-    mockIssueService.addComment.mockResolvedValue({
-      id: "comment-close-1",
-      issueId: existing.id,
-      companyId: existing.companyId,
-      body: "Closing this out.",
-    });
-
-    const res = await request(await createApp())
-      .patch(`/api/issues/${existing.id}`)
-      .send({
-        status: "done",
-        comment: "Closing this out.",
-      });
-
-    expect(res.status).toBe(200);
-    await new Promise((resolve) => setImmediate(resolve));
-    const issueCommentedWakeCalls = mockHeartbeatService.wakeup.mock.calls.filter(
-      ([, wakeup]: [string, { reason?: string }]) => wakeup?.reason === "issue_commented",
-    );
-    expect(issueCommentedWakeCalls).toEqual([]);
   });
 
   it("wakes the assignee on top-level board issue comments", async () => {

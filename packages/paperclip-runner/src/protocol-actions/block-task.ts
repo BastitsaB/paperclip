@@ -36,6 +36,13 @@ export const blockTaskAction = {
         "reason": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "block_task",
+      "idempotencyKey": "example",
+      "input": {
+        "reason": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "block_task",
@@ -151,6 +158,21 @@ export const blockTaskAction = {
   },
   "scenario": {
     "order": 8,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "block_task",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "block_task",
       "version": 1,

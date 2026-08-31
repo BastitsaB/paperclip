@@ -219,7 +219,9 @@ export function evaluateIssueThreadInteractionResolverAudience(
       effectiveResolverPolicy,
       reason: input.interaction.addresseeUserId
         ? "allow_addressee"
-        : input.interaction.addresseeAgentId ? "allow_human_override" : "allow_human",
+        : input.interaction.addresseeAgentId
+          ? "allow_human_override"
+          : "allow_human",
     };
   }
 

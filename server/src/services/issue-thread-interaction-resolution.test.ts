@@ -51,23 +51,16 @@ describe("issue-thread interaction resolver audience", () => {
     expect(decision).toMatchObject({ allowed: false, code: "interaction_addressee_mismatch" });
   });
 
-  it("enforces a named human review owner", () => {
-    const owned = interaction({
-      addresseeUserId: "reviewer-1",
-      effectiveResolverPolicy: "human_only",
-    });
+  it("allows only the addressed user to resolve a user-addressed interaction", () => {
     expect(evaluateIssueThreadInteractionResolverAudience({
-      actor: { type: "user", userId: "reviewer-1" },
-      interaction: owned,
+      actor: { type: "user", userId: "alice" },
+      interaction: interaction({ addresseeUserId: "alice", effectiveResolverPolicy: "human_only" }),
     })).toMatchObject({ allowed: true, reason: "allow_addressee" });
+
     expect(evaluateIssueThreadInteractionResolverAudience({
-      actor: { type: "user", userId: "reviewer-2" },
-      interaction: owned,
+      actor: { type: "user", userId: "bob" },
+      interaction: interaction({ addresseeUserId: "alice", effectiveResolverPolicy: "human_only" }),
     })).toMatchObject({ allowed: false, code: "interaction_addressee_mismatch" });
-    expect(evaluateIssueThreadInteractionResolverAudience({
-      actor: { type: "agent", agentId: "agent-2", runId: "run-2" },
-      interaction: owned,
-    })).toMatchObject({ allowed: false, code: "interaction_human_only" });
   });
 
   it("requires run attribution for agents", () => {

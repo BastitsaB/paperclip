@@ -5,7 +5,7 @@ const ACPX_BOOTSTRAP_COMMANDS = new Set(["initialize", "session.open"]);
 export function enqueueAcpxSidecarInput(
   pending: Promise<void>,
   operation: () => Promise<void>,
-  onError: (error: unknown) => void,
+  onError: (error: unknown) => void | Promise<void>,
 ): Promise<void> {
   return enqueueSerialInput(pending, operation, onError);
 }
@@ -23,6 +23,8 @@ export function acpxBootstrapBlockedError(
   command: string,
 ): Error | null {
   return failure
-    ? new Error(`ACPX provider bootstrap failed before ${command}: ${failure.message}`)
+    ? new Error(
+        `ACPX provider bootstrap failed before ${command}: ${failure.message}`,
+      )
     : null;
 }

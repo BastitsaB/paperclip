@@ -4,68 +4,68 @@ import type {
   PersistedNativeSession,
 } from "../contracts/native-session-backend.js";
 import type { CodexAppServerTransport } from "../drivers/codex/app-server-transport.js";
-import { createCodexNativeSessionBackend } from "./codex-native-backend.js";
-import { createOpenCodeNativeSessionBackend } from "./opencode-native-backend.js";
-import type { AcpxRuntimeFactory } from "../drivers/acpx/acpx-runtime-host.js";
+import {
+  createCodexNativeSessionBackend,
+  type CodexNativeSessionBackendOptions,
+} from "./codex-native-backend.js";
+import {
+  createCodexAcpxNativeSessionBackend,
+  type CodexAcpxNativeSessionBackendOptions,
+} from "./codex-acpx-native-backend.js";
 
-export interface NativeBackendFactoryOptions {
-  runnerInstanceId?: string;
-  onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
-  dynamicTools?: readonly Readonly<Record<string, unknown>>[];
-  dynamicToolHandler?: (call: {
-    tool: string;
-    callId: string;
-    threadId: string;
-    turnId: string;
-    arguments: unknown;
-  }) => Promise<unknown>;
+export interface NativeBackendFactoryOptions extends Omit<
+  CodexNativeSessionBackendOptions,
+  "transportFactory"
+> {
   codexTransportFactory?: (context?: {
     providerRecoveryPolicy?: PersistedNativeSession["providerRecoveryPolicy"];
   }) => CodexAppServerTransport;
-  opencodeRuntimeDirectory?: string;
-  environment?: NodeJS.ProcessEnv;
-  opencodeCommand?: string;
   acpxRuntimeDirectory?: string;
-  acpxRuntimeFactory?: AcpxRuntimeFactory;
+  acpxEnvironment?: NodeJS.ProcessEnv;
+  acpxManagedCodexCredentialSourcePath?: string;
+  acpxDynamicToolHandler?: CodexAcpxNativeSessionBackendOptions["dynamicToolHandler"];
 }
 
+/**
+ * Selects only provider implementations included in this release slice.
+ * Persisted contracts for future providers do not make those providers
+ * executable before their independently reviewed runtime ships.
+ */
 export function createNativeSessionBackend(
   input: NativeExecutionInput,
   options: NativeBackendFactoryOptions = {},
 ): NativeSessionBackend {
-  if (options.codexTransportFactory) {
-    return createCodexNativeSessionBackend(input, {
-      runnerInstanceId: options.runnerInstanceId,
-      onSpawn: options.onSpawn,
-      dynamicTools: options.dynamicTools,
-      dynamicToolHandler: options.dynamicToolHandler,
-      transportFactory: options.codexTransportFactory,
-    });
-  }
-  if (input.provider.kind === "codex") {
-    return createCodexNativeSessionBackend(input, {
-      runnerInstanceId: options.runnerInstanceId,
-      onSpawn: options.onSpawn,
-      dynamicTools: options.dynamicTools,
-      dynamicToolHandler: options.dynamicToolHandler,
-    });
-  }
-  if (input.provider.kind === "claude_managed" || input.provider.kind === "aws_agentcore") {
-    throw new Error(`${input.provider.kind === "claude_managed" ? "Claude Agent" : "AWS AgentCore"} native backend requires the runnerd remote-provider transport`);
-  }
   if (input.provider.kind === "acpx") {
-    throw new Error("ACPX native backend requires the runnerd transport");
+    if (input.provider.agent !== "codex") {
+      throw new Error(
+        `Native ACPX backend for ${input.provider.agent} is not included in the Codex-first runner`,
+      );
+    }
+    if (!options.acpxRuntimeDirectory?.trim()) {
+      throw new Error(
+        "Codex ACPX backend requires an instance runtime directory",
+      );
+    }
+    return createCodexAcpxNativeSessionBackend(input, {
+      runtimeDirectory: options.acpxRuntimeDirectory,
+      environment: options.acpxEnvironment,
+      managedCodexCredentialSourcePath:
+        options.acpxManagedCodexCredentialSourcePath,
+      dynamicTools: options.dynamicTools,
+      dynamicToolHandler: options.acpxDynamicToolHandler,
+    });
   }
-  if (!options.opencodeRuntimeDirectory) {
-    throw new Error("OpenCode native backend requires an instance runtime directory");
+  if (input.provider.kind !== "codex") {
+    throw new Error(
+      `Native backend for ${input.provider.kind} is not included in the Codex-first runner`,
+    );
   }
-  return createOpenCodeNativeSessionBackend(input, {
+
+  return createCodexNativeSessionBackend(input, {
     runnerInstanceId: options.runnerInstanceId,
     onSpawn: options.onSpawn,
-    runtimeDirectory: options.opencodeRuntimeDirectory,
-    environment: options.environment,
-    command: options.opencodeCommand,
     dynamicTools: options.dynamicTools,
     dynamicToolHandler: options.dynamicToolHandler,
+    transportFactory: options.codexTransportFactory,
   });
 }

@@ -562,7 +562,12 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     const mode = resolveNativeRuntimeMode({
       enabled: fixture.mode === "native",
       runtimeConfig: { nativeRunner: { mode: "native", backend: "codex_app_server", protocolVersion: 1 } },
-      agent: { id: agentId, status: "running", adapterType: "codex_local" },
+      adapterConfig: { provider: "codex" },
+      agent: {
+        id: agentId,
+        status: "running",
+        adapterType: fixture.mode === "native" ? "paperclip_runner" : "codex_local",
+      },
       issue: { id: seeded.issueId, workMode: "standard" },
       target: { kind: "local" },
       workspaceId: "fixture-workspace",
@@ -570,8 +575,6 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     consumerExecutions.push({ consumer: "runtime-mode", observed: { kind: mode.kind, reason: mode.reason } });
     if (mode.kind === "native") {
       expect(mode.authorityDecision.effects.some((effect) => effect.kind === "record_mode_native"), `${fixture.id}:native runtime authority`).toBe(true);
-    } else if (mode.reason === "instance_flag_disabled") {
-      expect(mode.authorityDecision?.effects.some((effect) => effect.kind === "record_shadow_decision"), `${fixture.id}:legacy compatibility authority`).toBe(true);
     }
 
     let governanceGate: { kind: "interaction"; id: string } | null = null;
@@ -850,37 +853,50 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
           },
           enabled,
           runtimeConfig,
-          agent: { id: agentId, status: "running", adapterType: "codex_local" },
+          adapterConfig: { provider: "codex" },
+          agent: { id: agentId, status: "running", adapterType: "paperclip_runner" },
           issue: { id: seeded.issueId, workMode: "standard" },
           target: { kind: "local" },
           workspaceId: "fixture-workspace",
         });
-        const freshResolution = resolveHeartbeatNativeRuntimeMode({
-          persisted: { runtimeMode: null, runtimeModeReason: null, runtimeModeResolvedAt: null },
-          enabled,
-          runtimeConfig,
-          agent: { id: agentId, status: "running", adapterType: "codex_local" },
-          issue: { id: seeded.issueId, workMode: "standard" },
-          target: { kind: "local" },
-          workspaceId: "fixture-workspace",
-        });
+        let freshReason: string | null = null;
+        let freshMode: string | null = null;
+        try {
+          const freshResolution = resolveHeartbeatNativeRuntimeMode({
+            persisted: { runtimeMode: null, runtimeModeReason: null, runtimeModeResolvedAt: null },
+            enabled,
+            runtimeConfig,
+            adapterConfig: { provider: "codex" },
+            agent: { id: agentId, status: "running", adapterType: "paperclip_runner" },
+            issue: { id: seeded.issueId, workMode: "standard" },
+            target: { kind: "local" },
+            workspaceId: "fixture-workspace",
+          });
+          freshMode = freshResolution.kind;
+          freshReason = freshResolution.reason;
+        } catch (error) {
+          freshMode = "rejected";
+          freshReason = error instanceof Error && "code" in error
+            ? String(error.code)
+            : null;
+        }
         if (
           activeResolution.kind !== "native"
-          || freshResolution.kind !== "legacy"
-          || freshResolution.reason !== "instance_flag_disabled"
+          || freshMode !== "rejected"
+          || freshReason !== "paperclip_runner_rollout_disabled"
           || runtimeConfig.nativeRunner.mode !== "native"
         ) {
           throw new Error(`${fixture.id}: global kill-switch transition missing`);
         }
         semanticConsumer = "native-migration-status";
         consumerDecision = pushDecisionConsumer(semanticConsumer, activeResolution.authorityDecision);
-        operationalEffects.add("fresh_flag_off_run_selects_legacy");
+        operationalEffects.add("fresh_flag_off_run_rejected");
         consumerExecutions.push({
           consumer: "heartbeat-runtime-selection",
           observed: {
             activeMode: activeResolution.kind,
-            freshMode: freshResolution.kind,
-            freshReason: freshResolution.reason,
+            freshMode,
+            freshReason,
             profileMode: runtimeConfig.nativeRunner.mode,
           },
         });
@@ -1705,8 +1721,8 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
       } else if (consumer === "heartbeat-runtime-selection") {
         if (
           execution.observed.activeMode !== "native"
-          || execution.observed.freshMode !== "legacy"
-          || execution.observed.freshReason !== "instance_flag_disabled"
+          || execution.observed.freshMode !== "rejected"
+          || execution.observed.freshReason !== "paperclip_runner_rollout_disabled"
           || execution.observed.profileMode !== "native"
         ) continue;
       }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { redactCapabilityEvidenceData } from "./live/evidence-redaction.js";
 import {
   CODEX_THREAD_ITEM_CLASSIFICATION,
   PROVIDER_EVENT_FAMILIES,
@@ -85,6 +84,37 @@ describe("provider-neutral events", () => {
     })[0]!;
     expect(event.payload.sources).toEqual([expect.objectContaining({ sourceId: "good", url: "https://example.com/good", snippet: "x".repeat(4000) })]);
     expect(validatePrpEvent(envelope(event))).toEqual({ ok: true, event: expect.any(Object), issues: [] });
+  });
+
+  it("bounds Codex plan explanations before they enter PRP", () => {
+    const event = canonicalProviderEventsFromCodex("turn/plan/updated", {
+      turnId: "turn-1",
+      explanation: "x".repeat(5000),
+      plan: [{ step: "Ship it", status: "inProgress" }],
+    })[0]!;
+    expect(event.payload.explanation).toBe("x".repeat(4000));
+    expect(validatePrpEvent(envelope(event))).toEqual({ ok: true, event: expect.any(Object), issues: [] });
+  });
+
+  it("normalizes malformed or non-positive Codex plan revisions", () => {
+    for (const revision of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const event = canonicalProviderEventsFromCodex("turn/plan/updated", {
+        turnId: "turn-revision",
+        revision,
+        plan: [{ step: "Ship it", status: "inProgress" }],
+      })[0]!;
+      expect(event.payload.revision).toBe(1);
+      expect(validatePrpEvent(envelope(event))).toEqual({
+        ok: true,
+        event: expect.any(Object),
+        issues: [],
+      });
+    }
+    expect(canonicalProviderEventsFromCodex("turn/plan/updated", {
+      turnId: "turn-revision",
+      revision: 7,
+      plan: [],
+    })[0]?.payload.revision).toBe(7);
   });
 
   it("marks a turn plan complete when every native step is complete", () => {
@@ -280,6 +310,27 @@ describe("provider-neutral events", () => {
     }
   });
 
+  it("treats provider status metacharacters as literal progress text", () => {
+    const normalize = createAcpxToolEventNormalizer();
+    expect(() => normalize({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "tool-hostile-status",
+      title: "Read",
+      kind: "read",
+      status: "[",
+      text: "Read ([)",
+    } as never)).not.toThrow();
+    expect(normalize({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "tool-hostile-status",
+      title: "Read",
+      status: "(",
+      text: "Meaningful progress",
+    } as never)).toMatchObject({ text: "Meaningful progress" });
+  });
+
   it("normalizes dotted MCP names, ToolSearch, and truly unnamed calls", () => {
     const dotted = canonicalProviderEventsFromAcpxRuntimeEvent({
       type: "tool_call", tag: "tool_call", toolCallId: "mcp-1", title: "mcp.paperclip.get_task_context",
@@ -344,17 +395,6 @@ describe("provider-neutral events", () => {
       state: { status: "error", error: "Unavailable" },
     })[0]!;
     expect(event.payload).toMatchObject({ name: "unknown", output: "Unavailable" });
-  });
-
-  it("redacts secrets at durable ingestion while retaining bounded canonical output", () => {
-    const output = `Bearer sk-secretvalue ${"x".repeat(70_000)}`;
-    const redacted = redactCapabilityEvidenceData("provider_event", {
-      canonicalEventType: "tool.execution.completed", itemId: "exec-1",
-      payload: { schema: "paperclip.tool.execution.v1", output, password: "must-not-survive" },
-    });
-    expect(JSON.stringify(redacted)).not.toContain("sk-secretvalue");
-    expect(JSON.stringify(redacted)).not.toContain("must-not-survive");
-    expect(String((redacted.payload as Record<string, unknown>).output).length).toBeLessThanOrEqual(64 * 1024 + 1);
   });
 
   it("rejects a canonical event whose payload belongs to another family", () => {

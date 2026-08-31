@@ -136,7 +136,11 @@ class DeterministicHarnessSession implements HarnessSession {
   #turnId: string | null = null;
   #closed = false;
   #active = false;
+  #recoveredActiveTurn = false;
+  #recoveredTurnSettled = false;
   #nextSourceSeq = 1;
+  readonly #transcriptOmissionReason: string | null;
+  readonly #eventWaiters = new Set<() => void>();
 
   constructor(
     input: OpenHarnessSessionInput,
@@ -147,6 +151,12 @@ class DeterministicHarnessSession implements HarnessSession {
     this.#config = structuredClone(config);
     this.#turnId = snapshot?.activeTurnId ?? snapshot?.semanticResult?.turnId ?? null;
     this.#semanticResult = snapshot?.semanticResult?.result ?? null;
+    this.#active = snapshot?.activeTurnId !== null && snapshot?.activeTurnId !== undefined;
+    this.#recoveredActiveTurn = this.#active;
+    this.#nextSourceSeq = (snapshot?.lastSourceSequence ?? 0) + 1;
+    this.#transcriptOmissionReason = snapshot === undefined
+      ? null
+      : "pre_recovery_events_not_reconstructed";
   }
 
   ids() {
@@ -158,7 +168,39 @@ class DeterministicHarnessSession implements HarnessSession {
   }
 
   async *events(): AsyncIterable<PrpEvent> {
-    for (const event of this.#events) yield structuredClone(event);
+    if (this.#recoveredActiveTurn && this.#active && this.#turnId !== null) {
+      // The deterministic fake has no provider process that can continue an
+      // in-flight turn after reconstruction. Produce one conservative terminal
+      // outcome when consumption resumes so the native loop cannot wait until
+      // its global timeout. An explicit interrupt issued before consumption
+      // still wins and supplies its own reason.
+      if (!this.#settleRecoveredSemanticResult()) {
+        this.#recoveredActiveTurn = false;
+        this.#semanticResult = interruptedResult(
+          this.#input.runId,
+          "The deterministic provider was unavailable after active-turn recovery.",
+        );
+        this.#appendEvents(
+          this.#event("run.result.proposed", this.#semanticResult),
+          this.#event("turn.interrupted", {
+            reason: "deterministic_active_turn_recovered_without_live_producer",
+          }),
+          this.#event("run.terminal", cancelledTerminal(), { turn: false }),
+        );
+        this.#recoveredTurnSettled = true;
+      }
+      this.#active = false;
+    }
+    let index = 0;
+    while (true) {
+      while (index < this.#events.length) {
+        const event = this.#events[index++]!;
+        yield structuredClone(event);
+        if (event.eventType === "run.terminal") return;
+      }
+      if (this.#closed) return;
+      await new Promise<void>((resolve) => this.#eventWaiters.add(resolve));
+    }
   }
 
   async startTurn(input: { message: { role: "user"; text: string } }): Promise<{ turnId: string }> {
@@ -166,7 +208,7 @@ class DeterministicHarnessSession implements HarnessSession {
     if (this.#turnId !== null) throw new Error("deterministic session accepts one turn");
     this.#turnId = `turn_${this.#input.runId}`;
     this.#active = true;
-    this.#events.push(
+    this.#appendEvents(
       this.#event("session.started", {}, { turn: false }),
       this.#event("turn.started", { message: input.message.text }),
     );
@@ -201,13 +243,13 @@ class DeterministicHarnessSession implements HarnessSession {
       authorizationBoundary: "active_task",
       auditReceiptId: `audit_${this.#input.runId}`,
     });
-    this.#events.push(
+    this.#appendEvents(
       this.#event("mcp_app.tool_input", { semantic_tool: inputEnvelope }, { itemId }),
       this.#event("mcp_app.tool_result", { semantic_tool: resultEnvelope }, { itemId }),
     );
     this.#semanticResult = completedResult();
     const terminal = completedTerminal();
-    this.#events.push(
+    this.#appendEvents(
       this.#event("run.result.proposed", this.#semanticResult),
       this.#event("turn.completed", {}),
       this.#event("run.terminal", terminal, { turn: false }),
@@ -218,15 +260,64 @@ class DeterministicHarnessSession implements HarnessSession {
 
   async interrupt(input: { turnId?: string; reason?: string }): Promise<void> {
     this.#assertOpen();
-    if (!this.#active || this.#turnId === null) throw new Error("no active turn to interrupt");
+    if (this.#turnId === null) throw new Error("no active turn to interrupt");
     if (input.turnId !== undefined && input.turnId !== this.#turnId) {
       throw new Error(`turn ${input.turnId} is not active`);
     }
-    this.#events.push(
+    // Event consumption can conservatively settle a reconstructed turn before
+    // its first event is yielded. Treat a concurrent interrupt as an
+    // idempotent acknowledgement once that recovered terminal is committed,
+    // rather than making cancellation depend on iterator scheduling.
+    if (!this.#active) {
+      if (this.#recoveredTurnSettled) return;
+      throw new Error("no active turn to interrupt");
+    }
+    if (this.#settleRecoveredSemanticResult()) return;
+    this.#semanticResult = interruptedResult(
+      this.#input.runId,
+      input.reason ?? "The deterministic turn was interrupted.",
+    );
+    this.#appendEvents(
+      this.#event("run.result.proposed", this.#semanticResult),
       this.#event("turn.interrupted", { reason: input.reason ?? "interrupted" }),
       this.#event("run.terminal", cancelledTerminal(), { turn: false }),
     );
     this.#active = false;
+  }
+
+  #settleRecoveredSemanticResult(): boolean {
+    if (
+      !this.#recoveredActiveTurn
+      || !this.#active
+      || this.#turnId === null
+      || this.#semanticResult === null
+    ) return false;
+    this.#recoveredActiveTurn = false;
+    // A result-first checkpoint can still carry activeTurnId when the
+    // terminal checkpoint lagged behind the provider work. Preserve the
+    // authoritative result even if cancellation races event consumption.
+    if (this.#semanticResult.reportedWorkDisposition === "yielded") {
+      this.#appendEvents(
+        this.#event("run.result.proposed", this.#semanticResult),
+        this.#event("turn.interrupted", {
+          reason: "deterministic_active_turn_recovered_with_yielded_result",
+        }),
+        this.#event("run.terminal", cancelledTerminal(), { turn: false }),
+      );
+    } else {
+      this.#appendEvents(
+        this.#event("run.result.proposed", this.#semanticResult),
+        this.#event("turn.completed", {}),
+        this.#event(
+          "run.terminal",
+          completedTerminal(this.#semanticResult.reportedWorkDisposition),
+          { turn: false },
+        ),
+      );
+    }
+    this.#recoveredTurnSettled = true;
+    this.#active = false;
+    return true;
   }
 
   async read(): Promise<Record<string, unknown>> {
@@ -250,10 +341,10 @@ class DeterministicHarnessSession implements HarnessSession {
   async transcript(): Promise<HarnessTranscriptSnapshot> {
     return {
       schema: "paperclip-runner/harness-transcript/v1",
-      complete: true,
+      complete: this.#transcriptOmissionReason === null,
       eventCount: this.#events.length,
       events: structuredClone(this.#events),
-      omissionReason: null,
+      omissionReason: this.#transcriptOmissionReason,
     };
   }
 
@@ -265,7 +356,7 @@ class DeterministicHarnessSession implements HarnessSession {
       runId: this.#input.runId,
       normalizedSessionId: this.#input.normalizedSessionId,
       activeTurnId: this.#active ? this.#turnId : null,
-      lastSourceSequence: this.#events.length,
+      lastSourceSequence: this.#nextSourceSeq - 1,
       semanticResult: this.#semanticResult === null || this.#turnId === null
         ? null
         : {
@@ -285,6 +376,17 @@ class DeterministicHarnessSession implements HarnessSession {
       await this.interrupt({ reason: input.reason });
     }
     this.#closed = true;
+    this.#notifyEventWaiters();
+  }
+
+  #appendEvents(...events: PrpEvent[]): void {
+    this.#events.push(...events);
+    this.#notifyEventWaiters();
+  }
+
+  #notifyEventWaiters(): void {
+    for (const resolve of this.#eventWaiters) resolve();
+    this.#eventWaiters.clear();
   }
 
   #event(
@@ -334,12 +436,40 @@ function completedResult(): PrpStructuredRunResult {
   };
 }
 
-function completedTerminal(): PrpTerminalState {
+function completedTerminal(
+  disposition: PrpTerminalState["reportedWorkDisposition"] = "done",
+): PrpTerminalState {
   return {
     schema: "paperclip.prp.terminal.v1",
     turnTerminalState: "completed",
     runTerminalState: "succeeded",
-    reportedWorkDisposition: "done",
+    reportedWorkDisposition: disposition,
+  };
+}
+
+function interruptedResult(runId: string, summary: string): PrpStructuredRunResult {
+  return {
+    schema: "paperclip.run_result.v1",
+    reportedWorkDisposition: "yielded",
+    summary,
+    completionClaim: {
+      contractRevision: "harness-driver-conformance-v1",
+      objectiveSatisfied: false,
+      criteria: [],
+      remainingWork: [{
+        description: "Resume the interrupted work in a live provider session.",
+        blocksCompletion: true,
+      }],
+    },
+    evidence: [],
+    verification: [],
+    attentionRequests: [],
+    artifacts: [],
+    continuation: {
+      kind: "same_agent",
+      summary: "Resume the interrupted deterministic turn.",
+      idempotencyKey: `resume_deterministic_${runId}`,
+    },
   };
 }
 

@@ -40,6 +40,13 @@ export const createTaskAction = {
         "title": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "create_task",
+      "idempotencyKey": "example",
+      "input": {
+        "title": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "create_task",
@@ -247,8 +254,7 @@ export const createTaskAction = {
             "type": "boolean"
           },
           "operationId": {
-            "type": "string",
-            "minLength": 1
+            "const": "create_task"
           },
           "operationResultId": {
             "type": "string",

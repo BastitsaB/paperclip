@@ -414,7 +414,7 @@ describeEmbeddedPostgres("heartbeat runtime skill version pins", () => {
       connectionId: expect.stringMatching(/^assignment:[a-f0-9]{64}$/),
       name: "paperclip-assigned",
       token: expect.stringMatching(/^pcgw_/),
-      url: expect.stringContaining("/api/tool-gateway/gateways/"),
+      url: expect.stringMatching(/\/mcp\/gateways\/gw_[a-f0-9]{32}$/),
     });
     const runtimeProfiles = await db.select().from(toolProfiles);
     const runtimeProfile = runtimeProfiles.find((entry) =>

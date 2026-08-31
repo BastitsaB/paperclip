@@ -1,26 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import {
+  getOrCreatePaperclipReactRoot,
+  type PaperclipReactRootHost,
+} from "./react-root";
 
-const createRootMock = vi.hoisted(() => vi.fn());
+describe("getOrCreatePaperclipReactRoot", () => {
+  it("reuses the existing root when the entry module runs again", () => {
+    const host: PaperclipReactRootHost = {};
+    const container = {} as Parameters<typeof getOrCreatePaperclipReactRoot>[1];
+    const root = { render: vi.fn(), unmount: vi.fn() } as unknown as Root;
+    const createRoot = vi.fn(() => root);
 
-vi.mock("react-dom/client", () => ({
-  createRoot: createRootMock,
-}));
-
-import { getOrCreateReactRoot } from "./react-root";
-
-describe("getOrCreateReactRoot", () => {
-  beforeEach(() => {
-    createRootMock.mockReset();
-  });
-
-  it("reuses the root when the application entry module is evaluated again", () => {
-    const root = { render: vi.fn(), unmount: vi.fn() };
-    createRootMock.mockReturnValue(root);
-    const container = {} as HTMLElement;
-
-    expect(getOrCreateReactRoot(container)).toBe(root);
-    expect(getOrCreateReactRoot(container)).toBe(root);
-    expect(createRootMock).toHaveBeenCalledOnce();
-    expect(createRootMock).toHaveBeenCalledWith(container);
+    expect(getOrCreatePaperclipReactRoot(host, container, createRoot)).toBe(root);
+    expect(getOrCreatePaperclipReactRoot(host, container, createRoot)).toBe(root);
+    expect(createRoot).toHaveBeenCalledTimes(1);
+    expect(createRoot).toHaveBeenCalledWith(container);
   });
 });

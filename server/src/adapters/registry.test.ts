@@ -4,7 +4,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertValidAdapterLoginCapability } from "@paperclipai/adapter-utils";
-import { remoteProviderPackRoot, requireServerAdapter } from "./registry.js";
+import {
+  listServerAdapters,
+  remoteProviderPackRoot,
+  requireServerAdapter,
+} from "./registry.js";
+import { BUILTIN_ADAPTER_TYPES } from "./builtin-adapter-types.js";
 
 const originalProviderPackPath =
   process.env.PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH;
@@ -151,6 +156,18 @@ describe("built-in adapter login capabilities", () => {
     expect(() => assertValidAdapterLoginCapability(capability, "codex_local")).not.toThrow();
   });
 
+  it("registers the Grok device-login capability", () => {
+    const capability = requireServerAdapter("grok_local").loginCapability;
+    expect(capability).toBeDefined();
+    if (!capability) return;
+    expect(capability.panelMode).toBe("displayed_code");
+    expect(capability.timeoutPolicy).toBe("caller_bounded");
+    expect(capability.completionClaim).toBeUndefined();
+    expect(typeof capability.getCommand).toBe("function");
+    expect(typeof capability.parsePrompt).toBe("function");
+    expect(() => assertValidAdapterLoginCapability(capability, "grok_local")).not.toThrow();
+  });
+
   it("registers the Claude setup-token capability", () => {
     const capability = requireServerAdapter("claude_local").loginCapability;
     expect(capability).toBeDefined();
@@ -162,5 +179,38 @@ describe("built-in adapter login capabilities", () => {
     expect(typeof capability.parsePrompt).toBe("function");
     expect(typeof capability.captureCredential).toBe("function");
     expect(() => assertValidAdapterLoginCapability(capability, "claude_local")).not.toThrow();
+  });
+});
+
+describe("built-in runtime connection tool delivery", () => {
+  const expectedStrategies = new Map([
+    ["acpx_local", "environment"],
+    ["claude_local", "native_mcp"],
+    ["codex_local", "native_mcp"],
+    ["cursor_cloud", "invocation_context"],
+    ["cursor", "environment"],
+    ["gemini_local", "environment"],
+    ["grok_local", "environment"],
+    ["hermes_gateway", "invocation_context"],
+    ["hermes_local", "environment"],
+    ["kimi_local", "environment"],
+    ["openclaw_gateway", "invocation_context"],
+    ["opencode_local", "environment"],
+    ["paperclip_runner", "environment"],
+    ["pi_local", "environment"],
+    ["process", "environment"],
+    ["http", "invocation_context"],
+  ] as const);
+
+  it("requires every built-in adapter to declare its expected delivery strategy", () => {
+    const builtIns = listServerAdapters().filter((adapter) => BUILTIN_ADAPTER_TYPES.has(adapter.type));
+    expect(new Set(builtIns.map((adapter) => adapter.type))).toEqual(BUILTIN_ADAPTER_TYPES);
+    expect(new Map(builtIns.map((adapter) => [adapter.type, adapter.runtimeToolDelivery]))).toEqual(
+      expectedStrategies,
+    );
+  });
+
+  it.each([...expectedStrategies])("delivers %s runtime tools through %s", (type, strategy) => {
+    expect(requireServerAdapter(type).runtimeToolDelivery).toBe(strategy);
   });
 });

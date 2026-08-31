@@ -1,16 +1,24 @@
 import { createRoot, type Root } from "react-dom/client";
 
-type PaperclipGlobal = typeof globalThis & {
-  __paperclipReactRoots?: WeakMap<HTMLElement, Root>;
-};
+export interface PaperclipReactRootHost {
+  __paperclipReactRoot?: Root;
+}
 
-export function getOrCreateReactRoot(container: HTMLElement): Root {
-  const sharedGlobal = globalThis as PaperclipGlobal;
-  const roots = (sharedGlobal.__paperclipReactRoots ??= new WeakMap());
-  const existingRoot = roots.get(container);
-  if (existingRoot) return existingRoot;
+type CreateRoot = (container: Parameters<typeof createRoot>[0]) => Root;
 
-  const root = createRoot(container);
-  roots.set(container, root);
+/**
+ * Keep one React root per browser window even if Vite evaluates the entry
+ * module more than once during a development reload.
+ */
+export function getOrCreatePaperclipReactRoot(
+  host: object,
+  container: Parameters<typeof createRoot>[0],
+  create: CreateRoot = createRoot,
+): Root {
+  const rootHost = host as PaperclipReactRootHost;
+  if (rootHost.__paperclipReactRoot) return rootHost.__paperclipReactRoot;
+
+  const root = create(container);
+  rootHost.__paperclipReactRoot = root;
   return root;
 }

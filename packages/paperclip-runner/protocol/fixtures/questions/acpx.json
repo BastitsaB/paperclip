@@ -16,8 +16,16 @@
             "title": "Environment",
             "description": "Where should we deploy?",
             "oneOf": [
-              { "const": "staging", "title": "Staging", "description": "Deploy to staging first." },
-              { "const": "production", "title": "Production", "description": "Deploy directly to production." }
+              {
+                "const": "staging",
+                "title": "Staging",
+                "description": "Deploy to staging first."
+              },
+              {
+                "const": "production",
+                "title": "Production",
+                "description": "Deploy directly to production."
+              }
             ]
           }
         }
@@ -28,21 +36,40 @@
     "schema": "paperclip.question_set.v1",
     "title": "Deployment input",
     "submitLabel": "Submit answers",
-    "questions": [{
-      "id": "environment",
-      "header": "Environment",
-      "prompt": "Where should we deploy?",
-      "required": true,
-      "answerMode": "single_select",
-      "options": [
-        { "id": "option-1", "label": "Staging", "description": "Deploy to staging first." },
-        { "id": "option-2", "label": "Production", "description": "Deploy directly to production." }
-      ]
-    }]
+    "questions": [
+      {
+        "id": "field-1-environment-ba5285161ba6",
+        "header": "Environment",
+        "prompt": "Where should we deploy?",
+        "required": true,
+        "answerMode": "single_select",
+        "options": [
+          {
+            "id": "option-1",
+            "label": "Staging",
+            "description": "Deploy to staging first."
+          },
+          {
+            "id": "option-2",
+            "label": "Production",
+            "description": "Deploy directly to production."
+          }
+        ]
+      }
+    ]
   },
   "canonicalResponse": {
     "schema": "paperclip.question_response.v1",
-    "answers": { "environment": { "selectedOptionIds": ["option-1"] } }
+    "answers": {
+      "field-1-environment-ba5285161ba6": {
+        "selectedOptionIds": ["option-1"]
+      }
+    }
   },
-  "nativeResponse": { "action": "accept", "content": { "environment": "staging" } }
+  "nativeResponse": {
+    "action": "accept",
+    "content": {
+      "environment": "staging"
+    }
+  }
 }

@@ -2790,7 +2790,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(heartbeatRuns.id, runId));
     await db
       .update(issues)
-      .set({ status: "in_review" })
+      .set({ status: "in_progress" })
       .where(eq(issues.id, issueId));
 
     mockAdapterExecute.mockRejectedValueOnce(
@@ -2877,7 +2877,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
     expect(issue).toEqual({
-      status: "in_review",
+      status: "in_progress",
       executionRunId: retryRun?.id ?? null,
     });
 
@@ -3026,7 +3026,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(heartbeatRuns.id, runId));
     await db
       .update(issues)
-      .set({ status: "in_review" })
+      .set({ status: "in_progress" })
       .where(eq(issues.id, issueId));
 
     const heartbeat = heartbeatService(db);
@@ -3070,7 +3070,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
     expect(issue).toEqual({
-      status: "in_review",
+      status: "in_progress",
       executionRunId: retryRun?.id ?? null,
     });
 
@@ -3148,7 +3148,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(heartbeatRuns.id, runId));
     await db
       .update(issues)
-      .set({ status: "in_review" })
+      .set({ status: "in_progress" })
       .where(eq(issues.id, issueId));
 
     mockAdapterExecute.mockRejectedValueOnce(
@@ -5680,21 +5680,27 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       recoveryCause: "execution_review_participant_recovery",
     });
 
-    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
-    const recoveryComment = comments.find((comment) =>
-      comment.body.includes("pending execution-review participant once") &&
-        noticeMetadataReferencesRecoveryAction(comment.metadata, recoveryAction.id),
-    );
+    // The source issue flips to "blocked" before the recovery service posts
+    // its escalation comment and writes the activity-log event, so a read
+    // right after the status check can race an in-flight write. Poll for
+    // each row instead of reading once.
+    const recoveryComment = await waitForValue(async () => {
+      const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+      return comments.find((comment) =>
+        comment.body.includes("pending execution-review participant once") &&
+          noticeMetadataReferencesRecoveryAction(comment.metadata, recoveryAction.id),
+      ) ?? null;
+    });
     expect(recoveryComment).toBeTruthy();
 
-    const escalationActivity = await waitForValue(async () => {
+    const recoveryActivityEvent = await waitForValue(async () => {
       const activity = await db.select().from(activityLog).where(eq(activityLog.entityId, issueId));
       return activity.find((event) =>
         (event.details as Record<string, unknown> | null)?.source ===
           "recovery.reconcile_execution_review_participant",
       ) ?? null;
-    }, 8_000);
-    expect(escalationActivity).toBeTruthy();
+    });
+    expect(recoveryActivityEvent).toBeTruthy();
   });
 
   it("blocks failed execution-review recovery under the reviewer when the source assignee differs", async () => {

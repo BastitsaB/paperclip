@@ -36,6 +36,13 @@ export const requestReviewAction = {
         "summary": "example"
       }
     },
+    "scenarioCall": {
+      "operationId": "request_review",
+      "idempotencyKey": "example",
+      "input": {
+        "summary": "example"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "request_review",
@@ -141,6 +148,21 @@ export const requestReviewAction = {
   },
   "scenario": {
     "order": 9,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "request_review",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "request_review",
       "version": 1,

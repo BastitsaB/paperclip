@@ -473,6 +473,75 @@ export const providerDescriptorSchema = {
   },
   "allOf": [
     {
+      "oneOf": [
+        {
+          "properties": {
+            "provider": {
+              "const": "codex"
+            },
+            "driver": {
+              "const": "codex_app_server"
+            },
+            "executionKind": {
+              "const": "local_process"
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": {
+              "const": "opencode"
+            },
+            "driver": {
+              "const": "opencode_server"
+            },
+            "executionKind": {
+              "const": "local_process"
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": {
+              "const": "claude_managed"
+            },
+            "driver": {
+              "const": "claude_managed_agents_api"
+            },
+            "executionKind": {
+              "const": "remote_service"
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": {
+              "const": "aws_agentcore"
+            },
+            "driver": {
+              "const": "aws_agentcore_harness_api"
+            },
+            "executionKind": {
+              "const": "remote_service"
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": {
+              "const": "acpx"
+            },
+            "driver": {
+              "const": "acpx_runtime"
+            },
+            "executionKind": {
+              "const": "local_process"
+            }
+          }
+        }
+      ]
+    },
+    {
       "if": {
         "properties": {
           "executionKind": {
@@ -1934,9 +2003,15 @@ export const semanticToolSchema = {
       "if": {
         "properties": {
           "phase": {
-            "const": "result"
+            "enum": [
+              "result",
+              "reconciled"
+            ]
           }
-        }
+        },
+        "required": [
+          "phase"
+        ]
       },
       "then": {
         "required": [
@@ -2094,6 +2169,9 @@ export const usageSchema = {
     },
     "cumulative": {
       "$ref": "#/$defs/measurement"
+    },
+    "runDeltaAvailable": {
+      "type": "boolean"
     },
     "runDelta": {
       "$ref": "#/$defs/measurement"
@@ -2361,6 +2439,9 @@ export const questionSetSchema = {
         "description": {
           "type": "string",
           "maxLength": 4000
+        },
+        "recommended": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -2683,12 +2764,12 @@ export const requestSchema = {
         "turnId": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 160
+          "maxLength": 240
         },
         "itemId": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 160
+          "maxLength": 240
         }
       },
       "additionalProperties": false
@@ -2974,6 +3055,24 @@ export const resultSchema = {
         },
         "owner": {
           "type": "object",
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "agent",
+                "user",
+                "system",
+                "external"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "additionalProperties": true
         },
         "unblockAction": {
@@ -3158,12 +3257,12 @@ export const eventSchema = {
     "turnId": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 160
+      "maxLength": 240
     },
     "itemId": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 160
+      "maxLength": 240
     },
     "eventType": {
       "enum": [

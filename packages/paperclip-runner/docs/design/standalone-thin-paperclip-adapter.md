@@ -908,12 +908,12 @@ named finalization recovery.
 MIG-08 now represents the actual instance-global transition. The production
 heartbeat selector reads the persisted mode first: an already-selected native
 run remains native and can finish or reconcile from its coordinator after
-`experimental.enableNativeRunner` turns off. An unresolved fresh run for the
-same still-opted-in agent resolves to legacy with
-`instance_flag_disabled`. The agent's `runtimeConfig.nativeRunner` profile is
-not rewritten, and no `disabledByNativeKillSwitch` or other second rollback
-control is persisted. Re-enabling the instance flag therefore restores normal
-fresh-run selection without an operator profile repair.
+`experimental.enableNativeRunner` turns off. A fresh `paperclip_runner` start
+is rejected with `paperclip_runner_rollout_disabled`; direct adapters remain on
+their existing legacy paths and are never selected into native execution by an
+old runtime profile. The agent configuration is not rewritten, and no second
+rollback control is persisted. Re-enabling the instance flag therefore restores
+normal fresh-run selection without an operator profile repair.
 
 Sabotage changes the production inputs rather than the policy labels: removing
 the persisted-result ingress breaks the attention fixtures, and changing the
@@ -921,7 +921,7 @@ global flag input from off to on breaks MIG-08 while
 `resolveNativeAttentionStatus` and `resolveNativeMigrationStatus` continue to
 return their pure labels. The full recovery test observes both durable
 outcomes: the original native rows reach committed terminal state and the
-fresh run persists legacy mode with zero native result/finalization rows.
+fresh runner start is rejected before creating native result/finalization rows.
 
 This amendment does not add an attention UI, a public native-attention route,
 external-system execution, credential delegation, or auto-approval. The Codex

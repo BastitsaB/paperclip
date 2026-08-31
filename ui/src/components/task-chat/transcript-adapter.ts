@@ -785,208 +785,37 @@ export function transcriptToTaskChatItems(
         resetInline();
         break;
       }
-      case "provider_activity": {
-        const key = `provider:${providerActivityKey(entry)}`;
-        const item = providerActivityItem(entry, runId, i);
-        const existingIndex = protocolIndexByKey.get(key);
-        if (existingIndex == null) {
-          items.push(item);
-          protocolIndexByKey.set(key, items.length - 1);
-        } else {
-          const previous = items[existingIndex];
-          items[existingIndex] =
-            previous.kind === "protocol" &&
-            previous.surface === "provider_activity"
-              ? mergeProviderActivityItem(previous, item)
-              : { ...item, id: previous.id };
-        }
-        resetInline();
-        break;
-      }
-      case "workspace_change": {
-        const key = `workspace:${entry.changeSetId}`;
-        const item: TaskChatProtocolItem = {
-          id: `${runId}:workspace:${entry.changeSetId}`,
-          kind: "protocol",
-          surface: "workspace_change",
-          changeSetId: entry.changeSetId,
-          revision: entry.revision,
-          source: entry.source,
-          complete: entry.complete,
-          files: entry.files.map((file) => ({
-            ...file,
-            diff:
-              file.diff == null
-                ? null
-                : file.diff.length > PROTOCOL_OUTPUT_MAX
-                  ? `${file.diff.slice(0, PROTOCOL_OUTPUT_MAX)}\n… patch truncated for display …\n`
-                  : file.diff,
-          })),
-          totals: entry.totals,
-          patchArtifactRef: entry.patchArtifactRef,
-        };
-        const existingIndex = protocolIndexByKey.get(key);
-        if (existingIndex == null) {
-          items.push(item);
-          protocolIndexByKey.set(key, items.length - 1);
-        } else {
-          items[existingIndex] = { ...item, id: items[existingIndex].id };
-        }
-        resetInline();
-        break;
-      }
-      case "workspace_file_reference": {
-        const key = `workspace-file:${entry.referenceId}`;
-        const item: TaskChatProtocolItem = {
-          id: `${runId}:workspace-file:${entry.referenceId}`,
-          kind: "protocol",
-          surface: "workspace_file",
-          referenceId: entry.referenceId,
-          source: entry.source,
-          path: entry.path,
-          displayName: entry.displayName,
-          mediaType: entry.mediaType,
-          presentation: entry.presentation,
-          line: entry.line,
-          preview:
-            entry.preview == null
-              ? null
-              : entry.preview.slice(0, PROTOCOL_OUTPUT_MAX),
-          previewTruncated:
-            entry.previewTruncated ||
-            Boolean(
-              entry.preview && entry.preview.length > PROTOCOL_OUTPUT_MAX,
-            ),
-        };
-        const existingIndex = protocolIndexByKey.get(key);
-        if (existingIndex == null) {
-          items.push(item);
-          protocolIndexByKey.set(key, items.length - 1);
-        } else {
-          items[existingIndex] = { ...item, id: items[existingIndex].id };
-        }
-        resetInline();
-        break;
-      }
-      case "runtime_request": {
-        const key = `runtime-request:${entry.requestId}`;
-        const item: TaskChatProtocolItem = {
-          id: `${runId}:runtime-request:${entry.requestId}`,
-          kind: "protocol",
-          surface: "runtime_request",
-          runId,
-          requestId: entry.requestId,
-          requestKind: entry.requestKind,
-          turnId: entry.turnId,
-          requestType: entry.requestType,
-          status: entry.status,
-          prompt: entry.prompt,
-          choices: entry.choices,
-          fields: entry.fields,
-          questionSet: entry.questionSet,
-          resolvedAction: entry.resolvedAction,
-          response: entry.response,
-        };
-        const existingIndex = protocolIndexByKey.get(key);
-        if (existingIndex == null) {
-          items.push(item);
-          protocolIndexByKey.set(key, items.length - 1);
-        } else {
-          items[existingIndex] = { ...item, id: items[existingIndex].id };
-        }
-        resetInline();
-        break;
-      }
-      case "run_result": {
+      case "result": {
+        if (
+          entry.subtype !== "paperclip_runner_usage" &&
+          entry.subtype !== "paperclip_runner_session_usage"
+        ) break;
+        const inputTokens = entry.inputTokens || 0;
+        const outputTokens = entry.outputTokens || 0;
         items.push({
-          id: `${runId}:result:${i}`,
-          kind: "protocol",
-          surface: "run_result",
-          disposition: entry.disposition,
-          summary: entry.summary,
-          objectiveSatisfied: entry.objectiveSatisfied,
-          verification: entry.verification,
-          remainingWork: entry.remainingWork,
-          blocker: entry.blocker,
-          artifacts: entry.artifacts,
+          id: `${runId}:usage:${i}`,
+          kind: "usage",
+          ...(entry.subtype === "paperclip_runner_session_usage"
+            ? {
+                label: "Provider session total",
+                detail:
+                  entry.text ||
+                  "This cumulative usage can include earlier runs in the resumed provider session.",
+              }
+            : {}),
+          usage: {
+            used: inputTokens + outputTokens + (entry.cachedTokens || 0),
+            size: 0,
+            inputTokens,
+            outputTokens,
+            ...(entry.costUsd > 0 ? { costUsd: entry.costUsd } : {}),
+          },
         });
         resetInline();
         break;
       }
-      case "run_terminal": {
-        const key = "run-terminal";
-        const item: TaskChatProtocolItem = {
-          id: `${runId}:terminal`,
-          kind: "protocol",
-          surface: "run_terminal",
-          turnState: entry.turnState,
-          runState: entry.runState,
-          disposition: entry.disposition,
-          stopReason: entry.stopReason,
-        };
-        const existingIndex = protocolIndexByKey.get(key);
-        if (existingIndex == null) {
-          items.push(item);
-          protocolIndexByKey.set(key, items.length - 1);
-        } else {
-          items[existingIndex] = item;
-        }
-        resetInline();
-        break;
-      }
-      case "system": {
-        if (entry.text.startsWith("Paperclip session ")) {
-          const [label, ...detail] = entry.text.split(" · ");
-          items.push({
-            id: `${runId}:session:${i}`,
-            kind: "marker",
-            variant: "session_start",
-            label: label
-              .replace("Paperclip ", "")
-              .replace(/^./, (character) => character.toUpperCase()),
-            detail: detail.join(" · ") || undefined,
-          });
-        } else if (
-          entry.text === "Turn started" ||
-          entry.text === "Turn completed"
-        ) {
-          items.push({
-            id: `${runId}:turn-boundary:${i}`,
-            kind: "marker",
-            variant: "turn_boundary",
-            label: entry.text,
-          });
-        } else if (entry.text.startsWith("Runner:")) {
-          items.push({
-            id: `${runId}:runner:${i}`,
-            kind: "marker",
-            variant: "turn_boundary",
-            label: "Runner update",
-            detail: entry.text.slice("Runner:".length).trim(),
-          });
-        }
-        resetInline();
-        break;
-      }
-      case "result": {
-        if (entry.subtype === "paperclip.usage") {
-          items.push({
-            id: `${runId}:usage:${i}`,
-            kind: "usage",
-            usage: {
-              used: entry.inputTokens + entry.outputTokens,
-              size: 0,
-              inputTokens: entry.inputTokens,
-              outputTokens: entry.outputTokens,
-              costUsd: entry.costUsd,
-            },
-          });
-        }
-        resetInline();
-        break;
-      }
-      // init / stderr / stdout / user and unrecognized result/system records
-      // carry no thread-visible content in the live turn.
+      // init / stderr / stdout / system / user and non-runner result entries
+      // carry no thread-visible content (status is rendered separately).
       default:
         break;
     }
@@ -1623,7 +1452,13 @@ export function buildTurnSummary(
     else if (entry.kind === "diff") {
       if (entry.changeType === "add") added += 1;
       else if (entry.changeType === "remove") removed += 1;
-    } else if (entry.kind === "result") {
+    } else if (
+      entry.kind === "result" &&
+      entry.subtype !== "paperclip_runner_session_usage"
+    ) {
+      // Session-cumulative measurements remain visible in the expanded
+      // transcript, but they can include earlier runs. Only run-scoped usage
+      // belongs in this turn (and therefore in a merged-turn total).
       tokens += (entry.inputTokens || 0) + (entry.outputTokens || 0);
     }
   }

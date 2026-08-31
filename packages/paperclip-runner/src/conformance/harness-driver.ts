@@ -174,7 +174,9 @@ export async function runHarnessDriverConformance(input: {
   if (input.driver.recoverSession === undefined) {
     throw new Error("driver declares resume but does not expose session recovery");
   }
-  const recovery = await input.driver.recoverSession(snapshot);
+  const recovery = await input.driver.recoverSession(snapshot, {
+    signal: new AbortController().signal,
+  });
   if (
     !recovery.recovered
     || recovery.session === undefined

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,12 +13,15 @@ use serde::Serialize;
 
 use crate::local_runner::LocalRunnerError;
 
+const PROCESS_OUTPUT_QUEUE_CAPACITY: usize = 256;
+
 const SUPERVISED_ENV_KEYS: &[&str] = &[
     "PATH",
     "PATHEXT",
     "SystemRoot",
     "WINDIR",
     "HOME",
+    "USERPROFILE",
     "CODEX_HOME",
     "LANG",
     "LC_ALL",
@@ -117,7 +120,7 @@ pub(crate) fn read_bounded_line<R: BufRead>(
 
 fn forward_bounded_output<R: io::Read + Send + 'static>(
     reader: R,
-    sender: mpsc::Sender<ProcessOutput>,
+    sender: SyncSender<ProcessOutput>,
     stdout: bool,
     max_line_bytes: usize,
 ) {
@@ -271,7 +274,7 @@ impl SupervisedProcess {
             .stderr
             .take()
             .ok_or_else(|| LocalRunnerError::invalid("supervised process stderr was not piped"))?;
-        let (sender, output) = mpsc::channel();
+        let (sender, output) = mpsc::sync_channel(PROCESS_OUTPUT_QUEUE_CAPACITY);
         forward_bounded_output(stdout, sender.clone(), true, max_line_bytes.max(1));
         forward_bounded_output(stderr, sender, false, max_line_bytes.max(1));
 
@@ -330,9 +333,11 @@ impl SupervisedProcess {
                 }
                 Ok(ProcessOutput::StdoutClosed) => return Ok(None),
                 Err(RecvTimeoutError::Timeout) => return Ok(None),
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(LocalRunnerError::invalid("process output channel closed"));
-                }
+                // The reader threads end when the child closes its output.
+                // Let the caller reconcile that closure with the authoritative
+                // process exit status instead of turning the channel teardown
+                // into a transport failure.
+                Err(RecvTimeoutError::Disconnected) => return Ok(None),
             }
         }
     }
@@ -354,6 +359,10 @@ impl SupervisedProcess {
         let status = self.child.wait().map_err(|error| {
             LocalRunnerError::invalid(format!("failed to wait for process: {error}"))
         })?;
+        // The group leader can exit while descendants remain alive. Reap the
+        // leader first, then clear any remaining members of its private group.
+        #[cfg(unix)]
+        signal_process_group(self.process_group_id, "KILL");
         self.finished = true;
         Ok(exit_fact(status))
     }

@@ -43,7 +43,7 @@ export const inspectOperationResultAction = {
       "result": {
         "schema": "paperclip.capability.tool-result.v1",
         "ok": true,
-        "operationId": "example",
+        "operationId": "inspect_operation_result",
         "operationResultId": "example",
         "value": "example",
         "commandResult": "example",
@@ -54,6 +54,15 @@ export const inspectOperationResultAction = {
   "live": null,
   "scenario": {
     "order": 13,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "inspect_operation_result",
+      "operationResultId": "example",
+      "value": "example",
+      "commandResult": "example",
+      "authorization": "example"
+    },
     "descriptor": {
       "operationId": "inspect_operation_result",
       "version": 1,
@@ -85,8 +94,7 @@ export const inspectOperationResultAction = {
             "type": "boolean"
           },
           "operationId": {
-            "type": "string",
-            "minLength": 1
+            "const": "inspect_operation_result"
           },
           "operationResultId": {
             "type": "string",

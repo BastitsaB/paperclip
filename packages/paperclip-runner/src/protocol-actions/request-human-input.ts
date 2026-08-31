@@ -41,6 +41,16 @@ export const requestHumanInputAction = {
         "continuationPolicy": "none"
       }
     },
+    "scenarioCall": {
+      "operationId": "request_human_input",
+      "idempotencyKey": "example",
+      "input": {
+        "interactionKind": "confirmation",
+        "title": "example",
+        "prompt": "example",
+        "continuationPolicy": "none"
+      }
+    },
     "success": {
       "ok": true,
       "operationId": "request_human_input",
@@ -186,6 +196,21 @@ export const requestHumanInputAction = {
   },
   "scenario": {
     "order": 11,
+    "successExample": {
+      "schema": "paperclip.capability.tool-result.v1",
+      "ok": true,
+      "operationId": "request_human_input",
+      "operationResultId": "example-result",
+      "value": {
+        "commandId": "example",
+        "disposition": "applied",
+        "stateRevision": 1,
+        "entityRefs": ["example"],
+        "scheduledWakeIds": ["example"]
+      },
+      "commandResult": null,
+      "authorization": {}
+    },
     "descriptor": {
       "operationId": "request_human_input",
       "version": 1,

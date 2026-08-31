@@ -10,7 +10,7 @@ import type {
 } from "../protocol/replay-contract.js";
 import type {
   HarnessRuntimeRequest,
-  HarnessRuntimeRequestHandoffResult,
+  HarnessRuntimeRequestHandoff,
   HarnessRuntimeRequestResolution,
   HarnessThreadLineageEntry,
   NativeRuntimeContextCapabilities,
@@ -29,6 +29,16 @@ export interface NativeSessionBackendDescriptor {
 export interface OpenNativeSessionInput {
   identity: NativeRunIdentity;
   workingDirectory?: string;
+  /**
+   * When present, aborts provider bootstrap if the caller's recovery deadline
+   * expires. Backends own cleanup for work that has not returned a session yet.
+   */
+  signal?: AbortSignal;
+}
+
+export interface NativeSessionRecoveryOptions {
+  /** Abort provider recovery and release any not-yet-returned provider state. */
+  signal: AbortSignal;
 }
 
 export interface PersistedNativeSession {
@@ -48,6 +58,9 @@ export interface PersistedNativeSession {
   terminal?: PrpTerminalState | null;
   activeTurnId?: string | null;
   terminalTurns?: PersistedHarnessTurnTerminal[];
+  /** Durable at-most-once marker for a resultless terminal recovery turn. */
+  dispositionOnlyRecoveryConsumed?: boolean;
+  dispositionOnlyRecoveryTurnId?: string | null;
   pendingRuntimeRequests?: HarnessRuntimeRequest[];
   lineage?: HarnessThreadLineageEntry[];
 }
@@ -56,6 +69,22 @@ export interface NativeSessionRecoveryResult {
   recovered: boolean;
   session?: NativeSession;
   reason?: string;
+}
+
+/**
+ * Cancellation is a synchronous authority transition followed by passive
+ * provider cleanup. Once `cancel` returns, the provider session must no longer
+ * be able to publish accepted output or acquire new mutation authority for the
+ * cancelled turn. Cleanup may stop processes or transports, but it must not
+ * perform durable control-plane mutations.
+ */
+export interface NativeSessionCancellation {
+  cleanup: Promise<void>;
+}
+
+export interface NativeSessionSnapshotOptions {
+  /** Stop provider snapshot work that outlives the execution deadline. */
+  signal: AbortSignal;
 }
 
 export interface NativeSession {
@@ -69,7 +98,8 @@ export interface NativeSession {
   }): Promise<{ turnId: string; effectiveCollaborationMode?: "default" | "plan" }>;
   steer?(input: { turnId: string; message: NativeUserMessage; correlationId?: string }): Promise<void>;
   interrupt?(input: { turnId?: string; reason?: string }): Promise<void>;
-  cancel?(input: { reason: string }): Promise<void>;
+  /** Commit cancellation synchronously; the returned promise owns cleanup only. */
+  cancel?(input: { reason: string; signal: AbortSignal }): NativeSessionCancellation;
   resolveRuntimeRequest?(input: {
     requestId: string;
     turnId: string;
@@ -79,14 +109,29 @@ export interface NativeSession {
     requestId: string;
     turnId: string;
     reason: "durable_handoff";
-  }): Promise<HarnessRuntimeRequestHandoffResult>;
+    /**
+     * Revokes durable mutation authority when event consumption fails. The
+     * method must commit synchronously before returning; its returned promise
+     * owns provider cleanup only and must not mutate durable request state.
+     */
+    signal: AbortSignal;
+  }): HarnessRuntimeRequestHandoff;
   result(): Promise<{
     result: PrpStructuredRunResult;
     terminal: PrpTerminalState;
     turnId: string | null;
   } | null>;
   usage?(): Promise<Record<string, unknown> | null>;
-  snapshot(): Promise<PersistedNativeSession>;
+  snapshot(options?: NativeSessionSnapshotOptions): Promise<PersistedNativeSession>;
+  /**
+   * Idempotently stop provider work and release every pending `events().next()`
+   * before this promise resolves. Implementations must settle every promise
+   * previously returned by the session (including interrupt, cancel, handoff,
+   * and iterator teardown). The runtime bounds its wait for a broken provider,
+   * revokes that session's mutation authority, removes it from reuse, and keeps
+   * observing late cleanup so a contract violation cannot defeat a run timeout
+   * or become an unhandled rejection.
+   */
   close(input: { reason: string }): Promise<void>;
 }
 
@@ -101,5 +146,6 @@ export interface NativeSessionBackend {
   ): Promise<NativeSession>;
   recoverSession?(
     snapshot: PersistedNativeSession,
+    options: NativeSessionRecoveryOptions,
   ): Promise<NativeSessionRecoveryResult>;
 }

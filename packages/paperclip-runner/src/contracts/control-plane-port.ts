@@ -22,6 +22,22 @@ export interface AppendedEventReceipt {
   disposition: "committed" | "duplicate";
 }
 
+export interface AppendControlPlaneEventOptions {
+  /**
+   * Cancellation is a durability boundary: an aborted append must settle
+   * without committing before it rejects.
+   */
+  signal: AbortSignal;
+}
+
+export interface CheckpointControlPlaneSessionOptions {
+  /**
+   * Cancellation is a durability boundary: once aborted, checkpoint work
+   * must settle without committing a new snapshot.
+   */
+  signal: AbortSignal;
+}
+
 export interface ReplayControlPlaneEventsInput {
   runId: string;
   sourceInstanceId: string;
@@ -32,6 +48,14 @@ export interface ReplayControlPlaneEventsInput {
 export interface ReplayedControlPlaneEvents {
   events: PrpEvent[];
   highestContiguousSourceSeq: number;
+}
+
+export interface FinalizeControlPlaneOperationOptions {
+  /**
+   * Finalization cancellation is a durability boundary. Once aborted, a
+   * mutating operation must settle without committing new durable state.
+   */
+  signal: AbortSignal;
 }
 
 export interface CompleteControlPlaneRunInput {
@@ -51,8 +75,20 @@ export interface CompleteControlPlaneRunInput {
 export interface ControlPlanePort {
   openRun(input: OpenControlPlaneRunInput): Promise<void>;
   loadSessionCheckpoint?(): Promise<PersistedNativeSession | null>;
-  checkpointSession?(snapshot: PersistedNativeSession): Promise<void>;
-  appendEvent(event: NativeRunEvent | PrpEvent): Promise<AppendedEventReceipt>;
-  replayEvents(input: ReplayControlPlaneEventsInput): Promise<ReplayedControlPlaneEvents>;
-  completeRun(result: NativeRunResult | CompleteControlPlaneRunInput): Promise<void>;
+  checkpointSession?(
+    snapshot: PersistedNativeSession,
+    options?: CheckpointControlPlaneSessionOptions,
+  ): Promise<void>;
+  appendEvent(
+    event: NativeRunEvent | PrpEvent,
+    options?: AppendControlPlaneEventOptions,
+  ): Promise<AppendedEventReceipt>;
+  replayEvents(
+    input: ReplayControlPlaneEventsInput,
+    options?: FinalizeControlPlaneOperationOptions,
+  ): Promise<ReplayedControlPlaneEvents>;
+  completeRun(
+    result: NativeRunResult | CompleteControlPlaneRunInput,
+    options?: FinalizeControlPlaneOperationOptions,
+  ): Promise<void>;
 }

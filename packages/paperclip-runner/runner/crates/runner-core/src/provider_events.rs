@@ -1,566 +1,1035 @@
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::durable::redact_text;
+use crate::acpx_event_payload::{AcpxRuntimeEventKind, AcpxTurnStatus};
+use crate::acpx_provider_state::{is_reserved_terminal_operation, AcpxProviderStateEvent};
+use crate::durable::{redact_text, sanitize_value, EventPriority};
+use crate::local_runner::LocalRunnerError;
+use crate::provider_bridge::{semantic_value_digest, ToolResult};
+use crate::stable_identity::{
+    is_stable_id, project_acpx_runtime_request_id, DURABLE_STABLE_ID_CHARS, SHORT_STABLE_ID_CHARS,
+};
 
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-const MAX_TURN_DIFF_FILES: usize = 2_000;
-const MAX_TURN_DIFF_CHARS_PER_FILE: usize = 256 * 1024;
+const MAX_TEXT_CHARS: usize = 4_000;
 
-fn text<'a>(value: Option<&'a Value>) -> &'a str {
+#[derive(Clone, Debug, PartialEq)]
+pub struct NormalizedProviderEvent {
+    pub event_type: String,
+    pub priority: EventPriority,
+    pub payload: Value,
+}
+
+pub(crate) fn normalized_codex_terminal_event_type(
+    method: &str,
+    params: &Value,
+) -> Option<&'static str> {
+    let status = match method {
+        "turn/failed" => "failed",
+        "turn/cancelled" => "cancelled",
+        "turn/interrupted" => "interrupted",
+        "turn/completed" => string(
+            params
+                .pointer("/turn/status")
+                .or_else(|| params.get("status")),
+        ),
+        _ => return None,
+    };
+    Some(match status {
+        "failed" | "error" => "turn.failed",
+        "cancelled" | "canceled" => "turn.cancelled",
+        "interrupted" | "aborted" => "turn.interrupted",
+        _ => "turn.completed",
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcpxEventProjectionContext {
+    pub run_id: String,
+    pub normalized_session_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+}
+
+impl AcpxEventProjectionContext {
+    pub fn validate(&self) -> Result<(), LocalRunnerError> {
+        for (value, label, max_chars) in [
+            (&self.run_id, "run", SHORT_STABLE_ID_CHARS),
+            (
+                &self.normalized_session_id,
+                "normalized session",
+                SHORT_STABLE_ID_CHARS,
+            ),
+            // Turn and item correlation use the durable 240-character
+            // identity contract shared by PRP events, runtime requests, and
+            // semantic-tool receipts.
+            (&self.turn_id, "turn", DURABLE_STABLE_ID_CHARS),
+            (&self.item_id, "item", DURABLE_STABLE_ID_CHARS),
+        ] {
+            validate_projection_identity(value, label, max_chars)?;
+        }
+        Ok(())
+    }
+
+    fn correlation(&self) -> Value {
+        json!({
+            "runId": self.run_id,
+            "normalizedSessionId": self.normalized_session_id,
+            "turnId": self.turn_id,
+            "itemId": self.item_id,
+        })
+    }
+}
+
+/// Projects already scope-checked ACPX reducer output into provider-neutral
+/// durable events. The reducer remains authoritative for bounds and request
+/// state; this boundary must not accept raw sidecar envelopes.
+pub fn project_acpx_state_event(
+    context: &AcpxEventProjectionContext,
+    event: &AcpxProviderStateEvent,
+) -> Result<Vec<NormalizedProviderEvent>, LocalRunnerError> {
+    context.validate()?;
+    let one = |event_type: &str, priority: EventPriority, payload: Value| {
+        Ok(vec![NormalizedProviderEvent {
+            event_type: event_type.to_owned(),
+            priority,
+            payload,
+        }])
+    };
+    match event {
+        AcpxProviderStateEvent::Activity(event) => Ok(vec![event.clone()]),
+        AcpxProviderStateEvent::ToolCall {
+            call_id,
+            operation_id,
+            input,
+        } => {
+            validate_semantic_projection_identity(call_id, operation_id)?;
+            one(
+                "semantic_tool.input",
+                EventPriority::P0,
+                json!({
+                    "semantic_tool": {
+                        "schema": "paperclip.prp.semantic_tool.v1",
+                        "schemaVersion": 1,
+                        "phase": "input",
+                        "operationId": operation_id,
+                        "callId": call_id,
+                        "correlation": context.correlation(),
+                        "idempotencyKey": Value::Null,
+                        "content": {
+                            "digest": semantic_value_digest(input),
+                            "redactionDisposition": "digest_only",
+                            "references": [],
+                        },
+                        "input": input,
+                    },
+                }),
+            )
+        }
+        AcpxProviderStateEvent::ToolResult(result) => {
+            Ok(vec![project_acpx_tool_result(context, result)?])
+        }
+        AcpxProviderStateEvent::PermissionRequest { .. } => Err(LocalRunnerError::invalid(
+            "ACPX permission request reached projection outside the pinned runner policy",
+        )),
+        AcpxProviderStateEvent::InputRequest {
+            request_id,
+            question_set,
+            origin,
+        } => {
+            let request_id = project_acpx_runtime_request_id(request_id).ok_or_else(|| {
+                LocalRunnerError::invalid("ACPX event projection request identity is invalid")
+            })?;
+            let prompt = question_set
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    question_set
+                        .pointer("/questions/0/prompt")
+                        .and_then(Value::as_str)
+                })
+                .map(|value| bounded_text(value, MAX_TEXT_CHARS))
+                .unwrap_or_else(|| "Codex needs your input".to_owned());
+            let origin = project_runtime_request_origin(origin.as_ref())?;
+            one(
+                "runtime_request.created",
+                EventPriority::P0,
+                json!({
+                    "request": {
+                        "schema": "paperclip.runtime_request.v2",
+                        "requestKind": "runtime",
+                        "requestId": request_id,
+                        "turnId": context.turn_id,
+                        "itemId": context.item_id,
+                        "type": "input",
+                        "status": "pending",
+                        "prompt": prompt,
+                        "input": question_set,
+                        "origin": origin,
+                    },
+                }),
+            )
+        }
+        AcpxProviderStateEvent::SemanticResult(result) => {
+            validate_semantic_projection_identity(&result.call_id, &result.operation_id)?;
+            if is_reserved_terminal_operation(&result.operation_id) {
+                one(
+                    "run.result.proposed",
+                    EventPriority::P0,
+                    result.result.clone(),
+                )
+            } else {
+                Ok(vec![project_acpx_tool_result(
+                    context,
+                    &ToolResult {
+                        call_id: result.call_id.clone(),
+                        operation_id: result.operation_id.clone(),
+                        result: result.result.clone(),
+                        is_error: !result.ok,
+                    },
+                )?])
+            }
+        }
+        AcpxProviderStateEvent::AssistantMessage { turn_id, text } => {
+            require_projected_turn(context, turn_id)?;
+            one(
+                "item.completed",
+                EventPriority::P1,
+                json!({
+                    "provider": "acpx",
+                    "itemId": context.item_id,
+                    "kind": "agentMessage",
+                    "status": "completed",
+                    "channel": "final",
+                    "text": bounded_text(text, MAX_TEXT_CHARS),
+                }),
+            )
+        }
+        AcpxProviderStateEvent::TurnTerminal {
+            turn_id,
+            status,
+            error,
+        } => {
+            require_projected_turn(context, turn_id)?;
+            let (event_type, status) = match status {
+                AcpxTurnStatus::Completed => ("turn.completed", "completed"),
+                AcpxTurnStatus::Failed => ("turn.failed", "failed"),
+                AcpxTurnStatus::Cancelled => ("turn.cancelled", "cancelled"),
+                AcpxTurnStatus::Interrupted => ("turn.interrupted", "interrupted"),
+            };
+            one(
+                event_type,
+                EventPriority::P0,
+                json!({
+                    "provider": "acpx",
+                    "providerTurnId": turn_id,
+                    "status": status,
+                    "error": error,
+                }),
+            )
+        }
+        AcpxProviderStateEvent::Process(details) => one(
+            "harness.diagnostic",
+            EventPriority::P1,
+            json!({
+                "code": "acpx_process",
+                "message": "The ACPX sidecar reported provider process metadata.",
+                "details": details,
+            }),
+        ),
+        AcpxProviderStateEvent::Diagnostic { code, message } => one(
+            "harness.diagnostic",
+            EventPriority::P1,
+            json!({"code": code, "message": bounded_text(message, MAX_TEXT_CHARS)}),
+        ),
+    }
+}
+
+fn project_acpx_tool_result(
+    context: &AcpxEventProjectionContext,
+    result: &ToolResult,
+) -> Result<NormalizedProviderEvent, LocalRunnerError> {
+    validate_semantic_projection_identity(&result.call_id, &result.operation_id)?;
+    let safe_result = sanitize_value(&result.result);
+    Ok(NormalizedProviderEvent {
+        event_type: "semantic_tool.result".to_owned(),
+        priority: EventPriority::P0,
+        payload: json!({
+            "semantic_tool": {
+                "schema": "paperclip.prp.semantic_tool.v1",
+                "schemaVersion": 1,
+                "phase": "result",
+                "operationId": result.operation_id,
+                "callId": result.call_id,
+                "correlation": context.correlation(),
+                "idempotencyKey": Value::Null,
+                "content": {
+                    "digest": semantic_value_digest(&safe_result),
+                    "redactionDisposition": "digest_only",
+                    "references": [],
+                },
+                "outcome": if result.is_error { "failed" } else { "succeeded" },
+                "code": if result.is_error { "semantic_tool_failed" } else { "semantic_tool_succeeded" },
+                "retryable": false,
+                "authorizationBoundary": "active_task",
+                "operationReceiptId": format!("operation_{}", result.call_id),
+            },
+        }),
+    })
+}
+
+fn validate_semantic_projection_identity(
+    call_id: &str,
+    operation_id: &str,
+) -> Result<(), LocalRunnerError> {
+    for (value, label) in [(call_id, "call"), (operation_id, "operation")] {
+        if !is_stable_id(value, SHORT_STABLE_ID_CHARS) {
+            return Err(LocalRunnerError::invalid(format!(
+                "ACPX semantic {label} identity is invalid"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn project_runtime_request_origin(origin: Option<&Value>) -> Result<Value, LocalRunnerError> {
+    let Some(origin) = origin else {
+        return Ok(json!({
+            "adapter": "codex-acpx",
+            "provider": "codex",
+            "method": "runtime.input_requested",
+        }));
+    };
+    let object = origin.as_object().ok_or_else(|| {
+        LocalRunnerError::invalid("ACPX runtime request origin must be an object")
+    })?;
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "adapter" | "provider" | "method"))
+    {
+        return Err(LocalRunnerError::invalid(
+            "ACPX runtime request origin contains unsupported fields",
+        ));
+    }
+    validate_origin_field(object.get("adapter"), "adapter", 160, true)?;
+    validate_origin_field(object.get("provider"), "provider", 160, false)?;
+    validate_origin_field(object.get("method"), "method", 500, false)?;
+    Ok(origin.clone())
+}
+
+fn validate_origin_field(
+    value: Option<&Value>,
+    field: &str,
+    max_chars: usize,
+    required: bool,
+) -> Result<(), LocalRunnerError> {
+    let Some(value) = value else {
+        if required {
+            return Err(LocalRunnerError::invalid(format!(
+                "ACPX runtime request origin omitted {field}"
+            )));
+        }
+        return Ok(());
+    };
+    let text = value.as_str().ok_or_else(|| {
+        LocalRunnerError::invalid(format!("ACPX runtime request origin {field} must be text"))
+    })?;
+    if text.is_empty() || text.chars().count() > max_chars {
+        return Err(LocalRunnerError::invalid(format!(
+            "ACPX runtime request origin {field} is invalid"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_projection_identity(
+    value: &str,
+    label: &str,
+    max_chars: usize,
+) -> Result<(), LocalRunnerError> {
+    if !is_stable_id(value, max_chars) {
+        return Err(LocalRunnerError::invalid(format!(
+            "ACPX event projection {label} identity is invalid"
+        )));
+    }
+    Ok(())
+}
+
+fn require_projected_turn(
+    context: &AcpxEventProjectionContext,
+    turn_id: &str,
+) -> Result<(), LocalRunnerError> {
+    if turn_id != context.turn_id {
+        return Err(LocalRunnerError::invalid(
+            "ACPX state event does not match its durable turn projection",
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    redact_text(value).chars().take(max_chars).collect()
+}
+
+fn string(value: Option<&Value>) -> &str {
     value.and_then(Value::as_str).unwrap_or("")
 }
-fn item(params: &Value) -> &Value {
-    params.get("item").unwrap_or(&Value::Null)
-}
-fn id(value: &str, fallback: &str) -> String {
-    let clean: String = value
+
+fn stable_id(value: &str, fallback: &str) -> String {
+    let value: String = value
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "._:-".contains(c) {
-                c
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || "._:-".contains(character) {
+                character
             } else {
                 '-'
             }
         })
         .take(160)
         .collect();
-    if clean
+    if value
         .chars()
         .next()
-        .is_some_and(|c| c.is_ascii_alphanumeric())
+        .is_some_and(|character| character.is_ascii_alphanumeric())
     {
-        clean
+        value
     } else {
         fallback.to_owned()
     }
 }
-fn status(value: &str, complete: bool) -> &'static str {
+
+fn item(params: &Value) -> &Value {
+    params.get("item").unwrap_or(&Value::Null)
+}
+
+fn provider_status(value: &str, completed: bool) -> &'static str {
     match value {
         "failed" | "error" => "failed",
         "cancelled" | "canceled" => "cancelled",
         "interrupted" | "aborted" => "interrupted",
-        _ if complete => "completed",
+        _ if completed => "completed",
         _ => "running",
     }
 }
 
 fn bounded_output(value: &str) -> Value {
-    let redacted = redact_text(value);
-    let bytes = redacted.as_bytes();
-    let start = bytes.len().saturating_sub(MAX_OUTPUT_BYTES);
-    let output = String::from_utf8_lossy(&bytes[start..]).into_owned();
-    let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+    let output = redact_text(value);
+    let output_truncated = output != value;
     json!({
         "output": output,
-        "outputBytes": bytes.len(),
-        "outputTruncated": bytes.len() > MAX_OUTPUT_BYTES,
-        "outputDigest": digest,
+        "outputBytes": value.len(),
+        "outputTruncated": output_truncated,
+        "outputDigest": format!("sha256:{:x}", Sha256::digest(value.as_bytes())),
     })
 }
 
-#[derive(Default)]
-struct ParsedDiffFile {
-    lines: Vec<String>,
-    old_path: Option<String>,
-    new_path: Option<String>,
-    rename_from: Option<String>,
-    rename_to: Option<String>,
-    additions: u64,
-    deletions: u64,
-    binary: bool,
-    mode_change: bool,
-    in_hunk: bool,
+fn measurement(value: &Value) -> Value {
+    json!({
+        "inputTokens": value.get("inputTokens").and_then(Value::as_u64).unwrap_or(0),
+        "outputTokens": value.get("outputTokens").and_then(Value::as_u64).unwrap_or(0),
+        "cacheReadTokens": value.get("cachedInputTokens").or_else(|| value.get("cacheReadTokens")).and_then(Value::as_u64).unwrap_or(0),
+        "cacheWriteTokens": value.get("cacheWriteTokens").and_then(Value::as_u64).unwrap_or(0),
+        "activeSeconds": value.get("activeSeconds").and_then(Value::as_f64).filter(|value| *value >= 0.0).unwrap_or(0.0),
+        "requests": value.get("requests").and_then(Value::as_u64).unwrap_or(0),
+        "providerCostUsd": value.get("providerCostUsd").and_then(Value::as_f64).filter(|value| *value >= 0.0).unwrap_or(0.0),
+    })
 }
 
-fn git_diff_path(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed == "/dev/null" {
-        return None;
-    }
-    let decoded = if trimmed.starts_with('"') && trimmed.ends_with('"') {
-        serde_json::from_str::<String>(trimmed).ok()?
-    } else {
-        trimmed.to_owned()
+/// Converts Codex app-server notifications into provider-neutral PRP events.
+/// Provider-native envelopes are consumed here and never cross the PRP boundary.
+pub fn normalize_codex_notification(method: &str, params: &Value) -> Vec<NormalizedProviderEvent> {
+    let mut events = Vec::new();
+    let push = |events: &mut Vec<NormalizedProviderEvent>,
+                event_type: &str,
+                priority: EventPriority,
+                payload: Value| {
+        events.push(NormalizedProviderEvent {
+            event_type: event_type.to_owned(),
+            priority,
+            payload,
+        });
     };
-    let normalized = decoded.replace('\\', "/");
-    let relative = normalized
-        .strip_prefix("a/")
-        .or_else(|| normalized.strip_prefix("b/"))
-        .unwrap_or(&normalized);
-    if relative.is_empty()
-        || relative.starts_with('/')
-        || relative.split('/').any(|part| part == "..")
-    {
-        return None;
-    }
-    Some(relative.chars().take(4096).collect())
-}
 
-fn git_diff_header_token(value: &str) -> Option<(&str, &str)> {
-    let value = value.trim_start();
-    if value.starts_with('"') {
-        let mut escaped = false;
-        for (index, character) in value.char_indices().skip(1) {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == '"' {
-                return Some((&value[..=index], &value[index + 1..]));
-            }
-        }
-        return None;
-    }
-    let end = value.find(char::is_whitespace).unwrap_or(value.len());
-    (end > 0).then_some((&value[..end], &value[end..]))
-}
-
-fn git_diff_header_paths(value: &str) -> (Option<String>, Option<String>) {
-    let Some((old, remaining)) = git_diff_header_token(value) else {
-        return (None, None);
-    };
-    let Some((new, _)) = git_diff_header_token(remaining) else {
-        return (None, None);
-    };
-    (git_diff_path(old), git_diff_path(new))
-}
-
-fn finish_diff_file(current: ParsedDiffFile, files: &mut Vec<Value>) {
-    if files.len() >= MAX_TURN_DIFF_FILES {
-        return;
-    }
-    let path = current
-        .rename_to
-        .as_ref()
-        .or(current.new_path.as_ref())
-        .or(current.old_path.as_ref())
-        .cloned();
-    let Some(path) = path else { return };
-    let previous_path = current
-        .rename_from
-        .clone()
-        .or_else(|| current.rename_to.as_ref().and(current.old_path.clone()));
-    let operation = if current.rename_to.is_some() && previous_path.is_some() {
-        "rename"
-    } else if current.old_path.is_none() {
-        "create"
-    } else if current.new_path.is_none() {
-        "delete"
-    } else if current.mode_change && current.additions == 0 && current.deletions == 0 {
-        "mode_change"
-    } else {
-        "modify"
-    };
-    let patch = format!("{}\n", current.lines.join("\n"));
-    files.push(json!({
-        "path": path,
-        "operation": operation,
-        "previousPath": previous_path,
-        "additions": if current.binary { Value::Null } else { json!(current.additions) },
-        "deletions": if current.binary { Value::Null } else { json!(current.deletions) },
-        "binary": current.binary,
-        "diff": if current.binary { Value::Null } else { json!(patch.chars().take(MAX_TURN_DIFF_CHARS_PER_FILE).collect::<String>()) },
-    }));
-}
-
-fn parse_turn_diff(value: &str) -> Vec<Value> {
-    let mut files = Vec::new();
-    let mut current: Option<ParsedDiffFile> = None;
-    for line in value.lines() {
-        if line.starts_with("diff --git ") {
-            if let Some(previous) = current.take() {
-                finish_diff_file(previous, &mut files);
-            }
-            let (old_path, new_path) = line
-                .strip_prefix("diff --git ")
-                .map(git_diff_header_paths)
-                .unwrap_or((None, None));
-            current = Some(ParsedDiffFile {
-                lines: vec![line.to_owned()],
-                old_path,
-                new_path,
-                ..ParsedDiffFile::default()
-            });
-            continue;
-        }
-        let Some(file) = current.as_mut() else {
-            continue;
-        };
-        file.lines.push(line.to_owned());
-        if let Some(path) = line.strip_prefix("--- ") {
-            file.old_path = git_diff_path(path);
-        } else if let Some(path) = line.strip_prefix("+++ ") {
-            file.new_path = git_diff_path(path);
-        } else if let Some(path) = line.strip_prefix("rename from ") {
-            file.rename_from = git_diff_path(path);
-        } else if let Some(path) = line.strip_prefix("rename to ") {
-            file.rename_to = git_diff_path(path);
-        } else if line.starts_with("old mode ") || line.starts_with("new mode ") {
-            file.mode_change = true;
-        } else if line.starts_with("Binary files ") || line == "GIT binary patch" {
-            file.binary = true;
-        } else if line.starts_with("@@") {
-            file.in_hunk = true;
-        } else if file.in_hunk && line.starts_with('+') && !line.starts_with("+++") {
-            file.additions += 1;
-        } else if file.in_hunk && line.starts_with('-') && !line.starts_with("---") {
-            file.deletions += 1;
-        }
-    }
-    if let Some(previous) = current {
-        finish_diff_file(previous, &mut files);
-    }
-    files
-}
-
-/// Convert native provider notifications into bounded provider-neutral PRP records.
-/// Unknown variants remain on the legacy diagnostic stream and are never interpreted from prose.
-pub fn canonical_provider_events(method: &str, params: &Value) -> Vec<(String, Value, String)> {
-    let item = item(params);
-    let kind = text(item.get("type"));
-    let item_id = id(text(item.get("id")).trim(), "provider-item");
-    let complete = method == "item/completed";
-    let mut result = Vec::new();
-    let push =
-        |result: &mut Vec<(String, Value, String)>, event: &str, payload: Value, item_id: &str| {
-            result.push((event.to_owned(), payload, item_id.to_owned()))
-        };
-    if method == "turn/diff/updated" {
-        let turn_id = id(text(params.get("turnId")).trim(), "turn");
-        let patch = text(params.get("diff"));
-        let files = parse_turn_diff(patch);
-        if patch.trim().is_empty() || !files.is_empty() {
-            let known_stats = files.iter().all(|file| {
-                file.get("additions").and_then(Value::as_u64).is_some()
-                    && file.get("deletions").and_then(Value::as_u64).is_some()
-            });
-            let additions = known_stats.then(|| {
-                files
-                    .iter()
-                    .filter_map(|file| file.get("additions").and_then(Value::as_u64))
-                    .sum::<u64>()
-            });
-            let deletions = known_stats.then(|| {
-                files
-                    .iter()
-                    .filter_map(|file| file.get("deletions").and_then(Value::as_u64))
-                    .sum::<u64>()
-            });
-            let file_count = files.len();
-            let change_set_id = format!("{turn_id}:workspace");
+    match method {
+        "thread/compacted" => push(
+            &mut events,
+            "context.compacted",
+            EventPriority::P1,
+            json!({
+                "schema": "paperclip.context.compacted.v1",
+                "compactionId": stable_id(string(params.get("threadId")), "codex-compaction"),
+                "reason": "provider",
+                "preTokens": Value::Null,
+                "postTokens": Value::Null,
+                "sameSession": true,
+            }),
+        ),
+        "turn/started" => push(
+            &mut events,
+            "turn.started",
+            EventPriority::P0,
+            json!({
+                "provider": "codex",
+                "providerTurnId": params.pointer("/turn/id").or_else(|| params.get("turnId")).and_then(Value::as_str),
+            }),
+        ),
+        "turn/completed" | "turn/failed" | "turn/cancelled" | "turn/interrupted" => {
+            let status = match method {
+                "turn/failed" => "failed",
+                "turn/cancelled" => "cancelled",
+                "turn/interrupted" => "interrupted",
+                _ => string(
+                    params
+                        .pointer("/turn/status")
+                        .or_else(|| params.get("status")),
+                ),
+            };
+            let event_type = normalized_codex_terminal_event_type(method, params)
+                .expect("matched Codex terminal method has a normalized terminal type");
             push(
-                &mut result,
-                "workspace.change.updated",
+                &mut events,
+                event_type,
+                EventPriority::P0,
                 json!({
-                    "schema": "paperclip.workspace.diff.v1",
-                    "changeSetId": change_set_id,
-                    "revision": params.get("revision").and_then(Value::as_u64).unwrap_or(1),
-                    "source": "harness_reported",
-                    "complete": false,
-                    "files": files,
-                    "totals": { "files": file_count, "additions": additions, "deletions": deletions },
-                    "patchArtifactRef": Value::Null,
+                    "provider": "codex",
+                    "providerTurnId": params.pointer("/turn/id").or_else(|| params.get("turnId")).and_then(Value::as_str),
+                    "status": provider_status(status, true),
                 }),
-                &change_set_id,
             );
         }
-    } else if method == "turn/plan/updated" {
-        let turn_plan_id = id(text(params.get("turnId")).trim(), "turn-plan");
-        let steps: Vec<Value> = params
-            .get("plan")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .take(256)
-                    .enumerate()
-                    .filter_map(|(index, value)| {
-                        let body = text(value.get("step"))
-                            .trim()
-                            .chars()
-                            .take(4000)
-                            .collect::<String>();
-                        if body.is_empty() {
-                            return None;
-                        }
-                        Some(json!({
-                            "stepId": format!("step-{}", index + 1),
-                            "body": body,
-                            "status": match text(value.get("status")) {
-                                "inProgress" | "in_progress" => "in_progress",
-                                "completed" => "completed",
-                                "blocked" | "failed" | "error" => "blocked",
-                                _ => "pending",
-                            }
-                        }))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let plan_complete = !steps.is_empty()
-            && steps
-                .iter()
-                .all(|step| text(step.get("status")) == "completed");
-        push(
-            &mut result,
-            "plan.updated",
-            json!({"schema":"paperclip.plan.updated.v1","planId":turn_plan_id,"revision":params.get("revision").and_then(Value::as_u64).unwrap_or(1),"explanation":params.get("explanation").and_then(Value::as_str),"steps":steps,"complete":plan_complete,"syncStatus":"not_applicable","documentRevision":Value::Null}),
-            &turn_plan_id,
-        );
-    } else if (method == "item/started" || complete)
-        && ["commandExecution", "mcpToolCall", "dynamicToolCall"].contains(&kind)
-    {
-        let transport = match kind {
-            "mcpToolCall" => "mcp",
-            "dynamicToolCall" => "dynamic",
-            _ => "process",
-        };
-        let mut payload = json!({"schema":"paperclip.tool.execution.v1","executionId":item_id,"transport":transport,"operation":if kind == "commandExecution" {"execute"} else {"unknown"},"name":item.get("tool").or_else(|| item.get("command")).and_then(Value::as_str),"target":Value::Null,"namespace":item.get("server").and_then(Value::as_str),"readOnly":item.get("readOnlyHint").and_then(Value::as_bool),"status":status(text(item.get("status")), complete),"durationMs":item.get("durationMs").and_then(Value::as_u64),"exitCode":item.get("exitCode").and_then(Value::as_i64),"progress":Value::Null});
-        if let Some(object) = payload.as_object_mut() {
-            if item.get("outputBytes").and_then(Value::as_u64).is_some()
-                && item
-                    .get("outputTruncated")
-                    .and_then(Value::as_bool)
-                    .is_some()
-                && item.get("outputDigest").and_then(Value::as_str).is_some()
-            {
-                object.insert(
-                    "output".to_owned(),
-                    item.get("aggregatedOutput").cloned().unwrap_or(Value::Null),
-                );
-                object.insert(
-                    "outputBytes".to_owned(),
-                    item.get("outputBytes").cloned().unwrap_or(json!(0)),
-                );
-                object.insert(
-                    "outputTruncated".to_owned(),
-                    item.get("outputTruncated").cloned().unwrap_or(json!(false)),
-                );
-                object.insert(
-                    "outputDigest".to_owned(),
-                    item.get("outputDigest").cloned().unwrap_or(Value::Null),
-                );
-            } else if let Value::Object(output) = bounded_output(text(
-                item.get("aggregatedOutput").or_else(|| item.get("output")),
-            )) {
-                object.extend(output);
-            }
-        }
-        push(
-            &mut result,
-            if complete {
-                "tool.execution.completed"
-            } else {
-                "tool.execution.started"
-            },
-            payload,
-            &item_id,
-        );
-    } else if (method == "item/started" || complete) && kind == "webSearch" {
-        let action = item.get("action").unwrap_or(&Value::Null);
-        let action_kind = match text(action.get("type")) {
-            "search" => "search",
-            "openPage" => "open_page",
-            "findInPage" => "find_in_page",
-            _ => "other",
-        };
-        let url = text(action.get("url"));
-        let sources: Vec<Value> = if complete {
-            item.get("results")
+        "turn/plan/updated" => {
+            let plan_id = stable_id(string(params.get("turnId")), "codex-plan");
+            let steps = params
+                .get("plan")
                 .and_then(Value::as_array)
-                .map(|results| {
-                    results
+                .map(|steps| {
+                    steps
                         .iter()
-                        .take(64)
+                        .take(256)
                         .enumerate()
-                        .filter_map(|(index, result)| {
-                            let source_url = text(result.get("url"));
-                            if (!source_url.starts_with("http://")
-                                && !source_url.starts_with("https://"))
-                                || source_url.len() > 8192
-                            {
+                        .filter_map(|(index, step)| {
+                            let body = bounded_text(string(step.get("step")), MAX_TEXT_CHARS);
+                            if body.trim().is_empty() {
                                 return None;
                             }
-                            let fallback_id = format!("{item_id}:source:{}", index + 1);
-                            let source_id = id(
-                                text(result.get("ref_id").or_else(|| result.get("refId"))),
-                                &fallback_id,
-                            );
-                            let title = redact_text(text(result.get("title")));
-                            let title: String = if title.is_empty() {
-                                source_url.chars().take(4000).collect()
-                            } else {
-                                title.chars().take(4000).collect()
-                            };
-                            let snippet = redact_text(text(result.get("snippet")));
                             Some(json!({
-                                "sourceId": source_id,
-                                "title": title,
-                                "url": source_url,
-                                "snippet": if snippet.is_empty() { Value::Null } else { Value::String(snippet.chars().take(4000).collect()) },
+                                "stepId": format!("step-{}", index + 1),
+                                "body": body,
+                                "status": match string(step.get("status")) {
+                                    "inProgress" | "in_progress" => "in_progress",
+                                    "completed" => "completed",
+                                    "blocked" | "failed" | "error" => "blocked",
+                                    _ => "pending",
+                                },
                             }))
                         })
-                        .collect()
+                        .collect::<Vec<_>>()
                 })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        push(
-            &mut result,
-            if complete {
-                "research.completed"
-            } else {
-                "research.started"
-            },
-            json!({"schema":"paperclip.research.v1","researchId":item_id,"action":action_kind,"status":if complete {"completed"} else {"running"},"query":item.get("query").or_else(|| action.get("query")).and_then(Value::as_str),"url":if url.starts_with("http://") || url.starts_with("https://") {Value::String(url.to_owned())} else {Value::Null},"pattern":action.get("pattern").and_then(Value::as_str),"sources":sources}),
-            &item_id,
-        );
-    } else if (method == "item/started" || complete)
-        && ["collabAgentToolCall", "subAgentActivity"].contains(&kind)
-    {
-        push(
-            &mut result,
-            if complete {
-                "delegation.completed"
-            } else {
-                "delegation.started"
-            },
-            json!({"schema":"paperclip.delegation.v1","delegationId":item_id,"action":"spawn","status":if complete {"completed"} else {"running"},"children":[]}),
-            &item_id,
-        );
-    } else if method == "thread/compacted"
-        || ((method == "item/started" || complete) && kind == "contextCompaction")
-    {
-        push(
-            &mut result,
-            "context.compacted",
-            json!({"schema":"paperclip.context.compacted.v1","compactionId":item_id,"reason":"provider","preTokens":Value::Null,"postTokens":Value::Null,"sameSession":true}),
-            &item_id,
-        );
-    } else if method == "model/rerouted" {
-        push(
-            &mut result,
-            "model.route.changed",
-            json!({"schema":"paperclip.model.route_changed.v1","routeId":id(text(params.get("turnId")),"model-route"),"provider":"openai","requestedModel":text(params.get("fromModel")),"fromModel":params.get("fromModel").and_then(Value::as_str),"effectiveModel":text(params.get("toModel")),"reason":text(params.get("reason"))}),
-            &item_id,
-        );
-    } else if method == "model/verification" || method == "model/safetyBuffering/updated" {
-        let buffering = params
-            .get("showBufferingUi")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        push(
-            &mut result,
-            "model.verification.updated",
-            json!({"schema":"paperclip.model.verification.v1","verificationId":id(text(params.get("turnId")),"model-verification"),"status":if buffering {"running"} else {"completed"},"classes":[],"buffering":buffering,"summary":Value::Null}),
-            &item_id,
-        );
-    } else if (method == "item/started" || complete) && kind == "imageView" {
-        push(
-            &mut result,
-            "artifact.viewed",
-            json!({"schema":"paperclip.artifact.viewed.v1","artifactId":item_id,"reference":Value::Null,"mediaType":"image/*","title":Value::Null}),
-            &item_id,
-        );
-    } else if (method == "item/started" || complete) && kind == "imageGeneration" {
-        push(
-            &mut result,
-            "artifact.generated",
-            json!({"schema":"paperclip.artifact.generated.v1","artifactId":item_id,"status":if complete {"completed"} else {"running"},"reference":Value::Null,"mediaType":"image/*","registered":false,"transparentBackground":item.get("transparentBackground").and_then(Value::as_bool),"failure":Value::Null}),
-            &item_id,
-        );
-    } else if (method == "item/started" || complete)
-        && (kind == "enteredReviewMode" || kind == "exitedReviewMode")
-    {
-        push(
-            &mut result,
-            "review.mode.changed",
-            json!({"schema":"paperclip.review.mode_changed.v1","reviewId":item_id,"state":if kind == "enteredReviewMode" {"entered"} else {"exited"},"scope":Value::Null}),
-            &item_id,
-        );
-    } else if method == "hook/started" || method == "hook/completed" {
-        let run = params.get("run").unwrap_or(&Value::Null);
-        let hook_id = id(text(run.get("id")), "hook");
-        push(
-            &mut result,
-            if method.ends_with("started") {
-                "hook.started"
-            } else {
-                "hook.completed"
-            },
-            json!({"schema":"paperclip.hook.v1","hookId":hook_id,"event":text(run.get("eventName")),"scope":text(run.get("scope")),"status":if method.ends_with("started") {"running"} else {"completed"},"blocking":text(run.get("executionMode")) == "blocking","durationMs":run.get("durationMs").and_then(Value::as_u64),"summary":run.get("statusMessage").and_then(Value::as_str)}),
-            &hook_id,
-        );
-    } else if complete && kind == "agentMessage" && item.get("memoryCitation").is_some() {
-        let entries = item
-            .get("memoryCitation")
-            .and_then(|citation| citation.get("entries"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for (index, entry) in entries.iter().take(64).enumerate() {
-            let citation_id = format!("{item_id}:citation:{}", index + 1);
+                .unwrap_or_default();
+            let complete = !steps.is_empty()
+                && steps
+                    .iter()
+                    .all(|step| step.get("status").and_then(Value::as_str) == Some("completed"));
             push(
-                &mut result,
-                "memory.citation.referenced",
-                json!({"schema":"paperclip.memory.citation.v1","citationId":citation_id,"messageItemId":item_id,"label":entry.get("label").and_then(Value::as_str).unwrap_or("Memory source"),"available":false,"reference":Value::Null}),
-                &citation_id,
+                &mut events,
+                "plan.updated",
+                EventPriority::P1,
+                json!({
+                    "schema": "paperclip.plan.updated.v1",
+                    "planId": plan_id,
+                    "revision": params.get("revision").and_then(Value::as_u64).filter(|value| *value > 0).unwrap_or(1),
+                    "explanation": params.get("explanation").and_then(Value::as_str).map(|value| bounded_text(value, MAX_TEXT_CHARS)),
+                    "steps": steps,
+                    "complete": complete,
+                    "syncStatus": "not_applicable",
+                    "documentRevision": Value::Null,
+                }),
             );
         }
-    } else if method == "item/autoApprovalReview/started"
-        || method == "item/autoApprovalReview/completed"
-    {
-        let review_id = id(text(params.get("reviewId")), "safety-review");
-        push(
-            &mut result,
-            if method.ends_with("started") {
-                "safety.review.started"
-            } else {
-                "safety.review.completed"
-            },
-            json!({"schema":"paperclip.safety.review.v1","reviewId":review_id,"targetExecutionId":params.get("targetItemId").and_then(Value::as_str),"status":if method.ends_with("started") {"running"} else {"completed"},"decision":if method.ends_with("started") {"pending"} else {"unknown"},"summary":Value::Null}),
-            &review_id,
-        );
-    } else if method == "item/commandExecution/terminalInteraction" {
-        let execution_id = id(text(params.get("itemId")), "execution");
-        push(
-            &mut result,
-            "terminal.input.sent",
-            json!({"schema":"paperclip.terminal.input_sent.v1","executionId":execution_id,"origin":"agent","inputClass":"text","byteCount":text(params.get("stdin")).len()}),
-            &execution_id,
-        );
-    } else if (method == "item/started" || complete) && kind == "sleep" {
-        push(
-            &mut result,
-            if complete {
-                "wait.completed"
-            } else {
-                "wait.started"
-            },
-            json!({"schema":"paperclip.wait.v1","waitId":item_id,"reason":"timer","status":if complete {"completed"} else {"running"},"plannedDurationMs":item.get("durationMs").and_then(Value::as_u64),"elapsedDurationMs":if complete {item.get("durationMs").and_then(Value::as_u64)} else {None}}),
-            &item_id,
-        );
-    } else if [
-        "error",
-        "warning",
-        "guardianWarning",
-        "deprecationNotice",
-        "configWarning",
-        "windows/worldWritableWarning",
-    ]
-    .contains(&method)
-    {
-        let notice_id = id(&format!("{method}:notice"), "provider-notice");
-        push(
-            &mut result,
+        "thread/tokenUsage/updated" => {
+            let cumulative = params
+                .get("tokenUsage")
+                .and_then(|value| value.get("total"))
+                .or_else(|| params.get("total"))
+                .unwrap_or(&Value::Null);
+            let run_delta = params
+                .get("tokenUsage")
+                .and_then(|value| value.get("last"))
+                .or_else(|| params.get("last"));
+            push(
+                &mut events,
+                "usage.reported",
+                EventPriority::P0,
+                json!({
+                    "provider": "codex",
+                    "model": params.get("model").and_then(Value::as_str).map(|value| bounded_text(value, 240)),
+                    "providerSessionId": params.get("threadId").and_then(Value::as_str).map(|value| bounded_text(value, 240)),
+                    "providerRequestId": Value::Null,
+                    "cumulative": measurement(cumulative),
+                    // `total` is session-cumulative. Preserve whether Codex
+                    // supplied a per-run delta so consumers never relabel a
+                    // session total or a placeholder zero as run usage.
+                    "runDeltaAvailable": run_delta.is_some(),
+                    "runDelta": measurement(run_delta.unwrap_or(&Value::Null)),
+                }),
+            );
+        }
+        "error" | "warning" | "deprecationNotice" | "configWarning" => push(
+            &mut events,
             "provider.notice.recorded",
-            json!({"schema":"paperclip.provider.notice.v1","noticeId":notice_id,"severity":if method == "error" {"error"} else {"warning"},"category":method.replace('/', "_"),"scope":if method.contains("config") || method.contains("windows") {"environment"} else {"turn"},"recoverable":method != "error","userActionable":method == "error" || method == "warning","summary":text(params.get("message"))}),
-            &notice_id,
-        );
+            EventPriority::P0,
+            json!({
+                "schema": "paperclip.provider.notice.v1",
+                "noticeId": stable_id(&format!("codex-{method}"), "codex-notice"),
+                "severity": if method == "error" { "error" } else { "warning" },
+                "category": method.replace('/', "_"),
+                "scope": if method.contains("config") { "environment" } else { "turn" },
+                "recoverable": method != "error",
+                "userActionable": true,
+                "summary": bounded_text(string(params.get("message")), MAX_TEXT_CHARS),
+            }),
+        ),
+        "item/agentMessage/delta" => push(
+            &mut events,
+            "item.delta",
+            EventPriority::P2,
+            json!({
+                "provider": "codex",
+                "itemId": stable_id(string(params.get("itemId")), "codex-message"),
+                "kind": "agentMessage",
+                "channel": "progress",
+                "providerMethod": method,
+                "text": bounded_text(string(params.get("delta")), MAX_TEXT_CHARS),
+            }),
+        ),
+        "item/started" | "item/completed" => {
+            let provider_item = item(params);
+            let item_id = stable_id(string(provider_item.get("id")), "codex-item");
+            let item_type = string(provider_item.get("type"));
+            let completed = method == "item/completed";
+            if matches!(item_type, "commandExecution" | "mcpToolCall") {
+                let mut payload = json!({
+                    "schema": "paperclip.tool.execution.v1",
+                    "executionId": item_id,
+                    "transport": if item_type == "mcpToolCall" { "mcp" } else { "process" },
+                    "operation": if item_type == "commandExecution" { "execute" } else { "unknown" },
+                    "name": provider_item.get("tool").or_else(|| provider_item.get("command")).and_then(Value::as_str).map(|value| bounded_text(value, 240)),
+                    "target": Value::Null,
+                    "namespace": provider_item.get("server").and_then(Value::as_str).map(|value| bounded_text(value, 240)),
+                    "readOnly": provider_item.get("readOnlyHint").and_then(Value::as_bool),
+                    "status": provider_status(string(provider_item.get("status")), completed),
+                    "durationMs": provider_item.get("durationMs").and_then(Value::as_u64),
+                    "exitCode": provider_item.get("exitCode").and_then(Value::as_i64),
+                    "progress": Value::Null,
+                });
+                if let (Some(object), Value::Object(output)) = (
+                    payload.as_object_mut(),
+                    bounded_output(string(
+                        provider_item
+                            .get("aggregatedOutput")
+                            .or_else(|| provider_item.get("output")),
+                    )),
+                ) {
+                    object.extend(output);
+                }
+                push(
+                    &mut events,
+                    if completed {
+                        "tool.execution.completed"
+                    } else {
+                        "tool.execution.started"
+                    },
+                    if completed {
+                        EventPriority::P1
+                    } else {
+                        EventPriority::P2
+                    },
+                    payload,
+                );
+            } else {
+                push(
+                    &mut events,
+                    if completed {
+                        "item.completed"
+                    } else {
+                        "item.started"
+                    },
+                    if completed {
+                        EventPriority::P1
+                    } else {
+                        EventPriority::P2
+                    },
+                    json!({
+                        "provider": "codex",
+                        "itemId": item_id,
+                        "kind": bounded_text(item_type, 160),
+                        "status": provider_status(string(provider_item.get("status")), completed),
+                        "channel": if item_type == "agentMessage" { "progress" } else { "detail" },
+                        "text": provider_item.get("text").and_then(Value::as_str).map(|value| bounded_text(value, MAX_TEXT_CHARS)),
+                    }),
+                );
+            }
+        }
+        _ => {}
     }
-    result
+
+    events
+}
+
+/// Converts an already scope-checked and payload-validated ACPX runtime event
+/// into provider-neutral PRP activity. Operational events such as semantic
+/// results and turn completion remain owned by the stateful provider adapter.
+/// That adapter also suppresses repeated reasoning-start boundaries in a turn.
+pub fn normalize_acpx_runtime_event(
+    kind: AcpxRuntimeEventKind,
+    payload: &Value,
+    tool_operation: Option<&str>,
+    fallback_item_id: &str,
+    turn_id: &str,
+    provider_requests: u64,
+) -> Vec<NormalizedProviderEvent> {
+    let item_id = stable_id(
+        match kind {
+            AcpxRuntimeEventKind::ToolCall => string(payload.get("toolCallId")),
+            AcpxRuntimeEventKind::Plan => turn_id,
+            _ => string(payload.get("messageId")),
+        },
+        fallback_item_id,
+    );
+    match kind {
+        AcpxRuntimeEventKind::TextDelta => vec![NormalizedProviderEvent {
+            event_type: "item.delta".to_owned(),
+            priority: EventPriority::P2,
+            payload: json!({
+                "provider": "acpx",
+                "itemId": item_id,
+                "kind": "agentMessage",
+                "channel": "progress",
+                "providerMethod": "runtime.event",
+                "text": bounded_text(string(payload.get("text")), MAX_TEXT_CHARS),
+            }),
+        }],
+        AcpxRuntimeEventKind::Thinking => vec![NormalizedProviderEvent {
+            event_type: "item.started".to_owned(),
+            priority: EventPriority::P2,
+            payload: json!({
+                "provider": "acpx",
+                "itemId": item_id,
+                "kind": "reasoning",
+                "status": "running",
+                "channel": "detail",
+                "text": Value::Null,
+            }),
+        }],
+        AcpxRuntimeEventKind::Plan => normalize_acpx_plan(payload, &item_id),
+        AcpxRuntimeEventKind::Status => {
+            normalize_acpx_status(payload, &item_id, turn_id, provider_requests)
+        }
+        AcpxRuntimeEventKind::ToolCall => {
+            normalize_acpx_tool_call(payload, &item_id, tool_operation.unwrap_or("unknown"))
+        }
+        AcpxRuntimeEventKind::ProviderNotice => vec![acpx_notice(
+            &item_id,
+            string(payload.get("severity")),
+            string(payload.get("category")),
+            string(payload.get("summary")),
+            false,
+        )],
+        AcpxRuntimeEventKind::Error => vec![acpx_notice(
+            &item_id,
+            "error",
+            string(payload.get("code")),
+            string(payload.get("message")),
+            true,
+        )],
+        AcpxRuntimeEventKind::SemanticResult | AcpxRuntimeEventKind::Done => Vec::new(),
+    }
+}
+
+fn normalize_acpx_plan(payload: &Value, plan_id: &str) -> Vec<NormalizedProviderEvent> {
+    let steps = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(256)
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let body = bounded_text(string(entry.get("content")), MAX_TEXT_CHARS);
+            if body.trim().is_empty() {
+                return None;
+            }
+            Some(json!({
+                "stepId": format!("step-{}", index + 1),
+                "body": body,
+                "status": match string(entry.get("status")) {
+                    "inProgress" | "in_progress" => "in_progress",
+                    "completed" => "completed",
+                    "blocked" | "failed" | "error" => "blocked",
+                    _ => "pending",
+                },
+            }))
+        })
+        .collect::<Vec<_>>();
+    let complete = !steps.is_empty()
+        && steps
+            .iter()
+            .all(|step| step.get("status").and_then(Value::as_str) == Some("completed"));
+    vec![NormalizedProviderEvent {
+        event_type: "plan.updated".to_owned(),
+        priority: EventPriority::P1,
+        payload: json!({
+            "schema": "paperclip.plan.updated.v1",
+            "planId": plan_id,
+            "revision": 1,
+            "explanation": Value::Null,
+            "steps": steps,
+            "complete": complete,
+            "syncStatus": "not_applicable",
+            "documentRevision": Value::Null,
+        }),
+    }]
+}
+
+fn normalize_acpx_status(
+    payload: &Value,
+    item_id: &str,
+    turn_id: &str,
+    provider_requests: u64,
+) -> Vec<NormalizedProviderEvent> {
+    let tag = string(payload.get("tag"));
+    if tag == "usage_update" {
+        let breakdown = payload.get("breakdown").unwrap_or(&Value::Null);
+        let usage = json!({
+            "inputTokens": nonnegative_u64(breakdown.get("inputTokens")),
+            "outputTokens": nonnegative_u64(breakdown.get("outputTokens")),
+            "cacheReadTokens": nonnegative_u64(
+                breakdown
+                    .get("cachedReadTokens")
+                    .or_else(|| breakdown.get("cacheReadTokens")),
+            ),
+            "cacheWriteTokens": nonnegative_u64(
+                breakdown
+                    .get("cachedWriteTokens")
+                    .or_else(|| breakdown.get("cacheWriteTokens")),
+            ),
+            "activeSeconds": 0.0,
+            "requests": provider_requests,
+            "providerCostUsd": payload
+                .pointer("/cost/amount")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .unwrap_or(0.0),
+        });
+        return vec![NormalizedProviderEvent {
+            event_type: "usage.reported".to_owned(),
+            priority: EventPriority::P0,
+            payload: json!({
+                "provider": "acpx",
+                "model": payload
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(|value| bounded_text(value, 240)),
+                "providerSessionId": Value::Null,
+                "providerRequestId": Value::Null,
+                "cumulative": usage,
+                "runDelta": usage,
+            }),
+        }];
+    }
+    if tag == "current_mode_update" {
+        let status = string(payload.get("text"));
+        return vec![NormalizedProviderEvent {
+            event_type: "review.mode.changed".to_owned(),
+            priority: EventPriority::P1,
+            payload: json!({
+                "schema": "paperclip.review.mode_changed.v1",
+                "reviewId": stable_id(turn_id, item_id),
+                "state": if status.to_ascii_lowercase().contains("review")
+                    || status.to_ascii_lowercase().contains("plan")
+                {
+                    "entered"
+                } else {
+                    "exited"
+                },
+                "scope": if status.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(bounded_text(status, MAX_TEXT_CHARS))
+                },
+            }),
+        }];
+    }
+    if matches!(
+        tag,
+        "available_commands_update" | "config_option_update" | "session_info_update"
+    ) {
+        return Vec::new();
+    }
+    vec![acpx_notice(
+        item_id,
+        "info",
+        tag,
+        string(payload.get("text")),
+        false,
+    )]
+}
+
+fn normalize_acpx_tool_call(
+    payload: &Value,
+    item_id: &str,
+    operation: &str,
+) -> Vec<NormalizedProviderEvent> {
+    let native_status = string(payload.get("status"));
+    let status = provider_status(native_status, native_status == "completed");
+    let terminal = status != "running";
+    let raw_title = string(payload.get("title"));
+    let title = bounded_text(raw_title, 240);
+    let output = match payload.get("rawOutput").or_else(|| payload.get("output")) {
+        Some(Value::String(value)) => value.clone(),
+        Some(value) => serde_json::to_string(value).unwrap_or_default(),
+        None => String::new(),
+    };
+    let mut normalized = json!({
+        "schema": "paperclip.tool.execution.v1",
+        "executionId": item_id,
+        "transport": "builtin",
+        "operation": operation,
+        "name": if title.is_empty() { Value::Null } else { Value::String(title) },
+        "target": safe_acpx_location(payload.pointer("/locations/0"), operation == "edit"),
+        "namespace": Value::Null,
+        "readOnly": matches!(operation, "read" | "search" | "list"),
+        "status": status,
+        "durationMs": Value::Null,
+        "exitCode": Value::Null,
+        "progress": if terminal {
+            Value::Null
+        } else {
+            payload
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| Value::String(bounded_text(value, MAX_TEXT_CHARS)))
+                .unwrap_or(Value::Null)
+        },
+    });
+    if let (Some(object), Value::Object(output)) =
+        (normalized.as_object_mut(), bounded_output(&output))
+    {
+        object.extend(output);
+    }
+    vec![NormalizedProviderEvent {
+        event_type: if terminal {
+            "tool.execution.completed"
+        } else if string(payload.get("tag")) == "tool_call" {
+            "tool.execution.started"
+        } else {
+            "tool.execution.progressed"
+        }
+        .to_owned(),
+        priority: if terminal {
+            EventPriority::P1
+        } else {
+            EventPriority::P2
+        },
+        payload: normalized,
+    }]
+}
+
+fn acpx_notice(
+    item_id: &str,
+    severity: &str,
+    category: &str,
+    summary: &str,
+    user_actionable: bool,
+) -> NormalizedProviderEvent {
+    NormalizedProviderEvent {
+        event_type: "provider.notice.recorded".to_owned(),
+        priority: if severity == "error" {
+            EventPriority::P0
+        } else {
+            EventPriority::P1
+        },
+        payload: json!({
+            "schema": "paperclip.provider.notice.v1",
+            "noticeId": item_id,
+            "severity": match severity {
+                "error" => "error",
+                "warning" => "warning",
+                _ => "info",
+            },
+            "category": stable_id(category, "acpx_provider_update"),
+            "scope": "turn",
+            "recoverable": severity != "error",
+            "userActionable": user_actionable,
+            "summary": if summary.trim().is_empty() {
+                "The qualified ACP agent emitted a provider update.".to_owned()
+            } else {
+                bounded_text(summary, MAX_TEXT_CHARS)
+            },
+        }),
+    }
+}
+
+fn nonnegative_u64(value: Option<&Value>) -> u64 {
+    value.and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn safe_acpx_location(value: Option<&Value>, allow_create_target: bool) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    // Only the pinned sidecar may attest that it resolved this value within
+    // the workspace under the provider host's path semantics. Ambiguous URI
+    // scheme, Windows drive, and leading-backslash shapes additionally require
+    // proof that the sidecar resolved an existing workspace entry as POSIX filename data,
+    // or that an edit's not-yet-created target has an in-workspace parent.
+    if value.get("pathBoundary").and_then(Value::as_str)
+        != Some("paperclip.workspace_relative_display.v2")
+    {
+        return Value::Null;
+    }
+    let raw_path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if raw_path.is_empty()
+        || raw_path.starts_with('/')
+        || raw_path.contains('\0')
+        || raw_path.split('/').any(|segment| segment == "..")
+    {
+        return Value::Null;
+    }
+    let requires_entry_attestation = raw_path.starts_with('\\')
+        || has_windows_drive_prefix(raw_path)
+        || has_rfc_uri_scheme_prefix(raw_path);
+    if requires_entry_attestation {
+        let attestation = value.get("pathAttestation").and_then(Value::as_str);
+        if attestation != Some("paperclip.workspace_entry.v1")
+            && !(allow_create_target && attestation == Some("paperclip.workspace_create_target.v1"))
+        {
+            return Value::Null;
+        }
+    }
+    Value::String(raw_path.chars().take(4_000).collect())
+}
+
+fn has_windows_drive_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn has_rfc_uri_scheme_prefix(value: &str) -> bool {
+    let Some((scheme, _rest)) = value.split_once(':') else {
+        return false;
+    };
+    let mut characters = scheme.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
 }
 
 #[cfg(test)]
@@ -568,112 +1037,159 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_input_never_retains_content() {
-        let events = canonical_provider_events(
-            "item/commandExecution/terminalInteraction",
-            &json!({"itemId":"exec-1","stdin":"Bearer top-secret"}),
-        );
-        assert_eq!(events[0].0, "terminal.input.sent");
-        assert_eq!(events[0].1["byteCount"], 17);
-        assert!(!events[0].1.to_string().contains("top-secret"));
-    }
-
-    #[test]
-    fn command_output_is_redacted_bounded_and_digested() {
-        let output = format!("Bearer secret {}", "x".repeat(MAX_OUTPUT_BYTES + 10));
-        let events = canonical_provider_events(
-            "item/completed",
-            &json!({"item":{"id":"exec-1","type":"commandExecution","status":"completed","aggregatedOutput":output}}),
-        );
-        let payload = &events[0].1;
-        assert_eq!(payload["outputTruncated"], true);
+    fn enforces_the_declared_safe_path_contract() {
+        for location in [
+            "/absolute/path",
+            r"\server\share",
+            r"C:\secret",
+            "../secret",
+            "src/../../secret",
+            r"foo\..\bar",
+            r"https:\host\secret",
+            "https://example.test/private",
+            "https:example.test/private",
+            "file:secret.txt",
+            "bad\0name",
+        ] {
+            assert_eq!(
+                safe_acpx_location(Some(&json!({"path": location})), false),
+                Value::Null
+            );
+        }
         assert_eq!(
-            payload["output"].as_str().unwrap().as_bytes().len(),
-            MAX_OUTPUT_BYTES
+            safe_acpx_location(Some(&json!({"uri": "https://example.test/private"})), false,),
+            Value::Null,
         );
-        assert!(!payload.to_string().contains("secret"));
-        assert!(payload["outputDigest"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
+        for location in [
+            "/absolute/path",
+            "../secret",
+            "src/../../secret",
+            "custom:payload",
+            "urn:isbn:9780131103627",
+            r"C:Users\alice\secret.txt",
+            "D:relative.txt",
+            "bad\0name",
+        ] {
+            assert_eq!(
+                safe_acpx_location(
+                    Some(&json!({
+                        "path": location,
+                        "pathBoundary": "paperclip.workspace_relative_display.v2"
+                    })),
+                    false,
+                ),
+                Value::Null,
+            );
+        }
     }
 
     #[test]
-    fn maps_memory_citations_without_provider_thread_references() {
-        let events = canonical_provider_events(
-            "item/completed",
-            &json!({"item":{"id":"message-1","type":"agentMessage","memoryCitation":{"entries":[{"label":"Decision","threadId":"native-secret"}]}}}),
-        );
-        assert_eq!(events[0].0, "memory.citation.referenced");
-        assert_eq!(events[0].1["available"], false);
-        assert!(!events[0].1.to_string().contains("native-secret"));
+    fn preserves_valid_posix_display_characters() {
+        for location in [
+            "src:main.rs",
+            "foo:bar/baz",
+            "src:/main.rs",
+            "a:/foo",
+            "A:b/file.txt",
+            r"folder\literal",
+            r"foo\..\bar",
+            "reports/100%/summary.txt",
+        ] {
+            assert_eq!(
+                safe_acpx_location(
+                    Some(&json!({
+                        "path": location,
+                        "pathBoundary": "paperclip.workspace_relative_display.v2",
+                        "pathAttestation": "paperclip.workspace_entry.v1"
+                    })),
+                    false,
+                ),
+                Value::String(location.to_owned()),
+            );
+        }
     }
 
     #[test]
-    fn maps_bounded_safe_web_search_sources() {
-        let events = canonical_provider_events(
-            "item/completed",
-            &json!({"item":{"id":"web-1","type":"webSearch","results":[
-                {"ref_id":"source-1","title":"Protocol notes","url":"https://example.com/prp","snippet":"Canonical event details"},
-                {"ref_id":"unsafe","title":"Unsafe","url":"file:///etc/passwd"}
-            ]}}),
-        );
-        assert_eq!(events[0].0, "research.completed");
-        assert_eq!(events[0].1["sources"].as_array().unwrap().len(), 1);
-        assert_eq!(events[0].1["sources"][0]["sourceId"], "source-1");
-        assert_eq!(events[0].1["sources"][0]["url"], "https://example.com/prp");
-    }
-
-    #[test]
-    fn completed_turn_plan_is_terminal_without_an_item_completion() {
-        let events = canonical_provider_events(
+    fn maps_codex_plan_without_retaining_native_envelope() {
+        let events = normalize_codex_notification(
             "turn/plan/updated",
-            &json!({"turnId":"turn-1","plan":[
-                {"step":"Inspect","status":"completed"},
-                {"step":"Implement","status":"completed"}
-            ]}),
-        );
-        assert_eq!(events[0].0, "plan.updated");
-        assert_eq!(events[0].2, "turn-1");
-        assert_eq!(events[0].1["planId"], "turn-1");
-        assert_eq!(events[0].1["complete"], true);
-        assert_eq!(events[0].1["syncStatus"], "not_applicable");
-        assert_eq!(events[0].1["documentRevision"], Value::Null);
-    }
-
-    #[test]
-    fn proposed_plan_text_is_not_a_turn_checklist() {
-        let events = canonical_provider_events(
-            "item/completed",
-            &json!({"item":{"id":"proposed-plan-1","type":"plan","text":"Ship it"}}),
-        );
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn empty_turn_plan_is_a_non_terminal_clearing_snapshot() {
-        let events =
-            canonical_provider_events("turn/plan/updated", &json!({"turnId":"turn-1","plan":[]}));
-        assert_eq!(events[0].1["steps"], json!([]));
-        assert_eq!(events[0].1["complete"], false);
-    }
-
-    #[test]
-    fn maps_turn_diff_to_a_stable_workspace_snapshot() {
-        let events = canonical_provider_events(
-            "turn/diff/updated",
             &json!({
-                "turnId":"turn-1",
-                "diff":"diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+added\n"
+                "turnId": "turn-1",
+                "revision": 2,
+                "plan": [{"step": "Inspect", "status": "inProgress"}],
+                "accessToken": "secret-value",
             }),
         );
-        assert_eq!(events[0].0, "workspace.change.updated");
-        assert_eq!(events[0].2, "turn-1:workspace");
-        assert_eq!(events[0].1["changeSetId"], "turn-1:workspace");
-        assert_eq!(
-            events[0].1["totals"],
-            json!({"files":1,"additions":2,"deletions":1})
+        assert_eq!(events[0].event_type, "plan.updated");
+        assert_eq!(events[0].payload["steps"][0]["status"], "in_progress");
+        assert!(!events[0].payload.to_string().contains("secret-value"));
+    }
+
+    #[test]
+    fn bounds_and_redacts_command_output() {
+        let events = normalize_codex_notification(
+            "item/completed",
+            &json!({"item": {
+                "id": "exec-1",
+                "type": "commandExecution",
+                "status": "completed",
+                "command": "printenv",
+                "aggregatedOutput": "Authorization: Bearer top-secret",
+            }}),
         );
-        assert_eq!(events[0].1["files"][0]["path"], "src/a.ts");
+        assert_eq!(events[0].event_type, "tool.execution.completed");
+        assert_eq!(events[0].payload["outputTruncated"], true);
+        assert_eq!(events[0].payload["outputBytes"], 32);
+        assert!(!events[0].payload.to_string().contains("top-secret"));
+    }
+
+    #[test]
+    fn maps_terminal_and_usage_events_at_priority_zero() {
+        let terminal = normalize_codex_notification(
+            "turn/completed",
+            &json!({"turn": {"id": "provider-turn", "status": "failed"}}),
+        );
+        assert_eq!(terminal[0].event_type, "turn.failed");
+        assert_eq!(terminal[0].priority, EventPriority::P0);
+        for (method, expected) in [
+            ("turn/failed", "turn.failed"),
+            ("turn/cancelled", "turn.cancelled"),
+            ("turn/interrupted", "turn.interrupted"),
+        ] {
+            let terminal =
+                normalize_codex_notification(method, &json!({"turnId": "provider-turn"}));
+            assert_eq!(terminal[0].event_type, expected);
+            assert_eq!(terminal[0].priority, EventPriority::P0);
+        }
+
+        let usage = normalize_codex_notification(
+            "thread/tokenUsage/updated",
+            &json!({"tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}),
+        );
+        assert_eq!(usage[0].event_type, "usage.reported");
+        assert_eq!(usage[0].payload["cumulative"]["inputTokens"], 12);
+        assert_eq!(usage[0].payload["runDeltaAvailable"], false);
+        assert_eq!(usage[0].payload["runDelta"]["inputTokens"], 0);
+        assert_eq!(usage[0].priority, EventPriority::P0);
+    }
+
+    #[test]
+    fn does_not_substitute_session_cumulative_usage_for_a_missing_run_delta() {
+        let first = normalize_codex_notification(
+            "thread/tokenUsage/updated",
+            &json!({"tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}),
+        );
+        let second = normalize_codex_notification(
+            "thread/tokenUsage/updated",
+            &json!({"tokenUsage": {"total": {"inputTokens": 20, "outputTokens": 5}}}),
+        );
+
+        assert_eq!(first[0].payload["runDelta"]["inputTokens"], 0);
+        assert_eq!(first[0].payload["runDelta"]["outputTokens"], 0);
+        assert_eq!(first[0].payload["runDeltaAvailable"], false);
+        assert_eq!(second[0].payload["runDelta"]["inputTokens"], 0);
+        assert_eq!(second[0].payload["runDelta"]["outputTokens"], 0);
+        assert_eq!(second[0].payload["runDeltaAvailable"], false);
+        assert_eq!(second[0].payload["cumulative"]["inputTokens"], 20);
     }
 }

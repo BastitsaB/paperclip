@@ -23,7 +23,6 @@ import {
   formatQuestionResponseSteeringMessage,
   questionResponseDeliveryService,
 } from "../services/question-response-delivery.js";
-import { NativeSessionSteeringError } from "../services/native-runtime/native-session-executor.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -179,6 +178,20 @@ describeEmbeddedPostgres("question response delivery", () => {
 
   it("persists the receipt atomically and steers exactly once into a running successor", async () => {
     const seeded = await seed({ successorStatus: "running" });
+    const newerRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: newerRunId,
+      companyId: seeded.companyId,
+      agentId: seeded.agentId,
+      invocationSource: "manual",
+      status: "running",
+      runtimeMode: "native",
+      driverKind: "codex",
+      contextSnapshot: { issueId: seeded.issueId },
+      startedAt: new Date(),
+    });
+    await db.update(issues).set({ executionRunId: seeded.successorRunId })
+      .where(eq(issues.id, seeded.issueId));
     const persistedBeforeDelivery = await db.select().from(issueQuestionResponseDeliveries)
       .where(eq(issueQuestionResponseDeliveries.interactionId, seeded.interaction.id))
       .then((rows) => rows[0]);
@@ -226,6 +239,56 @@ describeEmbeddedPostgres("question response delivery", () => {
     expect(deliveryEvents).toHaveLength(1);
     expect(JSON.stringify(deliveryEvents[0]?.details)).not.toContain("Internal API");
     expect(JSON.stringify(deliveryEvents[0]?.details)).not.toContain("Node.js");
+  });
+
+  it("resolves an in-flight native input request before creating a continuation", async () => {
+    const seeded = await seed({
+      adapterType: "paperclip_runner",
+      runtimeMode: "native",
+      sourceStatus: "running",
+    });
+    const wakeup = vi.fn();
+    const resolveNativeQuestion = vi.fn().mockResolvedValue("queued" as const);
+
+    const outcome = await questionResponseDeliveryService(db, {
+      heartbeat: { wakeup } as never,
+      resolveNativeQuestion,
+    }).deliver(seeded.interaction.id);
+
+    expect(outcome).toMatchObject({
+      status: "delivered",
+      mode: "steered",
+      targetRunId: seeded.sourceRunId,
+    });
+    expect(resolveNativeQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      id: seeded.interaction.id,
+      status: "answered",
+    }));
+    expect(wakeup).not.toHaveBeenCalled();
+  });
+
+  it("keeps native input delivery pending while its PRP session is unavailable", async () => {
+    const seeded = await seed({
+      adapterType: "paperclip_runner",
+      runtimeMode: "native",
+      sourceStatus: "running",
+    });
+    const wakeup = vi.fn();
+
+    const outcome = await questionResponseDeliveryService(db, {
+      heartbeat: { wakeup } as never,
+      resolveNativeQuestion: vi.fn().mockResolvedValue("pending" as const),
+    }).deliver(seeded.interaction.id);
+
+    expect(outcome).toBeNull();
+    expect(wakeup).not.toHaveBeenCalled();
+    const [delivery] = await db.select().from(issueQuestionResponseDeliveries);
+    expect(delivery).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+      errorCount: 0,
+      lastErrorCode: "native_question_session_unavailable",
+    });
   });
 
   it("coalesces into a queued successor without creating another wake", async () => {
@@ -538,23 +601,56 @@ describeEmbeddedPostgres("question response delivery", () => {
 
   it("keeps a long wake claim leased while the side effect is active", async () => {
     const seeded = await seed({ sourceStatus: "running" });
-    let releaseWake!: (value: null) => void;
-    const wakeup = vi.fn(() => new Promise<null>((resolve) => {
-      releaseWake = resolve;
-    }));
+    // Each call gets its own resolver. A second, unexpected call fails at
+    // once instead of sharing one resolver with the first call and hanging.
+    const wakeResolvers: Array<(value: null) => void> = [];
+    const wakeup = vi.fn(() => {
+      if (wakeResolvers.length > 0) {
+        throw new Error(
+          "wakeup was invoked a second time for the same claim; a re-entrant delivery must fail at once, not hang",
+        );
+      }
+      return new Promise<null>((resolve) => {
+        wakeResolvers.push(resolve);
+      });
+    });
+
+    // The renewal timer and the sweep both read time from this injected
+    // clock. The test moves the clock by hand, so the assertions below do
+    // not depend on the speed of a database round trip or a timer callback.
+    let clock = new Date("2026-01-01T00:00:00.000Z");
     const service = questionResponseDeliveryService(db, {
       heartbeat: { wakeup } as never,
       steer: vi.fn(),
+      now: () => clock,
       claimStaleMs: 40,
       claimRefreshMs: 5,
     });
 
     const deliveryPromise = service.deliver(seeded.interaction.id);
     await vi.waitFor(() => expect(wakeup).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 70));
+    const [claimedRow] = await db.select().from(issueQuestionResponseDeliveries)
+      .where(eq(issueQuestionResponseDeliveries.interactionId, seeded.interaction.id));
+    const claimedAt = claimedRow!.lastAttemptAt!.getTime();
+
+    // Move the clock past claimStaleMs, then wait for a real renewal tick to
+    // pick it up. This proves the renewal ran. It does not only assert that
+    // a fixed real-time sleep was long enough.
+    clock = new Date(clock.getTime() + 1000);
+    await vi.waitFor(async () => {
+      const [row] = await db.select().from(issueQuestionResponseDeliveries)
+        .where(eq(issueQuestionResponseDeliveries.interactionId, seeded.interaction.id));
+      expect(row?.lastAttemptAt?.getTime()).toBeGreaterThan(claimedAt);
+    });
+
     await expect(service.sweepPending()).resolves.toMatchObject({ scanned: 0 });
-    releaseWake(null);
+    wakeResolvers[0]!(null);
     await expect(deliveryPromise).resolves.toBeNull();
+
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    const [delivery] = await db.select().from(issueQuestionResponseDeliveries)
+      .where(eq(issueQuestionResponseDeliveries.interactionId, seeded.interaction.id));
+    expect(delivery).toMatchObject({ status: "pending", attemptCount: 1 });
   });
 
   it("fences a stale worker after a newer claim generation takes ownership", async () => {
@@ -665,10 +761,11 @@ describeEmbeddedPostgres("question response delivery", () => {
   it("falls back once when successor steering is unsupported", async () => {
     const seeded = await seed({ successorStatus: "running" });
     const fallbackRunId = randomUUID();
-    const steer = vi.fn().mockRejectedValue(new NativeSessionSteeringError(
-      "steering_unsupported",
-      "unsupported",
-    ));
+    const steer = vi.fn().mockRejectedValue(
+      Object.assign(new Error("unsupported"), {
+        code: "steering_unsupported",
+      }),
+    );
     const wakeup = vi.fn().mockImplementation(async () => db.insert(heartbeatRuns).values({
       id: fallbackRunId,
       companyId: seeded.companyId,
