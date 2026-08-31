@@ -89,10 +89,10 @@ import { secretService } from "../services/secrets.js";
 import { authorizationDeniedDetails } from "../services/authorization.js";
 import { providerTraceStore } from "../services/provider-trace-store.js";
 import {
-  persistReprojectedWorkspaceDiffs,
-  projectCodexWorkspaceDiffsFromTrace,
-  type WorkspaceDiffReprojectionSkipReason,
-} from "../services/provider-trace-workspace-diff-reprojection.js";
+  persistReprojectedWorktreeDiffs,
+  projectCodexWorktreeDiffsFromTrace,
+  type WorktreeDiffReprojectionSkipReason,
+} from "../services/provider-trace-worktree-diff-reprojection.js";
 import {
   detectAdapterModel,
   findActiveServerAdapter,
@@ -5779,7 +5779,7 @@ export function agentRoutes(
       if (!run) return;
 
       const trace = await providerTraces.getByRun(run.id, run.companyId);
-      let unavailable: WorkspaceDiffReprojectionSkipReason | null = null;
+      let unavailable: WorktreeDiffReprojectionSkipReason | null = null;
       if (!trace || trace.deletedAt) unavailable = { reason: "trace_unavailable" };
       else if (trace.expiresAt <= new Date()) unavailable = { reason: "trace_expired" };
       else if (trace.status !== "complete") unavailable = { reason: "trace_incomplete" };
@@ -5799,12 +5799,12 @@ export function agentRoutes(
         });
         return;
       }
-      const result = await persistReprojectedWorkspaceDiffs(db, {
+      const result = await persistReprojectedWorktreeDiffs(db, {
         traceId: trace.id,
         runId: run.id,
         companyId: run.companyId,
         agentId: run.agentId,
-        projection: projectCodexWorkspaceDiffsFromTrace(entries),
+        projection: projectCodexWorktreeDiffsFromTrace(entries),
       });
       await logActivity(db, {
         companyId: run.companyId,

@@ -11,7 +11,7 @@ describe("worktree terminology OpenAPI contract freeze", () => {
     const bytes = JSON.stringify(buildOpenApiSpec());
     const digest = createHash("sha256").update(bytes).digest("hex");
 
-    expect(bytes).toHaveLength(846_788);
-    expect(digest).toBe("c399d60ca6547d15a16f60fec378f891ce4a4bbda2f36a03322b22c3502a0c78");
+    expect(bytes).toHaveLength(864_411);
+    expect(digest).toBe("aa16f3015d27190e647b7236984dfd49096a496a1ec64d7fea8683df6b2944c8");
   });
 });

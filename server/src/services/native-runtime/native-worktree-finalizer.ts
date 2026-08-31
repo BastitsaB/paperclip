@@ -8,8 +8,8 @@ import {
   nativeRunFinalizations,
   workspaceOperations,
 } from "@paperclipai/db";
-import { workspaceOperationService } from "../workspace-operations.js";
-import { inspectManagedGitWorktreeBranch } from "../workspace-runtime.js";
+import { worktreeOperationService } from "../worktree-operations.js";
+import { inspectManagedGitWorktreeBranch } from "../worktree-runtime.js";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -22,11 +22,11 @@ function readString(value: unknown) {
 }
 
 /**
- * Resume the real workspace-finalization action for a result-bearing native
- * run. This service observes the workspace; it never fabricates a successful
+ * Resume the real worktree-finalization action for a result-bearing native
+ * run. This service observes the worktree; it never fabricates a successful
  * marker. The caller decides whether a failed observation is retryable.
  */
-export async function resumeNativeWorkspaceFinalization(input: {
+export async function resumeNativeWorktreeFinalization(input: {
   db: Db;
   runId: string;
 }) {
@@ -36,7 +36,7 @@ export async function resumeNativeWorkspaceFinalization(input: {
     runnerProfileJson: heartbeatRuns.runnerProfileJson,
     issueId: nativeRunFinalizations.issueId,
     resultId: nativeRunFinalizations.resultId,
-    issueWorkspaceId: issues.executionWorkspaceId,
+    issueWorktreeId: issues.executionWorkspaceId,
   })
     .from(heartbeatRuns)
     .innerJoin(nativeRunFinalizations, eq(nativeRunFinalizations.runId, heartbeatRuns.id))
@@ -59,21 +59,21 @@ export async function resumeNativeWorkspaceFinalization(input: {
 
   const persistedInput = record(record(bound.runnerProfileJson).nativeExecutionInput);
   const binding = record(persistedInput.binding);
-  const workspaceId = previous?.executionWorkspaceId
-    ?? bound.issueWorkspaceId
+  const worktreeId = previous?.executionWorkspaceId
+    ?? bound.issueWorktreeId
     ?? readString(binding.executionWorkspaceId);
-  const workspace = workspaceId
+  const worktree = worktreeId
     ? await input.db.select().from(executionWorkspaces).where(and(
-        eq(executionWorkspaces.id, workspaceId),
+        eq(executionWorkspaces.id, worktreeId),
         eq(executionWorkspaces.companyId, bound.companyId),
       )).limit(1).then((rows) => rows[0] ?? null)
     : null;
-  const cwd = workspace?.providerRef ?? workspace?.cwd ?? previous?.cwd ?? null;
+  const cwd = worktree?.providerRef ?? worktree?.cwd ?? previous?.cwd ?? null;
 
-  const recorder = workspaceOperationService(input.db).createRecorder({
+  const recorder = worktreeOperationService(input.db).createRecorder({
     companyId: bound.companyId,
     heartbeatRunId: input.runId,
-    executionWorkspaceId: workspace?.id ?? workspaceId,
+    executionWorkspaceId: worktree?.id ?? worktreeId,
     issueId: bound.issueId,
   });
   return recorder.recordOperation({
@@ -81,17 +81,17 @@ export async function resumeNativeWorkspaceFinalization(input: {
     cwd,
     metadata: {
       resumedFromOperationId: previous?.id ?? null,
-      owningService: "native_workspace_finalizer",
-      observation: workspace?.strategyType === "git_worktree"
+      owningService: "native_worktree_finalizer",
+      observation: worktree?.strategyType === "git_worktree"
         ? "managed_git_worktree_branch"
-        : "workspace_directory",
+        : "worktree_directory",
     },
     run: async () => {
       if (!cwd) {
         return {
           status: "failed",
           exitCode: 1,
-          stderr: "Native workspace finalization cannot resolve the persisted workspace path.\n",
+          stderr: "Native worktree finalization cannot resolve the persisted worktree path.\n",
         };
       }
       const isDirectory = await fs.stat(cwd).then((stat) => stat.isDirectory()).catch(() => false);
@@ -99,13 +99,13 @@ export async function resumeNativeWorkspaceFinalization(input: {
         return {
           status: "failed",
           exitCode: 1,
-          stderr: `Native workspace finalization could not access workspace directory ${cwd}.\n`,
+          stderr: `Native worktree finalization could not access worktree directory ${cwd}.\n`,
         };
       }
-      if (workspace?.strategyType === "git_worktree") {
+      if (worktree?.strategyType === "git_worktree") {
         const inspection = await inspectManagedGitWorktreeBranch({
           worktreePath: cwd,
-          expectedBranchName: workspace.branchName,
+          expectedBranchName: worktree.branchName,
         });
         if (!inspection.valid) {
           return {
@@ -118,15 +118,15 @@ export async function resumeNativeWorkspaceFinalization(input: {
         return {
           status: "succeeded",
           exitCode: 0,
-          system: "Native workspace finalization validated the managed git worktree.\n",
+          system: "Native worktree finalization validated the managed git worktree.\n",
           metadata: { managedGitWorktreeBranch: inspection },
         };
       }
       return {
         status: "succeeded",
         exitCode: 0,
-        system: "Native workspace finalization validated the persisted workspace directory.\n",
-        metadata: { observedWorkspacePath: cwd },
+        system: "Native worktree finalization validated the persisted worktree directory.\n",
+        metadata: { observedWorktreePath: cwd },
       };
     },
   });

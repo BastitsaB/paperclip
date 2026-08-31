@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectCodexWorkspaceDiffsFromTrace } from "./provider-trace-workspace-diff-reprojection.js";
+import { projectCodexWorktreeDiffsFromTrace } from "./provider-trace-worktree-diff-reprojection.js";
 
 function frame(frameId: number, payload: unknown) {
   return {
@@ -21,7 +21,7 @@ function createdFile(path: string, additions: number) {
   ].join("\n");
 }
 
-describe("provider trace workspace diff reprojection", () => {
+describe("provider trace worktree diff reprojection", () => {
   it("replays the minimized DOT-220 final snapshot as one seven-file event", () => {
     const turnId = "01a03964-9fa6-7550-a87e-b6acc72e372a";
     const first = createdFile("README.md", 9);
@@ -34,7 +34,7 @@ describe("provider trace workspace diff reprojection", () => {
       createdFile("server.js", 6),
       createdFile("test/server.test.js", 5),
     ].join("\n");
-    const projection = projectCodexWorkspaceDiffsFromTrace([
+    const projection = projectCodexWorktreeDiffsFromTrace([
       frame(1, { method: "turn/diff/updated", params: { turnId, diff: first } }),
       frame(2, { method: "turn/diff/updated", params: { turnId, diff: final } }),
     ]);
@@ -60,7 +60,7 @@ describe("provider trace workspace diff reprojection", () => {
   });
 
   it("keeps prior valid turns while reporting malformed snapshots", () => {
-    const projection = projectCodexWorkspaceDiffsFromTrace([
+    const projection = projectCodexWorktreeDiffsFromTrace([
       frame(1, {
         method: "turn/diff/updated",
         params: { turnId: "turn-1", diff: createdFile("src/a.ts", 1) },

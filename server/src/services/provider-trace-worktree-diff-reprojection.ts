@@ -4,7 +4,7 @@ import { heartbeatRunEvents } from "@paperclipai/db";
 import { parseCodexTurnDiff } from "../vendor/paperclip-runner/index.js";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 
-type WorkspaceDiffPayload = {
+type LegacyWorkspaceDiffPayload = {
   schema: "paperclip.workspace.diff.v1";
   changeSetId: string;
   revision: number;
@@ -15,7 +15,7 @@ type WorkspaceDiffPayload = {
   patchArtifactRef: null;
 };
 
-export type WorkspaceDiffReprojectionSkipReason = {
+export type WorktreeDiffReprojectionSkipReason = {
   reason:
     | "trace_unavailable"
     | "trace_expired"
@@ -29,9 +29,9 @@ export type WorkspaceDiffReprojectionSkipReason = {
   frameId?: number;
 };
 
-export interface WorkspaceDiffTraceProjection {
-  turns: Array<{ turnId: string; payload: WorkspaceDiffPayload }>;
-  skipReasons: WorkspaceDiffReprojectionSkipReason[];
+export interface WorktreeDiffTraceProjection {
+  turns: Array<{ turnId: string; payload: LegacyWorkspaceDiffPayload }>;
+  skipReasons: WorktreeDiffReprojectionSkipReason[];
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -49,12 +49,12 @@ function stableTurnId(value: unknown): string | null {
 }
 
 /** Selects the last valid complete Codex diff snapshot for each turn. */
-export function projectCodexWorkspaceDiffsFromTrace(
+export function projectCodexWorktreeDiffsFromTrace(
   entries: Record<string, unknown>[],
-): WorkspaceDiffTraceProjection {
+): WorktreeDiffTraceProjection {
   const revisions = new Map<string, number>();
-  const turns = new Map<string, { turnId: string; payload: WorkspaceDiffPayload }>();
-  const skipReasons: WorkspaceDiffReprojectionSkipReason[] = [];
+  const turns = new Map<string, { turnId: string; payload: LegacyWorkspaceDiffPayload }>();
+  const skipReasons: WorktreeDiffReprojectionSkipReason[] = [];
 
   for (const entry of entries) {
     if (entry.kind !== "frame" || entry.direction !== "provider_to_client") continue;
@@ -105,14 +105,14 @@ export function projectCodexWorkspaceDiffsFromTrace(
   return { turns: [...turns.values()], skipReasons };
 }
 
-export async function persistReprojectedWorkspaceDiffs(
+export async function persistReprojectedWorktreeDiffs(
   db: Db,
   input: {
     traceId: string;
     runId: string;
     companyId: string;
     agentId: string;
-    projection: WorkspaceDiffTraceProjection;
+    projection: WorktreeDiffTraceProjection;
   },
 ) {
   const existing = await db
