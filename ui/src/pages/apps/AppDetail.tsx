@@ -299,6 +299,7 @@ export function AppDetail() {
       }),
     onMutate: () => setPending(true),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tools.testAgentAccessesForConnection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.connection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.catalog(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.profiles(selectedCompanyId!) });
@@ -320,6 +321,7 @@ export function AppDetail() {
       toolsApi.putConnectionInstalls(connectionId, installPayload(selectedCompanyId!, next)),
     onSuccess: (snapshot) => {
       queryClient.setQueryData(queryKeys.tools.connectionInstalls(connectionId), snapshot);
+      queryClient.invalidateQueries({ queryKey: queryKeys.tools.testAgentAccessesForConnection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.connection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.connections(selectedCompanyId!) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.profiles(selectedCompanyId!) });
@@ -516,6 +518,7 @@ export function AppDetail() {
   const refreshTools = useMutation({
     mutationFn: () => toolsApi.refreshCatalog(connectionId),
     onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tools.testAgentAccessesForConnection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.connection(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.catalog(connectionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tools.connections(selectedCompanyId!) });

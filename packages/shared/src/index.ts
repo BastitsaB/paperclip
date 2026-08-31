@@ -1437,6 +1437,7 @@ export type {
   ToolConnectionTestToolAccess,
   ToolConnectionAccessSummary,
   ToolConnectionTestAgent,
+  ToolConnectionTestAgentAccessResponse,
   ToolConnectionTestAgentsResponse,
   ToolConnectionTestCallResult,
   ToolConnectionTestCallStatus,

@@ -2295,7 +2295,7 @@ describeEmbeddedPostgres("tool access service", () => {
     });
   });
 
-  it("lists testable agents with per-connection effective access summaries", async () => {
+  it("lists testable agents without calculating every agent's access summary", async () => {
     const company = await createCompany(db);
     const userId = `tool-tester-${randomUUID()}`;
     await grantBoardUser(db, company.id, userId, ["tools:use"]);
@@ -2320,13 +2320,18 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(res.body.agents[0]).toMatchObject({
       id: agent.id,
       orgDepth: 0,
-      effectiveAccess: {
-        connectionId: connection.id,
-        toolCount: 1,
-        allowedCount: 1,
-        askFirstCount: 0,
-        offCount: 0,
-      },
+    });
+    expect(res.body.agents[0]).not.toHaveProperty("effectiveAccess");
+
+    const accessRes = await request(app)
+      .get(`/api/tool-connections/${connection.id}/test-agents/${agent.id}/access`)
+      .expect(200);
+    expect(accessRes.body.access).toMatchObject({
+      connectionId: connection.id,
+      toolCount: 1,
+      allowedCount: 1,
+      askFirstCount: 0,
+      offCount: 0,
     });
   });
 
@@ -2397,10 +2402,10 @@ describeEmbeddedPostgres("tool access service", () => {
 
     const app = createRouteApp(db, actor, createToolGatewayService(db, { toolActionSigningSecret: "test-secret" }));
     const res = await request(app)
-      .get(`/api/tool-connections/${connection.id}/test-agents`)
+      .get(`/api/tool-connections/${connection.id}/test-agents/${agent.id}/access`)
       .expect(200);
 
-    const summary = res.body.agents[0].effectiveAccess;
+    const summary = res.body.access;
     expect(typeof summary.lastChangedAt).toBe("string");
     expect(summary.lastChangedByAgentId).toBe(agent.id);
     expect(summary.lastChangedByName).toBe(agent.name);
@@ -3441,6 +3446,7 @@ describeEmbeddedPostgres("tool access service", () => {
         .put(`/api/tool-connections/${connection.id}/installs`)
         .send({ installs: [] }),
       await request(app).get(`/api/tool-connections/${connection.id}/test-agents`),
+      await request(app).get(`/api/tool-connections/${connection.id}/test-agents/${randomUUID()}/access`),
       await request(app)
         .post(`/api/tool-connections/${connection.id}/test-calls`)
         .send({ agentId: randomUUID(), toolName: "read_notes", parameters: {} }),
