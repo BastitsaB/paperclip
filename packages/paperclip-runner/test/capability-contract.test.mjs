@@ -18,7 +18,7 @@ test("generated Capability inventory has full source coverage", async () => {
   ]);
 
   assert.equal(capabilities.length, 152);
-  assert.equal(tools.length, 41);
+  assert.equal(tools.length, 42);
   assert.equal(evals.length, 106);
   assert.equal(new Set(evals.map((row) => row.group)).size, 16);
   for (const row of [...capabilities, ...tools, ...evals]) {

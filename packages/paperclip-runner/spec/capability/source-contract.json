@@ -15,6 +15,7 @@
     "paperclipMe": ["control_plane_owned", "injected_actor_context"],
     "paperclipInboxLite": ["control_plane_owned", "runner_work_selection"],
     "paperclipListAgents": ["optional_agent_tool", "list_agents"],
+    "paperclipListSkills": ["optional_agent_tool", "list_company_skills"],
     "paperclipGetAgent": ["optional_agent_tool", "get_agent"],
     "paperclipListIssues": ["optional_agent_tool", "search_tasks"],
     "paperclipGetIssue": ["always_agent_tool", "get_task_context"],
