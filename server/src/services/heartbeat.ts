@@ -4764,7 +4764,7 @@ export async function provisionExecutionWorkspaceForFreshnessDecision<T extends 
   runId: string;
   workspaceConfigFreshness: ExecutionWorkspaceConfigFreshnessDecision;
   restoreExistingWorkspace?: (() => Promise<T | null>) | null;
-  realizeWorktree: () => Promise<T>;
+  realizeWorkspace: () => Promise<T>;
 }): Promise<{
   executionWorkspace: T;
   reusedExecutionWorkspace: T | null;
@@ -4776,7 +4776,7 @@ export async function provisionExecutionWorkspaceForFreshnessDecision<T extends 
   });
 
   if (!policy.shouldRestoreExistingWorkspace) {
-    const executionWorkspace = await input.realizeWorktree();
+    const executionWorkspace = await input.realizeWorkspace();
     return {
       executionWorkspace,
       reusedExecutionWorkspace: null,
@@ -15472,7 +15472,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               resolveGitAuth: workspaceGitAuthProvider,
             })
           : null,
-        realizeWorktree: () => realizeExecutionWorktree({
+        realizeWorkspace: () => realizeExecutionWorktree({
           db,
           base: executionWorkspaceBase,
           config: hostExecutionWorkspaceConfig,

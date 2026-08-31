@@ -37,7 +37,7 @@ const mockEnvironmentService = vi.hoisted(() => ({
 const mockReleaseRunLease = vi.hoisted(() => vi.fn(async () => undefined));
 const mockEnvironmentRuntime = vi.hoisted(() => ({
   acquireRunLease: vi.fn(),
-  realizeWorktree: vi.fn(),
+  realizeWorkspace: vi.fn(),
   getDriver: vi.fn(() => ({
     releaseRunLease: mockReleaseRunLease,
   })),
@@ -164,7 +164,7 @@ describe("agent test-environment route", () => {
         executionWorkspaceMode: null,
       },
     });
-    mockEnvironmentRuntime.realizeWorktree.mockResolvedValue({
+    mockEnvironmentRuntime.realizeWorkspace.mockResolvedValue({
       cwd: "/home/user/paperclip-workspace",
     });
     mockResolveEnvironmentExecutionTarget.mockResolvedValue(null);
@@ -335,8 +335,8 @@ describe("agent test-environment route", () => {
     });
   });
 
-  it("releases the lease as failed and returns a diagnostic when realizeWorktree throws", async () => {
-    mockEnvironmentRuntime.realizeWorktree.mockRejectedValueOnce(
+  it("releases the lease as failed and returns a diagnostic when realizeWorkspace throws", async () => {
+    mockEnvironmentRuntime.realizeWorkspace.mockRejectedValueOnce(
       new Error("workspace realization failed"),
     );
     const app = await createApp();

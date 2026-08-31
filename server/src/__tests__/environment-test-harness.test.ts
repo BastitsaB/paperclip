@@ -42,7 +42,7 @@ describe("environment test harness", () => {
     const lease = await harness.acquireLease({ ...BASE_PARAMS, runId: "run-1" });
     expect(lease.providerLeaseId).toBe("fake-lease-1");
 
-    await harness.realizeWorktree({
+    await harness.realizeWorkspace({
       ...BASE_PARAMS,
       lease,
       workspace: { localPath: "/tmp/test" },
@@ -65,7 +65,7 @@ describe("environment test harness", () => {
     expect(harness.environmentEvents).toHaveLength(4);
     assertEnvironmentEventOrder(harness.environmentEvents, [
       "acquireLease",
-      "realizeWorktree",
+      "realizeWorkspace",
       "execute",
       "releaseLease",
     ]);
@@ -186,7 +186,7 @@ describe("environment test harness", () => {
     });
 
     const lease = await harness.acquireLease({ ...BASE_PARAMS, runId: "run-1" });
-    await harness.realizeWorktree({
+    await harness.realizeWorkspace({
       ...BASE_PARAMS,
       lease,
       workspace: { localPath: "/tmp/ws" },
@@ -194,7 +194,7 @@ describe("environment test harness", () => {
     await harness.releaseLease({ ...BASE_PARAMS, providerLeaseId: lease.providerLeaseId });
 
     const realize = assertWorkspaceRealizationLifecycle(harness.environmentEvents, "env-1");
-    expect(realize.type).toBe("realizeWorktree");
+    expect(realize.type).toBe("realizeWorkspace");
   });
 
   it("assertExecutionLifecycle validates execute within lease bounds", async () => {
