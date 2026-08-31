@@ -52,7 +52,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "pnpm run check:protocol-manifest && pnpm run build:typescript && pnpm run check:capability-contract && pnpm run check:capability-inventory && pnpm run check:protocol-coverage && pnpm run check:semantic-contracts && pnpm run check:runner-workflow-traceability && pnpm run build:binary && node scripts/generate-replay-goldens.mjs --check && node scripts/generate-semantic-action-catalog.mjs --check",
+    "build": "pnpm run check:protocol-manifest && pnpm run build:typescript && pnpm run check:capability-contract && pnpm run check:capability-inventory && pnpm run check:protocol-coverage && pnpm run check:semantic-contracts && pnpm run build:binary && node scripts/generate-replay-goldens.mjs --check && node scripts/generate-semantic-action-catalog.mjs --check",
     "build:typescript": "pnpm run check:protocol-types && tsc -p tsconfig.json",
     "build:rust": "cargo build --manifest-path runner/Cargo.toml --locked --workspace --bins",
     "build:binary": "cargo build --release --manifest-path runner/Cargo.toml --locked -p paperclip-runner-core --bin paperclip-runnerd && node scripts/stage-runner-binary.mjs",
@@ -106,11 +106,7 @@
     "check:capability-inventory": "node scripts/check-capability-inventory.mjs",
     "test:capability-inventory": "node scripts/check-capability-inventory.test.mjs",
     "test:capability-evals": "vitest run src/conformance/capability-eval-suite.test.ts",
-    "test:eval-slice": "vitest run src/eval",
-    "test:runner-workflow-evals": "vitest run src/eval/workflow-evals.test.ts",
-    "check:runner-workflow-traceability": "pnpm run build:typescript && node scripts/check-runner-workflow-traceability.mjs",
     "report:capability-evals": "pnpm run build:typescript && node scripts/run-capability-eval-suite.mjs",
-    "report:runner-workflow-evals": "pnpm run build:typescript && node scripts/run-runner-workflow-evals.mjs",
     "check:conformance-parity": "cargo test --manifest-path runner/Cargo.toml --locked -p paperclip-runner-core runs_the_mock_core_path_with_stable_output",
     "check:replay-parity": "cargo test --manifest-path runner/Cargo.toml --locked -p paperclip-runner-core replay_fixture_parity",
     "docs:validate": "node scripts/validate-doc-links.mjs",
@@ -143,7 +139,9 @@
     "acpx": "0.13.1",
     "ajv": "^8.20.0",
     "json-schema-to-ts": "^3.1.1",
-    "opencode-ai": "1.18.17"
+    "opencode-ai": "1.18.17",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
     "react": ">=18",
@@ -166,8 +164,6 @@
     "axe-core": "^4.12.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vite": "^6.1.0",
