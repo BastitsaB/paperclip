@@ -56,11 +56,19 @@ export function ConnectInputCanvas({
           exit={{ height: 0, opacity: 0, transition: CANVAS_CLOSE }}
           className="overflow-hidden"
         >
+          {/*
+            No edge and no fill of its own. Everything this holds already draws
+            its own surface — the login panel is a bordered, filled card and the
+            key field is a bordered input — so a frame here was the same
+            treatment twice, one nested a few pixels inside the other. The canvas
+            is a place for the input to be, not a thing to look at.
+
+            Which leaves the padding to the contents as well: theirs is already
+            sized for what they hold, and a second inset would push it off the
+            step's measure.
+          */}
           <div
-            className={cn(
-              "mt-3 rounded-md border border-border bg-card/40 px-3 py-2.5",
-              "flex items-center",
-            )}
+            className="mt-3 flex items-center"
             style={{ minHeight: MIN_CONTENT_HEIGHT }}
           >
             {/*
