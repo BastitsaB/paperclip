@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ExecutionWorkspace } from "@paperclipai/shared";
+import type { ExecutionWorktree } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { Loader2 } from "lucide-react";
-import { executionWorkspacesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-workspaces";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDateTime, issueUrl } from "../lib/utils";
@@ -16,13 +16,13 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 
-type ExecutionWorkspaceCloseDialogProps = {
+type ExecutionWorktreeCloseDialogProps = {
   workspaceId: string;
   workspaceName: string;
-  currentStatus: ExecutionWorkspace["status"];
+  currentStatus: ExecutionWorktree["status"];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onClosed?: (workspace: ExecutionWorkspace) => void;
+  onClosed?: (workspace: ExecutionWorktree) => void;
 };
 
 function readinessTone(state: "ready" | "ready_with_warnings" | "blocked") {
@@ -35,40 +35,40 @@ function readinessTone(state: "ready" | "ready_with_warnings" | "blocked") {
   return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
 }
 
-export function ExecutionWorkspaceCloseDialog({
+export function ExecutionWorktreeCloseDialog({
   workspaceId,
   workspaceName,
   currentStatus,
   open,
   onOpenChange,
   onClosed,
-}: ExecutionWorkspaceCloseDialogProps) {
+}: ExecutionWorktreeCloseDialogProps) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
-  const actionLabel = currentStatus === "cleanup_failed" ? "Retry close" : "Close workspace";
+  const actionLabel = currentStatus === "cleanup_failed" ? "Retry close" : "Close worktree";
 
   const readinessQuery = useQuery({
-    queryKey: queryKeys.executionWorkspaces.closeReadiness(workspaceId),
-    queryFn: () => executionWorkspacesApi.getCloseReadiness(workspaceId),
+    queryKey: queryKeys.executionWorktrees.closeReadiness(workspaceId),
+    queryFn: () => executionWorktreesApi.getCloseReadiness(workspaceId),
     enabled: open,
   });
 
-  const closeWorkspace = useMutation({
-    mutationFn: () => executionWorkspacesApi.update(workspaceId, { status: "archived" }),
-    onSuccess: (workspace) => {
-      queryClient.setQueryData(queryKeys.executionWorkspaces.detail(workspace.id), workspace);
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.overview(workspace.companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.closeReadiness(workspace.id) });
+  const closeWorktree = useMutation({
+    mutationFn: () => executionWorktreesApi.update(workspaceId, { status: "archived" }),
+    onSuccess: (worktree) => {
+      queryClient.setQueryData(queryKeys.executionWorktrees.detail(worktree.id), worktree);
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.overview(worktree.companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.closeReadiness(worktree.id) });
       pushToast({
-        title: currentStatus === "cleanup_failed" ? "Workspace close retried" : "Workspace closed",
+        title: currentStatus === "cleanup_failed" ? "Worktree close retried" : "Worktree closed",
         tone: "success",
       });
       onOpenChange(false);
-      onClosed?.(workspace);
+      onClosed?.(worktree);
     },
     onError: (error) => {
       pushToast({
-        title: "Failed to close workspace",
+        title: "Failed to close worktree",
         body: error instanceof Error ? error.message : "Unknown error",
         tone: "error",
       });
@@ -80,32 +80,32 @@ export function ExecutionWorkspaceCloseDialog({
   const otherLinkedIssues = readiness?.linkedIssues.filter((issue) => issue.isTerminal) ?? [];
   const confirmDisabled =
     currentStatus === "archived" ||
-    closeWorkspace.isPending ||
+    closeWorktree.isPending ||
     readinessQuery.isLoading ||
     readiness == null ||
     readiness.state === "blocked";
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => {
-      if (!closeWorkspace.isPending) onOpenChange(nextOpen);
+      if (!closeWorktree.isPending) onOpenChange(nextOpen);
     }}>
       <DialogContent className="max-h-(--sz-85vh) overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{actionLabel}</DialogTitle>
           <DialogDescription className="break-words">
-            Archive <span className="font-medium text-foreground">{workspaceName}</span> and clean up any owned workspace
-            artifacts. Paperclip keeps the workspace record and task history, but removes it from active workspace views.
+            Archive <span className="font-medium text-foreground">{workspaceName}</span> and clean up any owned worktree
+            artifacts. Paperclip keeps the worktree record and task history, but removes it from active worktree views.
           </DialogDescription>
         </DialogHeader>
 
         {readinessQuery.isLoading ? (
           <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Checking whether this workspace is safe to close...
+            Checking whether this worktree is safe to close...
           </div>
         ) : readinessQuery.error ? (
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {readinessQuery.error instanceof Error ? readinessQuery.error.message : "Failed to inspect workspace close readiness."}
+            {readinessQuery.error instanceof Error ? readinessQuery.error.message : "Failed to inspect worktree close readiness."}
           </div>
         ) : readiness ? (
           <div className="space-y-4">
@@ -119,12 +119,12 @@ export function ExecutionWorkspaceCloseDialog({
               </div>
               <div className="mt-1 text-xs opacity-80">
                 {readiness.isSharedWorkspace
-                  ? "This is a shared workspace session. Archiving it removes this session record but keeps the underlying project workspace."
+                  ? "This is a shared worktree session. Archiving it removes this session record but keeps the underlying project worktree."
                   : readiness.git?.workspacePath && readiness.git.repoRoot && readiness.git.workspacePath !== readiness.git.repoRoot
-                    ? "This execution workspace has its own checkout path and can be archived independently."
+                    ? "This execution worktree has its own checkout path and can be archived independently."
                     : readiness.isProjectPrimaryWorkspace
-                      ? "This execution workspace currently points at the project's primary workspace path."
-                      : "This workspace is disposable and can be archived."}
+                      ? "This execution worktree currently points at the project's primary worktree path."
+                      : "This worktree is disposable and can be archived."}
               </div>
             </div>
 
@@ -270,14 +270,14 @@ export function ExecutionWorkspaceCloseDialog({
 
             {currentStatus === "cleanup_failed" ? (
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-muted-foreground">
-                Cleanup previously failed on this workspace. Retrying close will rerun the cleanup flow and update the
-                workspace status if it succeeds.
+                Cleanup previously failed on this worktree. Retrying close will rerun the cleanup flow and update the
+                worktree status if it succeeds.
               </div>
             ) : null}
 
             {currentStatus === "archived" ? (
               <div className="rounded-xl border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
-                This workspace is already archived.
+                This worktree is already archived.
               </div>
             ) : null}
 
@@ -286,7 +286,7 @@ export function ExecutionWorkspaceCloseDialog({
                 Repo root: <span className="font-mono break-all">{readiness.git.repoRoot}</span>
                 {readiness.git.workspacePath ? (
                   <>
-                    {" · "}Workspace path: <span className="font-mono break-all">{readiness.git.workspacePath}</span>
+                    {" · "}Worktree path: <span className="font-mono break-all">{readiness.git.workspacePath}</span>
                   </>
                 ) : null}
               </div>
@@ -302,16 +302,16 @@ export function ExecutionWorkspaceCloseDialog({
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            disabled={closeWorkspace.isPending}
+            disabled={closeWorktree.isPending}
           >
             Cancel
           </Button>
           <Button
             variant={currentStatus === "cleanup_failed" ? "default" : "destructive"}
-            onClick={() => closeWorkspace.mutate()}
+            onClick={() => closeWorktree.mutate()}
             disabled={confirmDisabled}
           >
-            {closeWorkspace.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {closeWorktree.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {actionLabel}
           </Button>
         </DialogFooter>

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildReusableExecutionWorkspaceOptionGroups,
-  orderReusableExecutionWorkspaces,
-  reusableWorkspaceOptionMatches,
-  scoreReusableWorkspaceOptionMatch,
-  type ReusableExecutionWorkspaceLike,
+  buildReusableExecutionWorktreeOptionGroups,
+  orderReusableExecutionWorktrees,
+  reusableWorktreeOptionMatches,
+  scoreReusableWorktreeOptionMatch,
+  type ReusableExecutionWorktreeLike,
 } from "./reusable-execution-workspaces";
 
-function workspace(overrides: Partial<ReusableExecutionWorkspaceLike>): ReusableExecutionWorkspaceLike {
+function worktree(overrides: Partial<ReusableExecutionWorktreeLike>): ReusableExecutionWorktreeLike {
   return {
     id: overrides.id ?? "workspace-id",
     name: overrides.name ?? "Workspace",
@@ -20,14 +20,14 @@ function workspace(overrides: Partial<ReusableExecutionWorkspaceLike>): Reusable
 
 describe("orderReusableExecutionWorkspaces", () => {
   it("puts the most recently used workspace first and sorts the rest alphabetically", () => {
-    const workspaces = [
-      workspace({ id: "charlie", name: "Charlie", lastUsedAt: "2026-01-03T00:00:00.000Z" }),
-      workspace({ id: "zulu", name: "Zulu", lastUsedAt: "2026-01-05T00:00:00.000Z" }),
-      workspace({ id: "alpha", name: "Alpha", lastUsedAt: "2026-01-01T00:00:00.000Z" }),
-      workspace({ id: "bravo", name: "Bravo", lastUsedAt: "2026-01-04T00:00:00.000Z" }),
+    const worktrees = [
+      worktree({ id: "charlie", name: "Charlie", lastUsedAt: "2026-01-03T00:00:00.000Z" }),
+      worktree({ id: "zulu", name: "Zulu", lastUsedAt: "2026-01-05T00:00:00.000Z" }),
+      worktree({ id: "alpha", name: "Alpha", lastUsedAt: "2026-01-01T00:00:00.000Z" }),
+      worktree({ id: "bravo", name: "Bravo", lastUsedAt: "2026-01-04T00:00:00.000Z" }),
     ];
 
-    expect(orderReusableExecutionWorkspaces(workspaces).map((item) => item.id)).toEqual([
+    expect(orderReusableExecutionWorktrees(worktrees).map((item) => item.id)).toEqual([
       "zulu",
       "alpha",
       "bravo",
@@ -36,24 +36,24 @@ describe("orderReusableExecutionWorkspaces", () => {
   });
 
   it("keeps only the latest used workspace for duplicate paths before sorting", () => {
-    const workspaces = [
-      workspace({
+    const worktrees = [
+      worktree({
         id: "older-duplicate",
         name: "Older duplicate",
         cwd: "/tmp/shared",
         lastUsedAt: "2026-01-01T00:00:00.000Z",
       }),
-      workspace({ id: "beta", name: "Beta", cwd: "/tmp/beta", lastUsedAt: "2026-01-02T00:00:00.000Z" }),
-      workspace({
+      worktree({ id: "beta", name: "Beta", cwd: "/tmp/beta", lastUsedAt: "2026-01-02T00:00:00.000Z" }),
+      worktree({
         id: "newer-duplicate",
         name: "Newer duplicate",
         cwd: "/tmp/shared",
         lastUsedAt: "2026-01-04T00:00:00.000Z",
       }),
-      workspace({ id: "alpha", name: "Alpha", cwd: "/tmp/alpha", lastUsedAt: "2026-01-03T00:00:00.000Z" }),
+      worktree({ id: "alpha", name: "Alpha", cwd: "/tmp/alpha", lastUsedAt: "2026-01-03T00:00:00.000Z" }),
     ];
 
-    expect(orderReusableExecutionWorkspaces(workspaces).map((item) => item.id)).toEqual([
+    expect(orderReusableExecutionWorktrees(worktrees).map((item) => item.id)).toEqual([
       "newer-duplicate",
       "alpha",
       "beta",
@@ -61,10 +61,10 @@ describe("orderReusableExecutionWorkspaces", () => {
   });
 
   it("does not let updatedAt churn outrank the last used workspace", () => {
-    type WorkspaceWithUpdatedAt = ReusableExecutionWorkspaceLike & { updatedAt: Date | string };
-    const workspaces: WorkspaceWithUpdatedAt[] = [
+    type WorktreeWithUpdatedAt = ReusableExecutionWorktreeLike & { updatedAt: Date | string };
+    const workspaces: WorktreeWithUpdatedAt[] = [
       {
-        ...workspace({
+        ...worktree({
           id: "recently-used",
           name: "Recently used",
           cwd: "/tmp/shared",
@@ -73,7 +73,7 @@ describe("orderReusableExecutionWorkspaces", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
       {
-        ...workspace({
+        ...worktree({
           id: "recently-updated",
           name: "Recently updated",
           cwd: "/tmp/shared",
@@ -83,7 +83,7 @@ describe("orderReusableExecutionWorkspaces", () => {
       },
     ];
 
-    expect(orderReusableExecutionWorkspaces(workspaces).map((item) => item.id)).toEqual([
+    expect(orderReusableExecutionWorktrees(workspaces).map((item) => item.id)).toEqual([
       "recently-used",
     ]);
   });
@@ -93,20 +93,20 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   const now = "2026-01-10T12:00:00.000Z";
 
   it("deduplicates by cwd and keeps the latest used workspace", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "older",
         name: "Older",
         cwd: "/repo/shared",
         lastUsedAt: "2026-01-09T00:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "newer",
         name: "Newer",
         cwd: "/repo/shared",
         lastUsedAt: "2026-01-10T00:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "other",
         name: "Other",
         cwd: "/repo/other",
@@ -123,10 +123,10 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   });
 
   it("orders recent by last used and all workspaces by name", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({ id: "charlie", name: "Charlie", lastUsedAt: "2026-01-09T00:00:00.000Z" }),
-      workspace({ id: "alpha", name: "Alpha", lastUsedAt: "2026-01-07T13:00:00.000Z" }),
-      workspace({ id: "bravo", name: "Bravo", lastUsedAt: "2026-01-10T00:00:00.000Z" }),
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({ id: "charlie", name: "Charlie", lastUsedAt: "2026-01-09T00:00:00.000Z" }),
+      worktree({ id: "alpha", name: "Alpha", lastUsedAt: "2026-01-07T13:00:00.000Z" }),
+      worktree({ id: "bravo", name: "Bravo", lastUsedAt: "2026-01-10T00:00:00.000Z" }),
     ], { now });
 
     expect(groups.find((group) => group.id === "recent")?.options.map((option) => option.workspaceId)).toEqual([
@@ -142,13 +142,13 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   });
 
   it("includes workspaces used exactly at the 3-day cutoff and excludes older workspaces", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "boundary",
         name: "Boundary",
         lastUsedAt: "2026-01-07T12:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "older",
         name: "Older",
         lastUsedAt: "2026-01-07T11:59:59.999Z",
@@ -165,8 +165,8 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   });
 
   it("keys duplicate recent and all appearances by group while keeping the selected value as workspace id", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "workspace-1",
         name: "Workspace 1",
         lastUsedAt: "2026-01-10T00:00:00.000Z",
@@ -180,8 +180,8 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   });
 
   it("builds stable display and search metadata", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "workspace-1",
         name: "Paperclip app",
         cwd: "/repo/paperclip",
@@ -198,8 +198,8 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
   });
 
   it("matches workspace options with fuzzy query tokens", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "workspace-1",
         name: "Paperclip app",
         cwd: "/srv/paperclip",
@@ -210,13 +210,13 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
     ], { now });
 
     const option = groups[0]!.options[0]!;
-    expect(reusableWorkspaceOptionMatches(option, "pclip reusable")).toBe(true);
-    expect(reusableWorkspaceOptionMatches(option, "inactive")).toBe(false);
+    expect(reusableWorktreeOptionMatches(option, "pclip reusable")).toBe(true);
+    expect(reusableWorktreeOptionMatches(option, "inactive")).toBe(false);
   });
 
   it("does not match query letters spread across unrelated workspace text", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "routine-bodies",
         name: "PAP-11694-editing-routine-bodies-should-have-revision-tracking",
         cwd: "/srv/paperclip/home/paperclipai/paperclip/.paperclip/worktrees/PAP-11694-editing-routine-bodies",
@@ -224,7 +224,7 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
         status: "active",
         lastUsedAt: "2026-01-10T00:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "mobile-agent-chat",
         name: "PAP-11446-on-mobile-the-agent-chat-shouldn-t-hone-indented",
         cwd: "/srv/paperclip/home/paperclipai/paperclip/.paperclip/worktrees/PAP-11446-on-mobile-agent-chat",
@@ -232,7 +232,7 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
         status: "active",
         lastUsedAt: "2026-01-09T00:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "simultaneous-work",
         name: "PAP-11429-why-are-these-live-simultaneously",
         cwd: "/srv/paperclip/home/paperclipai/paperclip/.paperclip/worktrees/PAP-11429-live-simultaneously",
@@ -247,22 +247,22 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
     const mobile = options.find((option) => option.workspaceId === "mobile-agent-chat")!;
     const simultaneous = options.find((option) => option.workspaceId === "simultaneous-work")!;
 
-    expect(reusableWorkspaceOptionMatches(unrelated, "mobile")).toBe(false);
-    expect(reusableWorkspaceOptionMatches(unrelated, "simultan")).toBe(false);
-    expect(reusableWorkspaceOptionMatches(mobile, "mobile")).toBe(true);
-    expect(reusableWorkspaceOptionMatches(simultaneous, "simultan")).toBe(true);
+    expect(reusableWorktreeOptionMatches(unrelated, "mobile")).toBe(false);
+    expect(reusableWorktreeOptionMatches(unrelated, "simultan")).toBe(false);
+    expect(reusableWorktreeOptionMatches(mobile, "mobile")).toBe(true);
+    expect(reusableWorktreeOptionMatches(simultaneous, "simultan")).toBe(true);
   });
 
   it("scores visible label matches ahead of hidden path matches", () => {
-    const groups = buildReusableExecutionWorkspaceOptionGroups([
-      workspace({
+    const groups = buildReusableExecutionWorktreeOptionGroups([
+      worktree({
         id: "path-only-mobile",
         name: "Paperclip app",
         cwd: "/srv/paperclip/mobile-checkout",
         branchName: "feature/workspace-reuse",
         lastUsedAt: "2026-01-10T00:00:00.000Z",
       }),
-      workspace({
+      worktree({
         id: "label-mobile",
         name: "Mobile agent chat",
         cwd: "/srv/paperclip/agent-chat",
@@ -275,8 +275,8 @@ describe("buildReusableExecutionWorkspaceOptionGroups", () => {
     const pathOnly = options.find((option) => option.workspaceId === "path-only-mobile")!;
     const label = options.find((option) => option.workspaceId === "label-mobile")!;
 
-    expect(scoreReusableWorkspaceOptionMatch(label, "mobile")).toBeLessThan(
-      scoreReusableWorkspaceOptionMatch(pathOnly, "mobile")!,
+    expect(scoreReusableWorktreeOptionMatch(label, "mobile")).toBeLessThan(
+      scoreReusableWorktreeOptionMatch(pathOnly, "mobile")!,
     );
   });
 });

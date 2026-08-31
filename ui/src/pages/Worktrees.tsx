@@ -1,29 +1,29 @@
 import { useEffect, useMemo } from "react";
 import { Link, Navigate } from "@/lib/router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import type { WorkspaceOverviewItem } from "@paperclipai/shared";
+import type { WorktreeOverviewItem } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
-import { executionWorkspacesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-workspaces";
 import { instanceSettingsApi } from "../api/instanceSettings";
-import { ProjectWorkspacesContent } from "../components/ProjectWorkspacesContent";
+import { ProjectWorktreesContent } from "../components/ProjectWorkspacesContent";
 import { SummarySlotCard } from "../components/SummarySlotCard";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
-import type { ProjectWorkspaceSummary } from "../lib/project-workspaces-tab";
+import type { ProjectWorktreeSummary } from "../lib/project-workspaces-tab";
 import { queryKeys } from "../lib/queryKeys";
 import { projectRouteRef } from "../lib/utils";
 
-type ProjectWorkspaceGroup = {
+type ProjectWorktreeGroup = {
   projectId: string;
   projectName: string;
   projectRef: string;
-  summaries: ProjectWorkspaceSummary[];
+  summaries: ProjectWorktreeSummary[];
   lastUpdatedAt: Date;
   runningServiceCount: number;
 };
 
-function overviewItemToSummary(item: WorkspaceOverviewItem): ProjectWorkspaceSummary {
+function overviewItemToSummary(item: WorktreeOverviewItem): ProjectWorktreeSummary {
   return {
     key: item.key,
     kind: item.kind,
@@ -45,8 +45,8 @@ function overviewItemToSummary(item: WorkspaceOverviewItem): ProjectWorkspaceSum
   };
 }
 
-function buildProjectWorkspaceGroups(items: WorkspaceOverviewItem[]): ProjectWorkspaceGroup[] {
-  const groups = new Map<string, ProjectWorkspaceGroup>();
+function buildProjectWorktreeGroups(items: WorktreeOverviewItem[]): ProjectWorktreeGroup[] {
+  const groups = new Map<string, ProjectWorktreeGroup>();
   for (const item of items) {
     const existing = groups.get(item.projectId);
     const summary = overviewItemToSummary(item);
@@ -76,27 +76,27 @@ function buildProjectWorkspaceGroups(items: WorkspaceOverviewItem[]): ProjectWor
   });
 }
 
-export function Workspaces() {
+export function Worktrees() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const experimentalSettingsQuery = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
   });
-  const isolatedWorkspacesEnabled = experimentalSettingsQuery.data?.enableIsolatedWorkspaces === true;
+  const isolatedWorktreesEnabled = experimentalSettingsQuery.data?.enableIsolatedWorkspaces === true;
 
   const overviewQuery = useInfiniteQuery({
     queryKey: selectedCompanyId
-      ? queryKeys.executionWorkspaces.overview(selectedCompanyId)
-      : ["execution-workspaces", "__workspaces-overview__", "disabled"],
-    queryFn: ({ pageParam }) => executionWorkspacesApi.listOverview(selectedCompanyId!, { offset: pageParam as number }),
+      ? queryKeys.executionWorktrees.overview(selectedCompanyId)
+      : ["execution-worktrees", "__worktrees-overview__", "disabled"],
+    queryFn: ({ pageParam }) => executionWorktreesApi.listOverview(selectedCompanyId!, { offset: pageParam as number }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
-    enabled: Boolean(selectedCompanyId && isolatedWorkspacesEnabled),
+    enabled: Boolean(selectedCompanyId && isolatedWorktreesEnabled),
   });
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Workspaces" }]);
+    setBreadcrumbs([{ label: "Worktrees" }]);
   }, [setBreadcrumbs]);
 
   const overviewPages = overviewQuery.data?.pages ?? [];
@@ -104,32 +104,32 @@ export function Workspaces() {
     () => overviewPages.flatMap((page) => page.items),
     [overviewPages],
   );
-  const groups = useMemo(() => buildProjectWorkspaceGroups(overviewItems), [overviewItems]);
+  const groups = useMemo(() => buildProjectWorktreeGroups(overviewItems), [overviewItems]);
   const firstPage = overviewPages[0] ?? null;
-  const totalWorkspaceCount = firstPage?.total ?? overviewItems.length;
+  const totalWorktreeCount = firstPage?.total ?? overviewItems.length;
   const dataLoading = overviewQuery.isLoading;
   const error = overviewQuery.error as Error | null;
 
   if (experimentalSettingsQuery.isLoading) return <PageSkeleton variant="detail" />;
-  if (!isolatedWorkspacesEnabled) return <Navigate to="/issues" replace />;
+  if (!isolatedWorktreesEnabled) return <Navigate to="/issues" replace />;
   if (dataLoading) return <PageSkeleton variant="list" />;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
 
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold">Workspaces</h2>
+        <h2 className="text-xl font-bold">Worktrees</h2>
       </div>
 
       <SummarySlotCard
         companyId={selectedCompanyId}
         scopeKind="workspaces_overview"
-        title="Workspace summary"
-        description="Summarizer tracks workspace activity, live services, and follow-up needs across projects."
+        title="Worktree summary"
+        description="Summarizer tracks worktree activity, live services, and follow-up needs across projects."
       />
 
       {groups.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No workspace activity yet.</p>
+        <p className="text-sm text-muted-foreground">No worktree activity yet.</p>
       ) : (
         <div className="space-y-8">
           {groups.map((group) => (
@@ -137,17 +137,17 @@ export function Workspaces() {
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <div className="min-w-0">
                   <Link
-                    to={`/projects/${group.projectRef}/workspaces`}
+                    to={`/projects/${group.projectRef}/worktrees`}
                     className="text-base font-semibold hover:underline"
                   >
                     {group.projectName}
                   </Link>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {group.summaries.length} workspace{group.summaries.length === 1 ? "" : "s"}
+                  {group.summaries.length} worktree{group.summaries.length === 1 ? "" : "s"}
                 </span>
               </div>
-              <ProjectWorkspacesContent
+              <ProjectWorktreesContent
                 companyId={selectedCompanyId!}
                 projectId={group.projectId}
                 projectRef={group.projectRef}
@@ -158,7 +158,7 @@ export function Workspaces() {
           {overviewQuery.hasNextPage ? (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
               <p className="text-sm text-muted-foreground">
-                Showing {overviewItems.length} of {totalWorkspaceCount} workspaces.
+                Showing {overviewItems.length} of {totalWorktreeCount} worktrees.
               </p>
               <Button
                 type="button"

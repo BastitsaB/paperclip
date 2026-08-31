@@ -290,16 +290,16 @@ export const queryKeys = {
     reviewCases: (companyId: string) => ["pipelines", "review-cases", companyId] as const,
     learnings: (companyId: string, offset: number) => ["pipelines", "learnings", companyId, offset] as const,
   },
-  executionWorkspaces: {
+  executionWorktrees: {
     list: (companyId: string, filters?: Record<string, string | boolean | undefined>) =>
-      ["execution-workspaces", companyId, filters ?? {}] as const,
+      ["execution-worktrees", companyId, filters ?? {}] as const,
     summaryList: (companyId: string, filters?: Record<string, string | boolean | undefined>) =>
-      ["execution-workspaces", companyId, "summary", filters ?? {}] as const,
+      ["execution-worktrees", companyId, "summary", filters ?? {}] as const,
     overview: (companyId: string, filters?: Record<string, string | number | boolean | undefined>) =>
-      ["execution-workspaces", companyId, "overview", filters ?? {}] as const,
-    detail: (id: string) => ["execution-workspaces", "detail", id] as const,
-    closeReadiness: (id: string) => ["execution-workspaces", "close-readiness", id] as const,
-    workspaceOperations: (id: string) => ["execution-workspaces", "workspace-operations", id] as const,
+      ["execution-worktrees", companyId, "overview", filters ?? {}] as const,
+    detail: (id: string) => ["execution-worktrees", "detail", id] as const,
+    closeReadiness: (id: string) => ["execution-worktrees", "close-readiness", id] as const,
+    worktreeOperations: (id: string) => ["execution-worktrees", "workspace-operations", id] as const,
   },
   environments: {
     list: (companyId: string) => ["environments", companyId] as const,

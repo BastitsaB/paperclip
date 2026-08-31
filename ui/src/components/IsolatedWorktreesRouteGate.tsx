@@ -16,7 +16,7 @@ import { queryKeys } from "@/lib/queryKeys";
  * Nothing renders until the flag query settles, so an instance that has the
  * feature on never flashes a redirect on a hard load.
  */
-export function IsolatedWorkspacesRouteGate() {
+export function IsolatedWorktreesRouteGate() {
   const { data: experimentalSettings, isFetched } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),

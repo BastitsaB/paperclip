@@ -3,7 +3,7 @@
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceServiceControlBar } from "./WorkspaceServiceControlBar";
+import { WorktreeServiceControlBar } from "./WorkspaceServiceControlBar";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -19,7 +19,7 @@ async function act(callback: () => void | Promise<void>) {
   flushSync(() => {});
 }
 
-describe("WorkspaceServiceControlBar", () => {
+describe("WorktreeServiceControlBar", () => {
   let container: HTMLDivElement;
   let root: Root;
   let writeText: ReturnType<typeof vi.fn>;
@@ -43,7 +43,7 @@ describe("WorkspaceServiceControlBar", () => {
   async function renderRunningService() {
     await act(() => {
       root.render(
-        <WorkspaceServiceControlBar
+        <WorktreeServiceControlBar
           services={[{
             key: "web",
             name: "Web",
@@ -87,7 +87,7 @@ describe("WorkspaceServiceControlBar", () => {
     const renderService = async (state: "stopped" | "running", url: string | null) => {
       await act(() => {
         root.render(
-          <WorkspaceServiceControlBar
+          <WorktreeServiceControlBar
             services={[{
               key: "web",
               name: "Web",
@@ -126,7 +126,7 @@ describe("WorkspaceServiceControlBar", () => {
     const renderExposed = async (url: string | null, exposureState: "ready" | "pending") => {
       await act(() => {
         root.render(
-          <WorkspaceServiceControlBar
+          <WorktreeServiceControlBar
             services={[{
               key: "paperclip-dev",
               name: "paperclip-dev",
@@ -173,7 +173,7 @@ describe("WorkspaceServiceControlBar", () => {
   it("renders HTTPS cleanup separately from process running state", async () => {
     await act(() => {
       root.render(
-        <WorkspaceServiceControlBar
+        <WorktreeServiceControlBar
           services={[{
             key: "web",
             name: "Web",
@@ -198,7 +198,7 @@ describe("WorkspaceServiceControlBar", () => {
   ] as const)("keeps the full %s remediation visible in the multi-service popover", async (exposureState, exposureDetail) => {
     await act(() => {
       root.render(
-        <WorkspaceServiceControlBar
+        <WorktreeServiceControlBar
           services={[
             {
               key: "web",

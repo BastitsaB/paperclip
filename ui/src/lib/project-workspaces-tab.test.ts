@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ExecutionWorkspace, Issue, Project, ProjectWorkspace, WorkspaceRuntimeService } from "@paperclipai/shared";
-import { buildProjectWorkspaceSummaries } from "./project-workspaces-tab";
+import type { ExecutionWorktree, Issue, Project, ProjectWorktree, WorktreeRuntimeService } from "@paperclipai/shared";
+import { buildProjectWorktreeSummaries } from "./project-workspaces-tab";
 
-function createProjectWorkspace(overrides: Partial<ProjectWorkspace>): ProjectWorkspace {
+function createProjectWorktree(overrides: Partial<ProjectWorktree>): ProjectWorktree {
   return {
     id: overrides.id ?? "workspace-default",
     companyId: overrides.companyId ?? "company-1",
@@ -65,7 +65,7 @@ function createIssue(overrides: Partial<Issue>): Issue {
   } as Issue;
 }
 
-function createExecutionWorkspace(overrides: Partial<ExecutionWorkspace>): ExecutionWorkspace {
+function createExecutionWorktree(overrides: Partial<ExecutionWorktree>): ExecutionWorktree {
   return {
     id: overrides.id ?? "exec-1",
     companyId: overrides.companyId ?? "company-1",
@@ -97,7 +97,7 @@ function createExecutionWorkspace(overrides: Partial<ExecutionWorkspace>): Execu
   };
 }
 
-function createRuntimeService(overrides: Partial<WorkspaceRuntimeService> = {}): WorkspaceRuntimeService {
+function createRuntimeService(overrides: Partial<WorktreeRuntimeService> = {}): WorktreeRuntimeService {
   return {
     id: overrides.id ?? "service-1",
     companyId: overrides.companyId ?? "company-1",
@@ -131,53 +131,53 @@ function createRuntimeService(overrides: Partial<WorkspaceRuntimeService> = {}):
 }
 
 describe("buildProjectWorkspaceSummaries", () => {
-  const primaryWorkspace = createProjectWorkspace({
+  const primaryWorktree = createProjectWorktree({
     id: "workspace-default",
     isPrimary: true,
     name: "paperclip",
   });
-  const featureWorkspace = createProjectWorkspace({
+  const featureWorktree = createProjectWorktree({
     id: "workspace-feature",
     name: "feature-checkout",
     repoRef: "feature/workspaces",
     updatedAt: new Date("2026-03-25T09:00:00Z"),
   });
   const project = {
-    workspaces: [primaryWorkspace, featureWorkspace],
-    primaryWorkspace,
+    workspaces: [primaryWorktree, featureWorktree],
+    primaryWorkspace: primaryWorktree,
   } satisfies Pick<Project, "workspaces" | "primaryWorkspace">;
 
   it("groups isolated execution workspace issues ahead of shared non-primary workspace issues", () => {
-    const summaries = buildProjectWorkspaceSummaries({
+    const summaries = buildProjectWorktreeSummaries({
       project,
       issues: [
         createIssue({
           id: "issue-primary",
-          projectWorkspaceId: primaryWorkspace.id,
+          projectWorkspaceId: primaryWorktree.id,
           updatedAt: new Date("2026-03-26T08:00:00Z"),
         }),
         createIssue({
           id: "issue-feature-older",
-          projectWorkspaceId: featureWorkspace.id,
+          projectWorkspaceId: featureWorktree.id,
           identifier: "PAP-800",
           updatedAt: new Date("2026-03-25T10:00:00Z"),
         }),
         createIssue({
           id: "issue-feature-newer",
-          projectWorkspaceId: featureWorkspace.id,
+          projectWorkspaceId: featureWorktree.id,
           identifier: "PAP-801",
           updatedAt: new Date("2026-03-25T11:00:00Z"),
         }),
         createIssue({
           id: "issue-exec",
-          projectWorkspaceId: primaryWorkspace.id,
+          projectWorkspaceId: primaryWorktree.id,
           executionWorkspaceId: "exec-1",
           identifier: "PAP-893",
           updatedAt: new Date("2026-03-26T11:00:00Z"),
         }),
       ],
-      executionWorkspaces: [
-        createExecutionWorkspace({
+      executionWorktrees: [
+        createExecutionWorktree({
           id: "exec-1",
           name: "PAP-893",
           branchName: "PAP-893-workspaces-tab",
@@ -211,20 +211,20 @@ describe("buildProjectWorkspaceSummaries", () => {
   });
 
   it("does not duplicate non-primary workspace issues when an execution workspace owns them", () => {
-    const summaries = buildProjectWorkspaceSummaries({
+    const summaries = buildProjectWorktreeSummaries({
       project,
       issues: [
         createIssue({
           id: "issue-exec-derived",
-          projectWorkspaceId: featureWorkspace.id,
+          projectWorkspaceId: featureWorktree.id,
           executionWorkspaceId: "exec-2",
           updatedAt: new Date("2026-03-26T12:00:00Z"),
         }),
       ],
-      executionWorkspaces: [
-        createExecutionWorkspace({
+      executionWorktrees: [
+        createExecutionWorktree({
           id: "exec-2",
-          projectWorkspaceId: featureWorkspace.id,
+          projectWorkspaceId: featureWorktree.id,
           name: "feature-branch run",
         }),
       ],
@@ -236,22 +236,22 @@ describe("buildProjectWorkspaceSummaries", () => {
   });
 
   it("excludes issues that only use the default shared workspace", () => {
-    const summaries = buildProjectWorkspaceSummaries({
+    const summaries = buildProjectWorktreeSummaries({
       project,
       issues: [
         createIssue({
           id: "issue-default-shared",
-          projectWorkspaceId: primaryWorkspace.id,
+          projectWorkspaceId: primaryWorktree.id,
           executionWorkspaceId: "exec-shared-default",
           updatedAt: new Date("2026-03-26T12:00:00Z"),
         }),
       ],
-      executionWorkspaces: [
-        createExecutionWorkspace({
+      executionWorktrees: [
+        createExecutionWorktree({
           id: "exec-shared-default",
           mode: "shared_workspace",
           strategyType: "project_primary",
-          projectWorkspaceId: primaryWorkspace.id,
+          projectWorkspaceId: primaryWorktree.id,
           branchName: null,
           baseRef: null,
           providerType: "local_fs",
@@ -264,7 +264,7 @@ describe("buildProjectWorkspaceSummaries", () => {
   });
 
   it("sorts workspaces with running services first and marks live service urls", () => {
-    const summaries = buildProjectWorkspaceSummaries({
+    const summaries = buildProjectWorktreeSummaries({
       project,
       issues: [
         createIssue({
@@ -278,8 +278,8 @@ describe("buildProjectWorkspaceSummaries", () => {
           updatedAt: new Date("2026-03-25T12:00:00Z"),
         }),
       ],
-      executionWorkspaces: [
-        createExecutionWorkspace({
+      executionWorktrees: [
+        createExecutionWorktree({
           id: "exec-stopped",
           name: "newer stopped",
           lastUsedAt: new Date("2026-03-27T12:00:00Z"),
@@ -292,7 +292,7 @@ describe("buildProjectWorkspaceSummaries", () => {
             }),
           ],
         }),
-        createExecutionWorkspace({
+        createExecutionWorktree({
           id: "exec-live",
           name: "older live",
           lastUsedAt: new Date("2026-03-25T12:00:00Z"),

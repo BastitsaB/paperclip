@@ -10,16 +10,16 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
-import { executionWorkspaces } from "./execution_workspaces.js";
+import { executionWorktrees } from "./execution_worktrees.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
 import { issues } from "./issues.js";
 
-export const workspaceOperations = pgTable(
+export const worktreeOperations = pgTable(
   "workspace_operations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    executionWorkspaceId: uuid("execution_workspace_id").references(() => executionWorkspaces.id, {
+    executionWorkspaceId: uuid("execution_workspace_id").references(() => executionWorktrees.id, {
       onDelete: "set null",
     }),
     heartbeatRunId: uuid("heartbeat_run_id").references(() => heartbeatRuns.id, {

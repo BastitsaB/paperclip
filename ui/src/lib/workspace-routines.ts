@@ -8,7 +8,7 @@ const WORKSPACE_SPECIFIC_ROUTINE_VARIABLES = new Set([
   WORKSPACE_BRANCH_ROUTINE_VARIABLE,
 ]);
 
-export function getWorkspaceSpecificRoutineVariableNames(routine: RoutineListItem): string[] {
+export function getWorktreeSpecificRoutineVariableNames(routine: RoutineListItem): string[] {
   const names = new Set<string>();
 
   for (const variable of routine.variables) {
@@ -26,11 +26,11 @@ export function getWorkspaceSpecificRoutineVariableNames(routine: RoutineListIte
   return [...names];
 }
 
-export function routineHasWorkspaceSpecificVariables(routine: RoutineListItem): boolean {
-  return getWorkspaceSpecificRoutineVariableNames(routine).length > 0;
+export function routineHasWorktreeSpecificVariables(routine: RoutineListItem): boolean {
+  return getWorktreeSpecificRoutineVariableNames(routine).length > 0;
 }
 
-export function sortWorkspaceRoutinesByName(routines: RoutineListItem[]): RoutineListItem[] {
+export function sortWorktreeRoutinesByName(routines: RoutineListItem[]): RoutineListItem[] {
   return [...routines].sort((left, right) => {
     const titleOrder = left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
     if (titleOrder !== 0) return titleOrder;

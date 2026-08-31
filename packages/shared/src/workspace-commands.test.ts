@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  findWorkspaceCommandDefinition,
-  listWorkspaceCommandDefinitions,
-  matchWorkspaceRuntimeServiceToCommand,
+  findWorktreeCommandDefinition,
+  listWorktreeCommandDefinitions,
+  matchWorktreeRuntimeServiceToCommand,
 } from "./workspace-commands.js";
 
 describe("workspace command helpers", () => {
   it("derives service and job commands from command-first runtime config", () => {
-    const commands = listWorkspaceCommandDefinitions({
+    const commands = listWorktreeCommandDefinitions({
       commands: [
         { id: "web", name: "web", kind: "service", command: "pnpm dev" },
         { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
@@ -21,7 +21,7 @@ describe("workspace command helpers", () => {
   });
 
   it("falls back to legacy services and jobs arrays", () => {
-    const commands = listWorkspaceCommandDefinitions({
+    const commands = listWorktreeCommandDefinitions({
       services: [{ name: "web", command: "pnpm dev" }],
       jobs: [{ name: "lint", command: "pnpm lint" }],
     });
@@ -33,15 +33,15 @@ describe("workspace command helpers", () => {
   });
 
   it("matches a configured service command to the current runtime service", () => {
-    const workspaceRuntime = {
+    const worktreeRuntime = {
       commands: [
         { id: "web", name: "web", kind: "service", command: "pnpm dev", cwd: "." },
       ],
     };
-    const command = findWorkspaceCommandDefinition(workspaceRuntime, "web");
+    const command = findWorktreeCommandDefinition(worktreeRuntime, "web");
     expect(command).not.toBeNull();
 
-    const match = matchWorkspaceRuntimeServiceToCommand(command!, [
+    const match = matchWorktreeRuntimeServiceToCommand(command!, [
       {
         id: "runtime-web",
         serviceName: "web",
@@ -56,15 +56,15 @@ describe("workspace command helpers", () => {
   });
 
   it("does not match a stale runtime service after the configured command changes", () => {
-    const workspaceRuntime = {
+    const worktreeRuntime = {
       commands: [
         { id: "web", name: "web", kind: "service", command: "pnpm dev:once --tailscale-auth", cwd: "." },
       ],
     };
-    const command = findWorkspaceCommandDefinition(workspaceRuntime, "web");
+    const command = findWorktreeCommandDefinition(worktreeRuntime, "web");
     expect(command).not.toBeNull();
 
-    const match = matchWorkspaceRuntimeServiceToCommand(command!, [
+    const match = matchWorktreeRuntimeServiceToCommand(command!, [
       {
         id: "runtime-web",
         serviceName: "web",
@@ -79,15 +79,15 @@ describe("workspace command helpers", () => {
   });
 
   it("matches an exposed dev runtime whose bind command was hardened to loopback", () => {
-    const workspaceRuntime = {
+    const worktreeRuntime = {
       commands: [
         { id: "web", name: "paperclip-dev", kind: "service", command: "pnpm dev --bind lan" },
       ],
     };
-    const command = findWorkspaceCommandDefinition(workspaceRuntime, "web");
+    const command = findWorktreeCommandDefinition(worktreeRuntime, "web");
     expect(command).not.toBeNull();
 
-    const match = matchWorkspaceRuntimeServiceToCommand(command!, [
+    const match = matchWorktreeRuntimeServiceToCommand(command!, [
       {
         id: "runtime-web",
         serviceName: "paperclip-dev",
@@ -111,11 +111,11 @@ describe("workspace command helpers", () => {
   });
 
   it("does not equate a loopback command with a lan command without managed exposure", () => {
-    const command = findWorkspaceCommandDefinition({
+    const command = findWorktreeCommandDefinition({
       services: [{ name: "paperclip-dev", command: "pnpm dev --bind lan" }],
     }, "service:paperclip-dev");
 
-    const match = matchWorkspaceRuntimeServiceToCommand(command!, [
+    const match = matchWorktreeRuntimeServiceToCommand(command!, [
       {
         id: "runtime-web",
         serviceName: "paperclip-dev",
@@ -130,7 +130,7 @@ describe("workspace command helpers", () => {
   });
 
   it("does not revive runtime history from a previously configured port", () => {
-    const command = findWorkspaceCommandDefinition({
+    const command = findWorktreeCommandDefinition({
       services: [
         {
           name: "web",
@@ -141,7 +141,7 @@ describe("workspace command helpers", () => {
     }, "service:web");
     expect(command).toEqual(expect.objectContaining({ port: 42001 }));
 
-    const match = matchWorkspaceRuntimeServiceToCommand(command!, [
+    const match = matchWorktreeRuntimeServiceToCommand(command!, [
       {
         id: "runtime-old-port",
         serviceName: "web",
@@ -164,7 +164,7 @@ describe("workspace command helpers", () => {
   });
 
   it("does not treat an auto port preference as a fixed runtime identity", () => {
-    const command = findWorkspaceCommandDefinition({
+    const command = findWorktreeCommandDefinition({
       services: [
         {
           name: "web",

@@ -4,11 +4,11 @@ import type { ComponentProps, ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { WorkspaceOverviewItem, WorkspaceOverviewResponse } from "@paperclipai/shared";
+import type { WorktreeOverviewItem, WorktreeOverviewResponse } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Workspaces } from "./Workspaces";
+import { Worktrees } from "./Worktrees";
 
-const mockExecutionWorkspacesApi = vi.hoisted(() => ({
+const mockExecutionWorktreesApi = vi.hoisted(() => ({
   listOverview: vi.fn(),
   list: vi.fn(),
   controlRuntimeServices: vi.fn(),
@@ -19,7 +19,7 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({ getExperimental: vi.fn() }))
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSummarySlotCard = vi.hoisted(() => vi.fn());
 
-vi.mock("../api/execution-workspaces", () => ({ executionWorkspacesApi: mockExecutionWorkspacesApi }));
+vi.mock("../api/execution-workspaces", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
 vi.mock("../api/instanceSettings", () => ({ instanceSettingsApi: mockInstanceSettingsApi }));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1" }),
@@ -40,7 +40,7 @@ vi.mock("../components/IssuesQuicklook", () => ({
 vi.mock("../components/SummarySlotCard", () => ({
   SummarySlotCard: (props: unknown) => {
     mockSummarySlotCard(props);
-    return <div data-testid="summary-slot-card">Workspaces summary card</div>;
+    return <div data-testid="summary-slot-card">Worktrees summary card</div>;
   },
 }));
 
@@ -61,12 +61,12 @@ function act(callback: () => void | Promise<void>) {
   return result;
 }
 
-function overviewItem(overrides: Partial<WorkspaceOverviewItem> = {}): WorkspaceOverviewItem {
+function overviewItem(overrides: Partial<WorktreeOverviewItem> = {}): WorktreeOverviewItem {
   return {
     key: overrides.key ?? "execution:workspace-1",
     kind: "execution_workspace",
     workspaceId: overrides.workspaceId ?? "workspace-1",
-    workspaceName: overrides.workspaceName ?? "Workspace Alpha",
+    workspaceName: overrides.workspaceName ?? "Worktree Alpha",
     projectId: overrides.projectId ?? "project-1",
     projectUrlKey: overrides.projectUrlKey ?? "paperclip-app",
     projectName: overrides.projectName ?? "Paperclip App",
@@ -98,7 +98,7 @@ function overviewItem(overrides: Partial<WorkspaceOverviewItem> = {}): Workspace
   };
 }
 
-function overviewResponse(overrides: Partial<WorkspaceOverviewResponse> = {}): WorkspaceOverviewResponse {
+function overviewResponse(overrides: Partial<WorktreeOverviewResponse> = {}): WorktreeOverviewResponse {
   const items = overrides.items ?? [overviewItem()];
   return {
     items,
@@ -117,7 +117,7 @@ async function flushQueries() {
   });
 }
 
-describe("Workspaces", () => {
+describe("Worktrees", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
 
@@ -125,8 +125,8 @@ describe("Workspaces", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
-    mockExecutionWorkspacesApi.listOverview.mockResolvedValue(overviewResponse());
-    mockExecutionWorkspacesApi.list.mockResolvedValue([]);
+    mockExecutionWorktreesApi.listOverview.mockResolvedValue(overviewResponse());
+    mockExecutionWorktreesApi.list.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -136,8 +136,8 @@ describe("Workspaces", () => {
     vi.clearAllMocks();
   });
 
-  it("uses the bounded overview endpoint and renders grouped workspace cards with linked task summaries", async () => {
-    mockExecutionWorkspacesApi.listOverview
+  it("uses the bounded overview endpoint and renders grouped worktree cards with linked task summaries", async () => {
+    mockExecutionWorktreesApi.listOverview
       .mockResolvedValueOnce(overviewResponse({
         items: [overviewItem()],
         total: 2,
@@ -149,7 +149,7 @@ describe("Workspaces", () => {
           overviewItem({
             key: "execution:workspace-2",
             workspaceId: "workspace-2",
-            workspaceName: "Workspace Beta",
+            workspaceName: "Worktree Beta",
             executionWorkspaceId: "workspace-2",
             runningServiceCount: 0,
             linkedIssueCount: 1,
@@ -157,7 +157,7 @@ describe("Workspaces", () => {
               {
                 id: "issue-2",
                 identifier: "PAP-11917",
-                title: "Verify /workspaces performance improvement",
+                title: "Verify /worktrees performance improvement",
                 status: "blocked",
                 priority: "medium",
                 updatedAt: new Date("2026-06-25T01:06:00.000Z"),
@@ -174,30 +174,30 @@ describe("Workspaces", () => {
       root = createRoot(container);
       root.render(
         <QueryClientProvider client={queryClient}>
-          <Workspaces />
+          <Worktrees />
         </QueryClientProvider>,
       );
     });
     await flushQueries();
 
     expect(mockInstanceSettingsApi.getExperimental).toHaveBeenCalled();
-    expect(mockExecutionWorkspacesApi.listOverview).toHaveBeenCalledWith("company-1", { offset: 0 });
-    expect(mockExecutionWorkspacesApi.list).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Workspaces summary card");
+    expect(mockExecutionWorktreesApi.listOverview).toHaveBeenCalledWith("company-1", { offset: 0 });
+    expect(mockExecutionWorktreesApi.list).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Worktrees summary card");
     expect(mockSummarySlotCard).toHaveBeenCalledWith(expect.objectContaining({
       companyId: "company-1",
       scopeKind: "workspaces_overview",
-      title: "Workspace summary",
+      title: "Worktree summary",
     }));
-    const heading = Array.from(container.querySelectorAll("h2")).find((node) => node.textContent === "Workspaces");
+    const heading = Array.from(container.querySelectorAll("h2")).find((node) => node.textContent === "Worktrees");
     const summaryCard = container.querySelector('[data-testid="summary-slot-card"]');
     expect(heading && summaryCard ? Boolean(heading.compareDocumentPosition(summaryCard) & Node.DOCUMENT_POSITION_FOLLOWING) : false).toBe(true);
     expect(container.textContent).toContain("Paperclip App");
-    expect(container.textContent).toContain("Workspace Alpha");
+    expect(container.textContent).toContain("Worktree Alpha");
     expect(container.textContent).toContain("PAP-11916");
     expect(container.textContent).toContain("+1 more");
-    expect(container.textContent).toContain("Showing 1 of 2 workspaces.");
-    expect(container.querySelector('a[href="/projects/paperclip-app/workspaces"]')).not.toBeNull();
+    expect(container.textContent).toContain("Showing 1 of 2 worktrees.");
+    expect(container.querySelector('a[href="/projects/paperclip-app/worktrees"]')).not.toBeNull();
 
     const loadMoreButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent === "Load more");
@@ -207,8 +207,8 @@ describe("Workspaces", () => {
     });
     await flushQueries();
 
-    expect(mockExecutionWorkspacesApi.listOverview).toHaveBeenLastCalledWith("company-1", { offset: 50 });
-    expect(container.textContent).toContain("Workspace Beta");
+    expect(mockExecutionWorktreesApi.listOverview).toHaveBeenLastCalledWith("company-1", { offset: 50 });
+    expect(container.textContent).toContain("Worktree Beta");
     expect(container.textContent).toContain("PAP-11917");
   });
 
@@ -220,13 +220,13 @@ describe("Workspaces", () => {
       root = createRoot(container);
       root.render(
         <QueryClientProvider client={queryClient}>
-          <Workspaces />
+          <Worktrees />
         </QueryClientProvider>,
       );
     });
     await flushQueries();
 
     expect(container.textContent).toContain("/issues");
-    expect(mockExecutionWorkspacesApi.listOverview).not.toHaveBeenCalled();
+    expect(mockExecutionWorktreesApi.listOverview).not.toHaveBeenCalled();
   });
 });

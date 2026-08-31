@@ -9,16 +9,16 @@ vi.mock("./client", () => ({
   api: mockApi,
 }));
 
-import { executionWorkspacesApi } from "./execution-workspaces";
+import { executionWorktreesApi } from "./execution-workspaces";
 
-describe("executionWorkspacesApi.listSummaries", () => {
+describe("executionWorktreesApi.listSummaries", () => {
   beforeEach(() => {
     mockApi.get.mockReset();
     mockApi.get.mockResolvedValue([]);
   });
 
   it("requests the lightweight summary payload", async () => {
-    await executionWorkspacesApi.listSummaries("company-1", {
+    await executionWorktreesApi.listSummaries("company-1", {
       projectId: "project-1",
       reuseEligible: true,
     });
@@ -80,7 +80,7 @@ describe("executionWorkspacesApi.listSummaries", () => {
       nextOffset: null,
     });
 
-    const overview = await executionWorkspacesApi.listOverview("company-1", {
+    const overview = await executionWorktreesApi.listOverview("company-1", {
       status: ["active", "idle"],
       limit: 25,
       offset: 10,
@@ -95,7 +95,7 @@ describe("executionWorkspacesApi.listSummaries", () => {
   });
 });
 
-describe("executionWorkspacesApi.reconcile", () => {
+describe("executionWorktreesApi.reconcile", () => {
   beforeEach(() => {
     mockApi.post.mockReset();
     mockApi.post.mockResolvedValue({});
@@ -105,7 +105,7 @@ describe("executionWorkspacesApi.reconcile", () => {
   // backend contract `POST /execution-workspaces/:id/reconcile-branch` (S4 / PAP-1586). A bare
   // `/reconcile` 404s both recovery-card actions. If the two sides drift, this test fails.
   it("posts forward reconcile to the /reconcile-branch route", async () => {
-    await executionWorkspacesApi.reconcile("workspace-1", { mode: "forward" });
+    await executionWorktreesApi.reconcile("workspace-1", { mode: "forward" });
 
     expect(mockApi.post).toHaveBeenCalledWith("/execution-workspaces/workspace-1/reconcile-branch", {
       mode: "forward",
@@ -113,7 +113,7 @@ describe("executionWorkspacesApi.reconcile", () => {
   });
 
   it("posts break-glass override reconcile to the /reconcile-branch route", async () => {
-    await executionWorkspacesApi.reconcile("workspace-1", { mode: "override", reason: "operator note" });
+    await executionWorktreesApi.reconcile("workspace-1", { mode: "override", reason: "operator note" });
 
     expect(mockApi.post).toHaveBeenCalledWith("/execution-workspaces/workspace-1/reconcile-branch", {
       mode: "override",

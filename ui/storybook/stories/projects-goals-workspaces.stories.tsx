@@ -6,18 +6,18 @@ import { Archive, Boxes, FolderGit2, GitBranch, Network, Play, RotateCcw, Square
 import { GoalProperties } from "@/components/GoalProperties";
 import { GoalTree } from "@/components/GoalTree";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "@/components/ProjectProperties";
-import { ProjectWorkspacesContent } from "@/components/ProjectWorkspacesContent";
-import { ProjectWorkspaceSummaryCard } from "@/components/ProjectWorkspaceSummaryCard";
+import { ProjectWorktreesContent } from "@/components/ProjectWorkspacesContent";
+import { ProjectWorktreeSummaryCard } from "@/components/ProjectWorkspaceSummaryCard";
 import {
-  WorkspaceRuntimeControls,
-  buildWorkspaceRuntimeControlSections,
-  type WorkspaceRuntimeControlRequest,
+  WorktreeRuntimeControls,
+  buildWorktreeRuntimeControlSections,
+  type WorktreeRuntimeControlRequest,
 } from "@/components/WorkspaceRuntimeControls";
 import { WorktreeBanner } from "@/components/WorktreeBanner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { queryKeys } from "@/lib/queryKeys";
-import { buildProjectWorkspaceSummaries } from "@/lib/project-workspaces-tab";
+import { buildProjectWorktreeSummaries } from "@/lib/project-workspaces-tab";
 import {
   storybookAgents,
   storybookAuthSession,
@@ -83,13 +83,13 @@ function hydrateStorybookQueries(queryClient: ReturnType<typeof useQueryClient>)
     enableIsolatedWorkspaces: true,
     enableRoutineTriggers: true,
   });
-  queryClient.setQueryData(queryKeys.executionWorkspaces.list(COMPANY_ID), storybookExecutionWorkspaces);
+  queryClient.setQueryData(queryKeys.executionWorktrees.list(COMPANY_ID), storybookExecutionWorkspaces);
   queryClient.setQueryData(
-    queryKeys.executionWorkspaces.list(COMPANY_ID, { projectId: boardProject.id }),
+    queryKeys.executionWorktrees.list(COMPANY_ID, { projectId: boardProject.id }),
     storybookExecutionWorkspaces,
   );
   queryClient.setQueryData(
-    queryKeys.executionWorkspaces.summaryList(COMPANY_ID),
+    queryKeys.executionWorktrees.summaryList(COMPANY_ID),
     storybookExecutionWorkspaces.map((workspace) => ({
       id: workspace.id,
       name: workspace.name,
@@ -178,10 +178,10 @@ function ProjectPropertiesMatrix() {
 }
 
 function WorkspacesMatrix() {
-  const summaries = buildProjectWorkspaceSummaries({
+  const summaries = buildProjectWorktreeSummaries({
     project: boardProject,
     issues: storybookIssues.filter((issue) => issue.projectId === boardProject.id),
-    executionWorkspaces: storybookExecutionWorkspaces,
+    executionWorktrees: storybookExecutionWorkspaces,
   });
   const localSummary = summaries.find((summary) => summary.kind === "project_workspace" && summary.workspaceId === "workspace-board-ui");
   const remoteSummary = summaries.find((summary) => summary.workspaceId === "workspace-docs-remote");
@@ -192,7 +192,7 @@ function WorkspacesMatrix() {
 
   return (
     <div className="space-y-5">
-      <ProjectWorkspacesContent
+      <ProjectWorktreesContent
         companyId={COMPANY_ID}
         projectId={boardProject.id}
         projectRef={boardProject.urlKey}
@@ -200,7 +200,7 @@ function WorkspacesMatrix() {
       />
       <div className="grid gap-4 xl:grid-cols-3">
         {featuredSummaries.map((summary) => (
-          <ProjectWorkspaceSummaryCard
+          <ProjectWorktreeSummaryCard
             key={summary.key}
             projectRef={boardProject.urlKey}
             summary={summary}
@@ -212,7 +212,7 @@ function WorkspacesMatrix() {
         ))}
       </div>
       <div className="rounded-lg border border-dashed border-border p-5 text-sm text-muted-foreground">
-        <ProjectWorkspacesContent
+        <ProjectWorktreesContent
           companyId={COMPANY_ID}
           projectId={archivedProject.id}
           projectRef={archivedProject.urlKey}
@@ -319,19 +319,19 @@ function GoalTreeMatrix() {
 function RuntimeControlsMatrix() {
   const primaryWorkspace = storybookProjectWorkspaces[0]!;
   const remoteWorkspace = storybookProjectWorkspaces.find((workspace) => workspace.id === "workspace-docs-remote")!;
-  const runningSections = buildWorkspaceRuntimeControlSections({
+  const runningSections = buildWorktreeRuntimeControlSections({
     runtimeConfig: primaryWorkspace.runtimeConfig?.workspaceRuntime,
     runtimeServices: primaryWorkspace.runtimeServices,
     canStartServices: true,
     canRunJobs: true,
   });
-  const stoppedSections = buildWorkspaceRuntimeControlSections({
+  const stoppedSections = buildWorktreeRuntimeControlSections({
     runtimeConfig: remoteWorkspace.runtimeConfig?.workspaceRuntime,
     runtimeServices: remoteWorkspace.runtimeServices,
     canStartServices: true,
     canRunJobs: true,
   });
-  const disabledSections = buildWorkspaceRuntimeControlSections({
+  const disabledSections = buildWorktreeRuntimeControlSections({
     runtimeConfig: {
       commands: [
         { id: "web", name: "Web app", kind: "service", command: "pnpm dev" },
@@ -342,7 +342,7 @@ function RuntimeControlsMatrix() {
     canStartServices: false,
     canRunJobs: false,
   });
-  const pendingRequest: WorkspaceRuntimeControlRequest = {
+  const pendingRequest: WorktreeRuntimeControlRequest = {
     action: "restart",
     workspaceCommandId: "storybook",
     runtimeServiceId: "service-storybook",
@@ -360,7 +360,7 @@ function RuntimeControlsMatrix() {
           <CardDescription>Stop and restart actions with a pending request spinner.</CardDescription>
         </CardHeader>
         <CardContent>
-          <WorkspaceRuntimeControls
+          <WorktreeRuntimeControls
             sections={runningSections}
             isPending
             pendingRequest={pendingRequest}
@@ -377,7 +377,7 @@ function RuntimeControlsMatrix() {
           <CardDescription>Startable remote workspace service with URL history.</CardDescription>
         </CardHeader>
         <CardContent>
-          <WorkspaceRuntimeControls sections={stoppedSections} onAction={() => undefined} />
+          <WorktreeRuntimeControls sections={stoppedSections} onAction={() => undefined} />
         </CardContent>
       </Card>
       <Card className="shadow-none">
@@ -389,7 +389,7 @@ function RuntimeControlsMatrix() {
           <CardDescription>Disabled runtime controls when no workspace path is available.</CardDescription>
         </CardHeader>
         <CardContent>
-          <WorkspaceRuntimeControls
+          <WorktreeRuntimeControls
             sections={disabledSections}
             disabledHint="Add a workspace path before starting runtime services."
             square

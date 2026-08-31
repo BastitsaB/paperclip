@@ -1,14 +1,14 @@
 import { index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { companies } from "./companies.js";
-import { executionWorkspaces } from "./execution_workspaces.js";
+import { executionWorktrees } from "./execution_worktrees.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
 import { issues } from "./issues.js";
 
 // One durable exclusivity row per execution workspace. The unique constraint on
 // execution_workspace_id is the atomicity anchor: concurrent claims from
 // different server processes serialize on it instead of on per-process state.
-export const executionWorkspaceRuntimeLeases = pgTable(
+export const executionWorktreeRuntimeLeases = pgTable(
   "execution_workspace_runtime_leases",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -16,7 +16,7 @@ export const executionWorkspaceRuntimeLeases = pgTable(
     executionWorkspaceId: uuid("execution_workspace_id")
       .notNull()
       .unique()
-      .references(() => executionWorkspaces.id, { onDelete: "cascade" }),
+      .references(() => executionWorktrees.id, { onDelete: "cascade" }),
     // Durable owner identity (`issue:<uuid>` or `run:<uuid>`). Kept as text so the
     // lease still identifies its owner after the FK columns are nulled out.
     ownerKey: text("owner_key").notNull(),

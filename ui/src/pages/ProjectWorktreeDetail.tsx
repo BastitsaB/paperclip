@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isUuidLike, type ProjectWorkspace } from "@paperclipai/shared";
+import { isUuidLike, type ProjectWorktree } from "@paperclipai/shared";
 import { ArrowLeft, Check, ExternalLink, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,24 +13,24 @@ import { projectsApi } from "../api/projects";
 import { PageTabBar } from "../components/PageTabBar";
 import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
 import {
-  buildWorkspaceRuntimeControlSections,
-  WorkspaceRuntimeControls,
-  type WorkspaceRuntimeControlRequest,
+  buildWorktreeRuntimeControlSections,
+  WorktreeRuntimeControls,
+  type WorktreeRuntimeControlRequest,
 } from "../components/WorkspaceRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useManagedSandboxOnly } from "../hooks/useManagedSandboxOnly";
 import { queryKeys } from "../lib/queryKeys";
-import { projectRouteRef, projectWorkspaceUrl } from "../lib/utils";
+import { projectRouteRef, projectWorktreeUrl } from "../lib/utils";
 
-type WorkspaceFormState = {
+type WorktreeFormState = {
   name: string;
-  sourceType: ProjectWorkspaceSourceType;
+  sourceType: ProjectWorktreeSourceType;
   cwd: string;
   repoUrl: string;
   repoRef: string;
   defaultRef: string;
-  visibility: ProjectWorkspaceVisibility;
+  visibility: ProjectWorktreeVisibility;
   setupCommand: string;
   cleanupCommand: string;
   remoteProvider: string;
@@ -39,47 +39,47 @@ type WorkspaceFormState = {
   runtimeConfig: string;
 };
 
-type ProjectWorkspaceSourceType = ProjectWorkspace["sourceType"];
-type ProjectWorkspaceVisibility = ProjectWorkspace["visibility"];
-type ProjectWorkspaceBaseTab = "configuration";
-type ProjectWorkspacePluginTab = `plugin:${string}`;
-type ProjectWorkspaceTab = ProjectWorkspaceBaseTab | ProjectWorkspacePluginTab;
-type OrderedProjectWorkspaceTabItem = {
-  value: ProjectWorkspaceTab;
+type ProjectWorktreeSourceType = ProjectWorktree["sourceType"];
+type ProjectWorktreeVisibility = ProjectWorktree["visibility"];
+type ProjectWorktreeBaseTab = "configuration";
+type ProjectWorktreePluginTab = `plugin:${string}`;
+type ProjectWorktreeTab = ProjectWorktreeBaseTab | ProjectWorktreePluginTab;
+type OrderedProjectWorktreeTabItem = {
+  value: ProjectWorktreeTab;
   label: string;
   order: number;
 };
 
 const DEFAULT_PLUGIN_DETAIL_TAB_ORDER = 100;
-const PROJECT_WORKSPACE_BASE_TAB_ITEMS: OrderedProjectWorkspaceTabItem[] = [
+const PROJECT_WORKSPACE_BASE_TAB_ITEMS: OrderedProjectWorktreeTabItem[] = [
   { value: "configuration", label: "Configuration", order: 30 },
 ];
 
-function isProjectWorkspacePluginTab(value: string | null): value is ProjectWorkspacePluginTab {
+function isProjectWorktreePluginTab(value: string | null): value is ProjectWorktreePluginTab {
   return typeof value === "string" && value.startsWith("plugin:");
 }
 
-function projectWorkspaceTabFromSearch(search: string): ProjectWorkspaceTab {
+function projectWorktreeTabFromSearch(search: string): ProjectWorktreeTab {
   const tab = new URLSearchParams(search).get("tab");
-  if (isProjectWorkspacePluginTab(tab)) return tab;
+  if (isProjectWorktreePluginTab(tab)) return tab;
   return "configuration";
 }
 
-function orderProjectWorkspaceTabItems(items: OrderedProjectWorkspaceTabItem[]) {
+function orderProjectWorktreeTabItems(items: OrderedProjectWorktreeTabItem[]) {
   return items
     .map((item, index) => ({ item, index }))
     .sort((left, right) => left.item.order - right.item.order || left.index - right.index)
     .map(({ item }) => item);
 }
 
-const SOURCE_TYPE_OPTIONS: Array<{ value: ProjectWorkspaceSourceType; label: string; description: string }> = [
+const SOURCE_TYPE_OPTIONS: Array<{ value: ProjectWorktreeSourceType; label: string; description: string }> = [
   { value: "local_path", label: "Local git checkout", description: "A local path Paperclip can use directly." },
   { value: "non_git_path", label: "Local non-git path", description: "A local folder without git semantics." },
   { value: "git_repo", label: "Remote git repo", description: "A repo URL with optional refs and local checkout." },
-  { value: "remote_managed", label: "Remote-managed workspace", description: "A hosted workspace tracked by external reference." },
+  { value: "remote_managed", label: "Remote-managed worktree", description: "A hosted worktree tracked by external reference." },
 ];
 
-const VISIBILITY_OPTIONS: Array<{ value: ProjectWorkspaceVisibility; label: string }> = [
+const VISIBILITY_OPTIONS: Array<{ value: ProjectWorktreeVisibility; label: string }> = [
   { value: "default", label: "Default" },
   { value: "advanced", label: "Advanced" },
 ];
@@ -107,7 +107,7 @@ function formatJson(value: Record<string, unknown> | null | undefined) {
   return JSON.stringify(value, null, 2);
 }
 
-function formStateFromWorkspace(workspace: ProjectWorkspace): WorkspaceFormState {
+function formStateFromWorktree(workspace: ProjectWorktree): WorktreeFormState {
   return {
     name: workspace.name,
     sourceType: workspace.sourceType,
@@ -139,7 +139,7 @@ function parseRuntimeConfigJson(value: string) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false as const,
-        error: "Workspace commands JSON must be a JSON object.",
+        error: "Worktree commands JSON must be a JSON object.",
       };
     }
     return { ok: true as const, value: parsed as Record<string, unknown> };
@@ -151,9 +151,9 @@ function parseRuntimeConfigJson(value: string) {
   }
 }
 
-function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
+function buildWorktreePatch(initialState: WorktreeFormState, nextState: WorktreeFormState) {
   const patch: Record<string, unknown> = {};
-  const maybeAssign = (key: keyof WorkspaceFormState, transform?: (value: string) => unknown) => {
+  const maybeAssign = (key: keyof WorktreeFormState, transform?: (value: string) => unknown) => {
     const initialValue = initialState[key];
     const nextValue = nextState[key];
     if (initialValue === nextValue) return;
@@ -183,21 +183,21 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   return patch;
 }
 
-function validateWorkspaceForm(form: WorkspaceFormState) {
+function validateWorktreeForm(form: WorktreeFormState) {
   const cwd = normalizeText(form.cwd);
   const repoUrl = normalizeText(form.repoUrl);
-  const remoteWorkspaceRef = normalizeText(form.remoteWorkspaceRef);
+  const remoteWorktreeRef = normalizeText(form.remoteWorkspaceRef);
 
   if (form.sourceType === "remote_managed") {
-    if (!remoteWorkspaceRef && !repoUrl) {
-      return "Remote-managed workspaces require a remote workspace ref or repo URL.";
+    if (!remoteWorktreeRef && !repoUrl) {
+      return "Remote-managed worktrees require a remote worktree ref or repo URL.";
     }
   } else if (!cwd && !repoUrl) {
-    return "Workspace requires at least one local path or repo URL.";
+    return "Worktree requires at least one local path or repo URL.";
   }
 
   if (cwd && (form.sourceType === "local_path" || form.sourceType === "non_git_path") && !isAbsolutePath(cwd)) {
-    return "Local workspace path must be absolute.";
+    return "Local worktree path must be absolute.";
   }
 
   if (repoUrl) {
@@ -245,11 +245,11 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-export function ProjectWorkspaceDetail() {
-  const { companyPrefix, projectId, workspaceId } = useParams<{
+export function ProjectWorktreeDetail() {
+  const { companyPrefix, projectId, worktreeId } = useParams<{
     companyPrefix?: string;
     projectId: string;
-    workspaceId: string;
+    worktreeId: string;
   }>();
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -257,12 +257,12 @@ export function ProjectWorkspaceDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hideHostPaths } = useManagedSandboxOnly();
-  const [form, setForm] = useState<WorkspaceFormState | null>(null);
+  const [form, setForm] = useState<WorktreeFormState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [runtimeActionMessage, setRuntimeActionMessage] = useState<string | null>(null);
   const routeProjectRef = projectId ?? "";
-  const routeWorkspaceId = workspaceId ?? "";
-  const activeTab = useMemo(() => projectWorkspaceTabFromSearch(location.search), [location.search]);
+  const routeWorktreeId = worktreeId ?? "";
+  const activeTab = useMemo(() => projectWorktreeTabFromSearch(location.search), [location.search]);
 
   const routeCompanyId = useMemo(() => {
     if (!companyPrefix) return null;
@@ -279,12 +279,12 @@ export function ProjectWorkspaceDetail() {
   });
 
   const project = projectQuery.data ?? null;
-  const workspace = useMemo(
-    () => project?.workspaces.find((item) => item.id === routeWorkspaceId) ?? null,
-    [project, routeWorkspaceId],
+  const worktree = useMemo(
+    () => project?.workspaces.find((item) => item.id === routeWorktreeId) ?? null,
+    [project, routeWorktreeId],
   );
   const canonicalProjectRef = project ? projectRouteRef(project) : routeProjectRef;
-  const initialState = useMemo(() => (workspace ? formStateFromWorkspace(workspace) : null), [workspace]);
+  const initialState = useMemo(() => (worktree ? formStateFromWorktree(worktree) : null), [worktree]);
   const isDirty = Boolean(form && initialState && JSON.stringify(form) !== JSON.stringify(initialState));
   const {
     slots: pluginDetailSlots,
@@ -298,7 +298,7 @@ export function ProjectWorkspaceDetail() {
   });
   const pluginTabItems = useMemo(
     () => pluginDetailSlots.map((slot) => ({
-      value: `plugin:${slot.pluginKey}:${slot.id}` as ProjectWorkspacePluginTab,
+      value: `plugin:${slot.pluginKey}:${slot.id}` as ProjectWorktreePluginTab,
       label: slot.displayName,
       order: slot.order ?? DEFAULT_PLUGIN_DETAIL_TAB_ORDER,
       slot,
@@ -306,7 +306,7 @@ export function ProjectWorkspaceDetail() {
     [pluginDetailSlots],
   );
   const tabItems = useMemo(
-    () => orderProjectWorkspaceTabItems([...PROJECT_WORKSPACE_BASE_TAB_ITEMS, ...pluginTabItems]),
+    () => orderProjectWorktreeTabItems([...PROJECT_WORKSPACE_BASE_TAB_ITEMS, ...pluginTabItems]),
     [pluginTabItems],
   );
 
@@ -316,26 +316,26 @@ export function ProjectWorkspaceDetail() {
   }, [project?.companyId, selectedCompanyId, setSelectedCompanyId]);
 
   useEffect(() => {
-    if (!workspace) return;
-    setForm(formStateFromWorkspace(workspace));
+    if (!worktree) return;
+    setForm(formStateFromWorktree(worktree));
     setErrorMessage(null);
-  }, [workspace]);
+  }, [worktree]);
 
   useEffect(() => {
     if (!project) return;
     setBreadcrumbs([
       { label: "Projects", href: "/projects" },
       { label: project.name, href: `/projects/${canonicalProjectRef}` },
-      { label: "Workspaces", href: `/projects/${canonicalProjectRef}/workspaces` },
-      { label: workspace?.name ?? routeWorkspaceId },
+      { label: "Worktrees", href: `/projects/${canonicalProjectRef}/worktrees` },
+      { label: worktree?.name ?? routeWorktreeId },
     ]);
-  }, [setBreadcrumbs, project, canonicalProjectRef, workspace?.name, routeWorkspaceId]);
+  }, [setBreadcrumbs, project, canonicalProjectRef, worktree?.name, routeWorktreeId]);
 
   useEffect(() => {
     if (!project) return;
     if (routeProjectRef === canonicalProjectRef) return;
-    navigate(`${projectWorkspaceUrl(project, routeWorkspaceId)}${location.search}`, { replace: true });
-  }, [project, routeProjectRef, canonicalProjectRef, routeWorkspaceId, location.search, navigate]);
+    navigate(`${projectWorktreeUrl(project, routeWorktreeId)}${location.search}`, { replace: true });
+  }, [project, routeProjectRef, canonicalProjectRef, routeWorktreeId, location.search, navigate]);
 
   const invalidateProject = () => {
     if (!project) return;
@@ -346,92 +346,92 @@ export function ProjectWorkspaceDetail() {
     }
   };
 
-  const updateWorkspace = useMutation({
+  const updateWorktree = useMutation({
     mutationFn: (patch: Record<string, unknown>) =>
-      projectsApi.updateWorkspace(project!.id, routeWorkspaceId, patch, lookupCompanyId),
+      projectsApi.updateWorkspace(project!.id, routeWorktreeId, patch, lookupCompanyId),
     onSuccess: () => {
       invalidateProject();
       setErrorMessage(null);
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to save workspace.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to save worktree.");
     },
   });
 
-  const setPrimaryWorkspace = useMutation({
-    mutationFn: () => projectsApi.updateWorkspace(project!.id, routeWorkspaceId, { isPrimary: true }, lookupCompanyId),
+  const setPrimaryWorktree = useMutation({
+    mutationFn: () => projectsApi.updateWorkspace(project!.id, routeWorktreeId, { isPrimary: true }, lookupCompanyId),
     onSuccess: () => {
       invalidateProject();
       setErrorMessage(null);
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to update workspace.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update worktree.");
     },
   });
 
   const controlRuntimeServices = useMutation({
-    mutationFn: (request: WorkspaceRuntimeControlRequest) =>
-      projectsApi.controlWorkspaceCommands(project!.id, routeWorkspaceId, request.action, lookupCompanyId, request),
+    mutationFn: (request: WorktreeRuntimeControlRequest) =>
+      projectsApi.controlWorkspaceCommands(project!.id, routeWorktreeId, request.action, lookupCompanyId, request),
     onSuccess: (result, request) => {
       invalidateProject();
       setErrorMessage(null);
       setRuntimeActionMessage(
         request.action === "run"
-          ? "Workspace job completed."
+          ? "Worktree job completed."
           : request.action === "stop"
-            ? "Workspace service stopped. Task execution is not paused."
+            ? "Worktree service stopped. Task execution is not paused."
             : request.action === "restart"
-              ? "Workspace service restarted. Task execution is not paused."
-              : "Workspace service started.",
+              ? "Worktree service restarted. Task execution is not paused."
+              : "Worktree service started.",
       );
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to control worktree commands.");
     },
   });
 
-  if (projectQuery.isLoading) return <p className="text-sm text-muted-foreground">Loading workspace…</p>;
+  if (projectQuery.isLoading) return <p className="text-sm text-muted-foreground">Loading worktree…</p>;
   if (projectQuery.error) {
     return (
       <p className="text-sm text-destructive">
-        {projectQuery.error instanceof Error ? projectQuery.error.message : "Failed to load workspace"}
+        {projectQuery.error instanceof Error ? projectQuery.error.message : "Failed to load worktree"}
       </p>
     );
   }
-  if (!project || !workspace || !form || !initialState) {
-    return <p className="text-sm text-muted-foreground">Workspace not found for this project.</p>;
+  if (!project || !worktree || !form || !initialState) {
+    return <p className="text-sm text-muted-foreground">Worktree not found for this project.</p>;
   }
 
-  const canRunWorkspaceCommands = Boolean(workspace.cwd);
-  const canStartRuntimeServices = Boolean(workspace.runtimeConfig?.workspaceRuntime) && canRunWorkspaceCommands;
-  const runtimeControlSections = buildWorkspaceRuntimeControlSections({
-    runtimeConfig: workspace.runtimeConfig?.workspaceRuntime ?? null,
-    runtimeServices: workspace.runtimeServices ?? [],
+  const canRunWorktreeCommands = Boolean(worktree.cwd);
+  const canStartRuntimeServices = Boolean(worktree.runtimeConfig?.workspaceRuntime) && canRunWorktreeCommands;
+  const runtimeControlSections = buildWorktreeRuntimeControlSections({
+    runtimeConfig: worktree.runtimeConfig?.workspaceRuntime ?? null,
+    runtimeServices: worktree.runtimeServices ?? [],
     canStartServices: canStartRuntimeServices,
-    canRunJobs: canRunWorkspaceCommands,
+    canRunJobs: canRunWorktreeCommands,
   });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
   const saveChanges = () => {
-    const validationError = validateWorkspaceForm(form);
+    const validationError = validateWorktreeForm(form);
     if (validationError) {
       setErrorMessage(validationError);
       return;
     }
-    const patch = buildWorkspacePatch(initialState, form);
+    const patch = buildWorktreePatch(initialState, form);
     if (Object.keys(patch).length === 0) return;
-    updateWorkspace.mutate(patch);
+    updateWorktree.mutate(patch);
   };
 
   const sourceTypeDescription = SOURCE_TYPE_OPTIONS.find((option) => option.value === form.sourceType)?.description ?? null;
-  const handleTabChange = (tab: ProjectWorkspaceTab) => {
-    const workspacePath = projectWorkspaceUrl(project, routeWorkspaceId);
-    if (isProjectWorkspacePluginTab(tab)) {
-      navigate(`${workspacePath}?tab=${encodeURIComponent(tab)}`);
+  const handleTabChange = (tab: ProjectWorktreeTab) => {
+    const worktreePath = projectWorktreeUrl(project, routeWorktreeId);
+    if (isProjectWorktreePluginTab(tab)) {
+      navigate(`${worktreePath}?tab=${encodeURIComponent(tab)}`);
       return;
     }
-    navigate(workspacePath);
+    navigate(worktreePath);
   };
   const activePluginTab = pluginTabItems.find((item) => item.value === activeTab) ?? null;
 
@@ -439,9 +439,9 @@ export function ProjectWorkspaceDetail() {
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
-          <Link to={`/projects/${canonicalProjectRef}/workspaces`}>
+          <Link to={`/projects/${canonicalProjectRef}/worktrees`}>
             <ArrowLeft className="mr-1 h-4 w-4" />
-            Back to workspaces
+            Back to worktrees
           </Link>
         </Button>
       </div>
@@ -449,18 +449,18 @@ export function ProjectWorkspaceDetail() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-2">
           <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
-            Project workspace
+            Project worktree
           </div>
-          <h1 className="truncate text-xl font-semibold sm:text-2xl">{workspace.name}</h1>
+          <h1 className="truncate text-xl font-semibold sm:text-2xl">{worktree.name}</h1>
         </div>
-        {!workspace.isPrimary ? (
+        {!worktree.isPrimary ? (
           <Button
             variant="outline"
             className="w-full sm:w-auto"
-            disabled={setPrimaryWorkspace.isPending}
-            onClick={() => setPrimaryWorkspace.mutate()}
+            disabled={setPrimaryWorktree.isPending}
+            onClick={() => setPrimaryWorktree.mutate()}
           >
-            {setPrimaryWorkspace.isPending
+            {setPrimaryWorktree.isPending
               ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               : <Check className="mr-2 h-4 w-4" />}
             Make primary
@@ -468,17 +468,17 @@ export function ProjectWorkspaceDetail() {
         ) : (
           <div className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300 sm:max-w-sm">
             <Sparkles className="h-4 w-4" />
-            This is the project’s primary codebase workspace.
+            This is the project’s primary codebase worktree.
           </div>
         )}
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => handleTabChange(value as ProjectWorkspaceTab)}>
+      <Tabs value={activeTab} onValueChange={(value) => handleTabChange(value as ProjectWorktreeTab)}>
         <PageTabBar
           items={tabItems.map((item) => ({ value: item.value, label: item.label }))}
           align="start"
           value={activeTab}
-          onValueChange={(value) => handleTabChange(value as ProjectWorkspaceTab)}
+          onValueChange={(value) => handleTabChange(value as ProjectWorktreeTab)}
         />
       </Tabs>
 
@@ -487,20 +487,20 @@ export function ProjectWorkspaceDetail() {
         <div className="space-y-6">
           <Card className="block p-5">
             <p className="max-w-2xl text-sm text-muted-foreground">
-              Configure the concrete workspace Paperclip attaches to this project. These values drive per-workspace
-              checkout behavior, default runtime services for child execution workspaces, and let you override setup
-              or cleanup commands when one workspace needs special handling.
+              Configure the concrete worktree Paperclip attaches to this project. These values drive per-worktree
+              checkout behavior, default runtime services for child execution worktrees, and let you override setup
+              or cleanup commands when one worktree needs special handling.
             </p>
 
             <Separator className="my-5" />
 
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Workspace name">
+              <Field label="Worktree name">
                 <input
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
                   value={form.name}
                   onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
-                  placeholder="Workspace name"
+                  placeholder="Worktree name"
                 />
               </Field>
 
@@ -509,7 +509,7 @@ export function ProjectWorkspaceDetail() {
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
                   value={form.visibility}
                   onChange={(event) =>
-                    setForm((current) => current ? { ...current, visibility: event.target.value as ProjectWorkspaceVisibility } : current)
+                    setForm((current) => current ? { ...current, visibility: event.target.value as ProjectWorktreeVisibility } : current)
                   }
                 >
                   {VISIBILITY_OPTIONS.map((option) => (
@@ -525,7 +525,7 @@ export function ProjectWorkspaceDetail() {
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
                   value={form.sourceType}
                   onChange={(event) =>
-                    setForm((current) => current ? { ...current, sourceType: event.target.value as ProjectWorkspaceSourceType } : current)
+                    setForm((current) => current ? { ...current, sourceType: event.target.value as ProjectWorktreeSourceType } : current)
                   }
                 >
                   {SOURCE_TYPE_OPTIONS.map((option) => (
@@ -584,7 +584,7 @@ export function ProjectWorkspaceDetail() {
                     placeholder="origin/main"
                   />
                 </Field>
-                <Field label="Shared workspace key">
+                <Field label="Shared worktree key">
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                     value={form.sharedWorkspaceKey}
@@ -603,7 +603,7 @@ export function ProjectWorkspaceDetail() {
                     placeholder="codespaces"
                   />
                 </Field>
-                <Field label="Remote workspace ref">
+                <Field label="Remote worktree ref">
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                     value={form.remoteWorkspaceRef}
@@ -614,7 +614,7 @@ export function ProjectWorkspaceDetail() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Setup command" hint="Runs when this workspace needs custom bootstrap">
+                <Field label="Setup command" hint="Runs when this worktree needs custom bootstrap">
                   <textarea
                     className="min-h-28 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                     value={form.setupCommand}
@@ -622,7 +622,7 @@ export function ProjectWorkspaceDetail() {
                     placeholder="pnpm install && pnpm dev"
                   />
                 </Field>
-                <Field label="Cleanup command" hint="Runs before project-level execution workspace teardown">
+                <Field label="Cleanup command" hint="Runs before project-level execution worktree teardown">
                   <textarea
                     className="min-h-28 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                     value={form.cleanupCommand}
@@ -638,7 +638,7 @@ export function ProjectWorkspaceDetail() {
                   Paperclip derives Services and Jobs from this JSON. Prefer editing named commands first; use raw JSON for advanced lifecycle, port, readiness, or environment settings.
                 </p>
                 <div className="mt-3">
-                  <Field label="Workspace commands JSON" hint="Execution workspaces inherit this config unless they override it. Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+                  <Field label="Worktree commands JSON" hint="Execution worktrees inherit this config unless they override it. Legacy `services` arrays still work, but `commands` supports both services and jobs.">
                     <textarea
                       className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                       value={form.runtimeConfig}
@@ -651,14 +651,14 @@ export function ProjectWorkspaceDetail() {
             </div>
 
             <div className="mt-5 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <Button className="w-full sm:w-auto" disabled={!isDirty || updateWorkspace.isPending} onClick={saveChanges}>
-                {updateWorkspace.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              <Button className="w-full sm:w-auto" disabled={!isDirty || updateWorktree.isPending} onClick={saveChanges}>
+                {updateWorktree.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Save changes
               </Button>
               <Button
                 variant="outline"
                 className="w-full sm:w-auto"
-                disabled={!isDirty || updateWorkspace.isPending}
+                disabled={!isDirty || updateWorktree.isPending}
                 onClick={() => {
                   setForm(initialState);
                   setErrorMessage(null);
@@ -676,57 +676,57 @@ export function ProjectWorkspaceDetail() {
         <div className="space-y-6">
           <Card className="block p-5">
             <div className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Workspace facts</div>
+              <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Worktree facts</div>
               <h2 className="text-lg font-semibold">Current state</h2>
             </div>
             <Separator className="my-4" />
             <DetailRow label="Project">
               <Link to={`/projects/${canonicalProjectRef}`} className="hover:underline">{project.name}</Link>
             </DetailRow>
-            <DetailRow label="Workspace ID">
-              <span className="break-all font-mono text-xs">{workspace.id}</span>
+            <DetailRow label="Worktree ID">
+              <span className="break-all font-mono text-xs">{worktree.id}</span>
             </DetailRow>
             {hideHostPaths ? null : (
               <DetailRow label="Local path">
-                <span className="break-all font-mono text-xs">{workspace.cwd ?? "None"}</span>
+                <span className="break-all font-mono text-xs">{worktree.cwd ?? "None"}</span>
               </DetailRow>
             )}
             <DetailRow label="Repo">
-              {workspace.repoUrl && isSafeExternalUrl(workspace.repoUrl) ? (
-                <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-                  {workspace.repoUrl}
+              {worktree.repoUrl && isSafeExternalUrl(worktree.repoUrl) ? (
+                <a href={worktree.repoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
+                  {worktree.repoUrl}
                   <ExternalLink className="h-3 w-3" />
                 </a>
-              ) : workspace.repoUrl ? (
-                <span className="break-all font-mono text-xs">{workspace.repoUrl}</span>
+              ) : worktree.repoUrl ? (
+                <span className="break-all font-mono text-xs">{worktree.repoUrl}</span>
               ) : "None"}
             </DetailRow>
-            <DetailRow label="Default ref">{workspace.defaultRef ?? "None"}</DetailRow>
-            <DetailRow label="Updated">{new Date(workspace.updatedAt).toLocaleString()}</DetailRow>
+            <DetailRow label="Default ref">{worktree.defaultRef ?? "None"}</DetailRow>
+            <DetailRow label="Updated">{new Date(worktree.updatedAt).toLocaleString()}</DetailRow>
           </Card>
 
           <Card className="block p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-1">
-                <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Workspace commands</div>
+                <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Worktree commands</div>
                 <h2 className="text-lg font-semibold">Services and jobs</h2>
                 <p className="text-sm text-muted-foreground">
-                  Long-running services stay supervised here, while one-shot jobs run on demand against this workspace. Execution workspaces inherit this config unless they override it.
+                  Long-running services stay supervised here, while one-shot jobs run on demand against this worktree. Execution worktrees inherit this config unless they override it.
                 </p>
               </div>
             </div>
-            <WorkspaceRuntimeControls
+            <WorktreeRuntimeControls
               className="mt-4"
               sections={runtimeControlSections}
               isPending={controlRuntimeServices.isPending}
               pendingRequest={pendingRuntimeAction}
               serviceEmptyMessage={
-                workspace.runtimeConfig?.workspaceRuntime
-                  ? "No services have been started for this workspace yet."
-                  : "No workspace command config is defined for this workspace yet."
+                worktree.runtimeConfig?.workspaceRuntime
+                  ? "No services have been started for this worktree yet."
+                  : "No worktree command config is defined for this worktree yet."
               }
-              jobEmptyMessage="No one-shot jobs are configured for this workspace yet."
-              disabledHint="Project workspaces need a working directory before local commands can run, and services also need runtime config."
+              jobEmptyMessage="No one-shot jobs are configured for this worktree yet."
+              disabledHint="Project worktrees need a working directory before local commands can run, and services also need runtime config."
               onAction={(request) => controlRuntimeServices.mutate(request)}
             />
           </Card>
@@ -734,7 +734,7 @@ export function ProjectWorkspaceDetail() {
       </div>
       ) : null}
 
-      {isProjectWorkspacePluginTab(activeTab) ? (
+      {isProjectWorktreePluginTab(activeTab) ? (
         activePluginTab ? (
           <PluginSlotMount
             slot={activePluginTab.slot}
@@ -742,18 +742,18 @@ export function ProjectWorkspaceDetail() {
               companyId: project.companyId,
               companyPrefix: companyPrefix ?? null,
               projectId: project.id,
-              entityId: workspace.id,
+              entityId: worktree.id,
               entityType: "project_workspace",
             }}
             missingBehavior="placeholder"
           />
         ) : pluginDetailSlotsLoading || pluginDetailSlotsError ? (
           <div className="rounded-lg border border-dashed border-border bg-background px-4 py-8 text-sm text-muted-foreground">
-            {pluginDetailSlotsError ? pluginDetailSlotsError : "Loading workspace plugin..."}
+            {pluginDetailSlotsError ? pluginDetailSlotsError : "Loading worktree plugin..."}
           </div>
         ) : (
           <MissingPluginTabPlaceholder
-            defaultTabHref={`${projectWorkspaceUrl(project, routeWorkspaceId)}?tab=configuration`}
+            defaultTabHref={`${projectWorktreeUrl(project, routeWorktreeId)}?tab=configuration`}
             defaultTabLabel="Back to configuration"
           />
         )

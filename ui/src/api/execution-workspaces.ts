@@ -1,24 +1,24 @@
 import type {
-  ExecutionWorkspace,
-  ExecutionWorkspaceSummary,
-  ExecutionWorkspaceStatus,
-  ExecutionWorkspaceCloseReadiness,
-  WorkspaceOverviewResponse,
-  WorkspaceLoginHandoffTicketResponse,
-  WorkspaceOperation,
-  WorkspaceRuntimeControlTarget,
+  ExecutionWorktree,
+  ExecutionWorktreeSummary,
+  ExecutionWorktreeStatus,
+  ExecutionWorktreeCloseReadiness,
+  WorktreeOverviewResponse,
+  WorktreeLoginHandoffTicketResponse,
+  WorktreeOperation,
+  WorktreeRuntimeControlTarget,
 } from "@paperclipai/shared";
 import { api } from "./client";
-import { sanitizeWorkspaceRuntimeControlTarget } from "./workspace-runtime-control";
+import { sanitizeWorktreeRuntimeControlTarget } from "./workspace-runtime-control";
 
-type WorkspaceOverviewFilters = {
+type WorktreeOverviewFilters = {
   projectId?: string;
-  status?: ExecutionWorkspaceStatus[];
+  status?: ExecutionWorktreeStatus[];
   limit?: number;
   offset?: number;
 };
 
-function normalizeWorkspaceOverview(response: WorkspaceOverviewResponse): WorkspaceOverviewResponse {
+function normalizeWorktreeOverview(response: WorktreeOverviewResponse): WorktreeOverviewResponse {
   return {
     ...response,
     items: response.items.map((item) => ({
@@ -38,18 +38,18 @@ function normalizeWorkspaceOverview(response: WorkspaceOverviewResponse): Worksp
   };
 }
 
-export const executionWorkspacesApi = {
-  listOverview: async (companyId: string, filters?: WorkspaceOverviewFilters) => {
+export const executionWorktreesApi = {
+  listOverview: async (companyId: string, filters?: WorktreeOverviewFilters) => {
     const params = new URLSearchParams();
     if (filters?.projectId) params.set("projectId", filters.projectId);
     if (filters?.status?.length) params.set("status", filters.status.join(","));
     if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
     if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
     const qs = params.toString();
-    const response = await api.get<WorkspaceOverviewResponse>(
+    const response = await api.get<WorktreeOverviewResponse>(
       `/companies/${companyId}/workspace-overview${qs ? `?${qs}` : ""}`,
     );
-    return normalizeWorkspaceOverview(response);
+    return normalizeWorktreeOverview(response);
   },
   listSummaries: (
     companyId: string,
@@ -69,7 +69,7 @@ export const executionWorkspacesApi = {
     if (filters?.reuseEligible) params.set("reuseEligible", "true");
     params.set("summary", "true");
     const qs = params.toString();
-    return api.get<ExecutionWorkspaceSummary[]>(
+    return api.get<ExecutionWorktreeSummary[]>(
       `/companies/${companyId}/execution-workspaces${qs ? `?${qs}` : ""}`,
     );
   },
@@ -90,33 +90,33 @@ export const executionWorkspacesApi = {
     if (filters?.status) params.set("status", filters.status);
     if (filters?.reuseEligible) params.set("reuseEligible", "true");
     const qs = params.toString();
-    return api.get<ExecutionWorkspace[]>(`/companies/${companyId}/execution-workspaces${qs ? `?${qs}` : ""}`);
+    return api.get<ExecutionWorktree[]>(`/companies/${companyId}/execution-workspaces${qs ? `?${qs}` : ""}`);
   },
-  get: (id: string) => api.get<ExecutionWorkspace>(`/execution-workspaces/${id}`),
+  get: (id: string) => api.get<ExecutionWorktree>(`/execution-workspaces/${id}`),
   getCloseReadiness: (id: string) =>
-    api.get<ExecutionWorkspaceCloseReadiness>(`/execution-workspaces/${id}/close-readiness`),
+    api.get<ExecutionWorktreeCloseReadiness>(`/execution-workspaces/${id}/close-readiness`),
   listWorkspaceOperations: (id: string) =>
-    api.get<WorkspaceOperation[]>(`/execution-workspaces/${id}/workspace-operations`),
+    api.get<WorktreeOperation[]>(`/execution-workspaces/${id}/workspace-operations`),
   controlRuntimeServices: (
     id: string,
     action: "start" | "stop" | "restart",
-    target: WorkspaceRuntimeControlTarget = {},
+    target: WorktreeRuntimeControlTarget = {},
   ) =>
-    api.post<{ workspace: ExecutionWorkspace; operation: WorkspaceOperation }>(
+    api.post<{ workspace: ExecutionWorktree; operation: WorktreeOperation }>(
       `/execution-workspaces/${id}/runtime-services/${action}`,
-      sanitizeWorkspaceRuntimeControlTarget(target),
+      sanitizeWorktreeRuntimeControlTarget(target),
     ),
   controlRuntimeCommands: (
     id: string,
     action: "start" | "stop" | "restart" | "run",
-    target: WorkspaceRuntimeControlTarget = {},
+    target: WorktreeRuntimeControlTarget = {},
   ) =>
-    api.post<{ workspace: ExecutionWorkspace; operation: WorkspaceOperation }>(
+    api.post<{ workspace: ExecutionWorktree; operation: WorktreeOperation }>(
       `/execution-workspaces/${id}/runtime-commands/${action}`,
-      sanitizeWorkspaceRuntimeControlTarget(target),
+      sanitizeWorktreeRuntimeControlTarget(target),
     ),
   repair: (id: string) =>
-    api.post<{ workspace: ExecutionWorkspace; operation: WorkspaceOperation }>(
+    api.post<{ workspace: ExecutionWorktree; operation: WorktreeOperation }>(
       `/execution-workspaces/${id}/runtime-commands/repair`,
       {},
     ),
@@ -128,11 +128,11 @@ export const executionWorkspacesApi = {
    * HTTP redirect, which is what keeps the ticket out of browser history.
    */
   requestLoginHandoff: (id: string, next?: string) =>
-    api.post<WorkspaceLoginHandoffTicketResponse>(
+    api.post<WorktreeLoginHandoffTicketResponse>(
       `/execution-workspaces/${id}/login-handoff`,
       next ? { next } : {},
     ),
-  update: (id: string, data: Record<string, unknown>) => api.patch<ExecutionWorkspace>(`/execution-workspaces/${id}`, data),
+  update: (id: string, data: Record<string, unknown>) => api.patch<ExecutionWorktree>(`/execution-workspaces/${id}`, data),
   /**
    * Reconcile a git-worktree branch divergence via the S4 (`PAP-1586`) op.
    *
@@ -153,5 +153,5 @@ export const executionWorkspacesApi = {
   reconcile: (
     id: string,
     body: { mode: "forward" } | { mode: "override"; reason: string } | { mode: "quarantine_restore" },
-  ) => api.post<ExecutionWorkspace>(`/execution-workspaces/${id}/reconcile-branch`, body),
+  ) => api.post<ExecutionWorktree>(`/execution-workspaces/${id}/reconcile-branch`, body),
 };

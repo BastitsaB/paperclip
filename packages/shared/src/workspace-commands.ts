@@ -1,9 +1,9 @@
-import type { WorkspaceCommandDefinition, WorkspaceRuntimeService } from "./types/workspace-runtime.js";
+import type { WorktreeCommandDefinition, WorktreeRuntimeService } from "./types/workspace-runtime.js";
 import { forceLoopbackBindInCommand } from "./runtime-exposure/loopback-bind.js";
 
-type WorkspaceRuntimeServiceMatchCandidate =
-  & Pick<WorkspaceRuntimeService, "configIndex" | "serviceName" | "command" | "cwd">
-  & Pick<Partial<WorkspaceRuntimeService>, "exposure" | "port">;
+type WorktreeRuntimeServiceMatchCandidate =
+  & Pick<WorktreeRuntimeService, "configIndex" | "serviceName" | "command" | "cwd">
+  & Pick<Partial<WorktreeRuntimeService>, "exposure" | "port">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,8 +36,8 @@ function slugify(value: string | null | undefined) {
   return normalized.length > 0 ? normalized : null;
 }
 
-function deriveWorkspaceCommandId(input: {
-  kind: WorkspaceCommandDefinition["kind"];
+function deriveWorktreeCommandId(input: {
+  kind: WorktreeCommandDefinition["kind"];
   explicitId: string | null;
   name: string;
   index: number;
@@ -48,16 +48,16 @@ function deriveWorkspaceCommandId(input: {
   return nameSlug ? `${input.kind}:${nameSlug}` : `${input.kind}:${input.index + 1}`;
 }
 
-function buildWorkspaceCommandDefinition(input: {
+function buildWorktreeCommandDefinition(input: {
   entry: Record<string, unknown>;
-  kind: WorkspaceCommandDefinition["kind"];
-  sourceKey: WorkspaceCommandDefinition["source"]["key"];
+  kind: WorktreeCommandDefinition["kind"];
+  sourceKey: WorktreeCommandDefinition["source"]["key"];
   sourceIndex: number;
   serviceIndex: number | null;
   fallbackName: string;
-}): WorkspaceCommandDefinition {
+}): WorktreeCommandDefinition {
   return {
-    id: deriveWorkspaceCommandId({
+    id: deriveWorktreeCommandId({
       kind: input.kind,
       explicitId: readNonEmptyString(input.entry.id),
       name:
@@ -93,10 +93,10 @@ function buildWorkspaceCommandDefinition(input: {
   };
 }
 
-function uniqueWorkspaceCommandId(
+function uniqueWorktreeCommandId(
   seen: Set<string>,
   commandId: string,
-  sourceKey: WorkspaceCommandDefinition["source"]["key"],
+  sourceKey: WorktreeCommandDefinition["source"]["key"],
   sourceIndex: number,
 ) {
   if (!seen.has(commandId)) {
@@ -109,30 +109,30 @@ function uniqueWorkspaceCommandId(
 }
 
 function readCommandEntries(
-  workspaceRuntime: Record<string, unknown> | null | undefined,
+  worktreeRuntime: Record<string, unknown> | null | undefined,
   key: "commands" | "services" | "jobs",
 ) {
-  const raw = workspaceRuntime?.[key];
+  const raw = worktreeRuntime?.[key];
   return Array.isArray(raw) ? raw.filter((entry): entry is Record<string, unknown> => isRecord(entry)) : [];
 }
 
-export function listWorkspaceCommandDefinitions(
-  workspaceRuntime: Record<string, unknown> | null | undefined,
-): WorkspaceCommandDefinition[] {
-  if (!workspaceRuntime) return [];
+export function listWorktreeCommandDefinitions(
+  worktreeRuntime: Record<string, unknown> | null | undefined,
+): WorktreeCommandDefinition[] {
+  if (!worktreeRuntime) return [];
 
-  const commandEntries = readCommandEntries(workspaceRuntime, "commands");
+  const commandEntries = readCommandEntries(worktreeRuntime, "commands");
   const seenIds = new Set<string>();
   let nextServiceIndex = 0;
 
-  const finalize = (command: WorkspaceCommandDefinition) => ({
+  const finalize = (command: WorktreeCommandDefinition) => ({
     ...command,
-    id: uniqueWorkspaceCommandId(seenIds, command.id, command.source.key, command.source.index),
+    id: uniqueWorktreeCommandId(seenIds, command.id, command.source.key, command.source.index),
   });
 
   if (commandEntries.length > 0) {
     return commandEntries.map((entry, index) =>
-      finalize(buildWorkspaceCommandDefinition({
+      finalize(buildWorktreeCommandDefinition({
         entry,
         kind: entry.kind === "job" ? "job" : "service",
         sourceKey: "commands",
@@ -142,8 +142,8 @@ export function listWorkspaceCommandDefinitions(
       })));
   }
 
-  const serviceDefinitions = readCommandEntries(workspaceRuntime, "services").map((entry, index) =>
-    finalize(buildWorkspaceCommandDefinition({
+  const serviceDefinitions = readCommandEntries(worktreeRuntime, "services").map((entry, index) =>
+    finalize(buildWorktreeCommandDefinition({
       entry,
       kind: "service",
       sourceKey: "services",
@@ -151,8 +151,8 @@ export function listWorkspaceCommandDefinitions(
       serviceIndex: nextServiceIndex++,
       fallbackName: `Service ${index + 1}`,
     })));
-  const jobDefinitions = readCommandEntries(workspaceRuntime, "jobs").map((entry, index) =>
-    finalize(buildWorkspaceCommandDefinition({
+  const jobDefinitions = readCommandEntries(worktreeRuntime, "jobs").map((entry, index) =>
+    finalize(buildWorktreeCommandDefinition({
       entry,
       kind: "job",
       sourceKey: "jobs",
@@ -164,24 +164,24 @@ export function listWorkspaceCommandDefinitions(
   return [...serviceDefinitions, ...jobDefinitions];
 }
 
-export function listWorkspaceServiceCommandDefinitions(
-  workspaceRuntime: Record<string, unknown> | null | undefined,
+export function listWorktreeServiceCommandDefinitions(
+  worktreeRuntime: Record<string, unknown> | null | undefined,
 ) {
-  return listWorkspaceCommandDefinitions(workspaceRuntime).filter((command) => command.kind === "service");
+  return listWorktreeCommandDefinitions(worktreeRuntime).filter((command) => command.kind === "service");
 }
 
-export function findWorkspaceCommandDefinition(
-  workspaceRuntime: Record<string, unknown> | null | undefined,
-  workspaceCommandId: string | null | undefined,
+export function findWorktreeCommandDefinition(
+  worktreeRuntime: Record<string, unknown> | null | undefined,
+  worktreeCommandId: string | null | undefined,
 ) {
-  const normalizedId = readNonEmptyString(workspaceCommandId);
+  const normalizedId = readNonEmptyString(worktreeCommandId);
   if (!normalizedId) return null;
-  return listWorkspaceCommandDefinitions(workspaceRuntime).find((command) => command.id === normalizedId) ?? null;
+  return listWorktreeCommandDefinitions(worktreeRuntime).find((command) => command.id === normalizedId) ?? null;
 }
 
-export function scoreWorkspaceRuntimeServiceMatch(
-  command: Pick<WorkspaceCommandDefinition, "serviceIndex" | "name" | "command" | "cwd" | "port">,
-  runtimeService: WorkspaceRuntimeServiceMatchCandidate,
+export function scoreWorktreeRuntimeServiceMatch(
+  command: Pick<WorktreeCommandDefinition, "serviceIndex" | "name" | "command" | "cwd" | "port">,
+  runtimeService: WorktreeRuntimeServiceMatchCandidate,
 ) {
   const exposedCommandMatches = Boolean(
     command.command
@@ -221,17 +221,17 @@ export function scoreWorkspaceRuntimeServiceMatch(
   return score;
 }
 
-export function matchWorkspaceRuntimeServiceToCommand<
-  T extends WorkspaceRuntimeServiceMatchCandidate,
+export function matchWorktreeRuntimeServiceToCommand<
+  T extends WorktreeRuntimeServiceMatchCandidate,
 >(
-  command: Pick<WorkspaceCommandDefinition, "serviceIndex" | "name" | "command" | "cwd" | "port">,
+  command: Pick<WorktreeCommandDefinition, "serviceIndex" | "name" | "command" | "cwd" | "port">,
   runtimeServices: T[] | null | undefined,
 ) {
   let bestMatch: T | null = null;
   let bestScore = -1;
 
   for (const runtimeService of runtimeServices ?? []) {
-    const score = scoreWorkspaceRuntimeServiceMatch(command, runtimeService);
+    const score = scoreWorktreeRuntimeServiceMatch(command, runtimeService);
     if (score > bestScore) {
       bestMatch = runtimeService;
       bestScore = score;

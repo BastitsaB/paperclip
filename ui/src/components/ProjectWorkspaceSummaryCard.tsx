@@ -1,17 +1,17 @@
 import { Link } from "@/lib/router";
-import type { ExecutionWorkspace } from "@paperclipai/shared";
+import type { ExecutionWorktree } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { CopyText } from "./CopyText";
 import { IssuesQuicklook } from "./IssuesQuicklook";
-import type { ProjectWorkspaceLinkedIssue, ProjectWorkspaceSummary } from "../lib/project-workspaces-tab";
+import type { ProjectWorktreeLinkedIssue, ProjectWorktreeSummary } from "../lib/project-workspaces-tab";
 import { useManagedSandboxOnly } from "../hooks/useManagedSandboxOnly";
-import { cn, projectWorkspaceUrl } from "../lib/utils";
+import { cn, projectWorktreeUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Copy, ExternalLink, FolderOpen, GitBranch, Loader2, Play, Square } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-function workspaceKindLabel(kind: ProjectWorkspaceSummary["kind"]) {
-  return kind === "execution_workspace" ? "Execution workspace" : "Project workspace";
+function worktreeKindLabel(kind: ProjectWorktreeSummary["kind"]) {
+  return kind === "execution_workspace" ? "Execution worktree" : "Project worktree";
 }
 
 function truncatePath(path: string) {
@@ -20,9 +20,9 @@ function truncatePath(path: string) {
   return `…/${parts.slice(-3).join("/")}`;
 }
 
-interface ProjectWorkspaceSummaryCardProps {
+interface ProjectWorktreeSummaryCardProps {
   projectRef: string;
-  summary: ProjectWorkspaceSummary;
+  summary: ProjectWorktreeSummary;
   runtimeActionKey: string | null;
   runtimeActionPending: boolean;
   onRuntimeAction: (input: {
@@ -34,25 +34,25 @@ interface ProjectWorkspaceSummaryCardProps {
   onCloseWorkspace: (input: {
     id: string;
     name: string;
-    status: ExecutionWorkspace["status"];
+    status: ExecutionWorktree["status"];
   }) => void;
 }
 
-export function ProjectWorkspaceSummaryCard({
+export function ProjectWorktreeSummaryCard({
   projectRef,
   summary,
   runtimeActionKey,
   runtimeActionPending,
   onRuntimeAction,
   onCloseWorkspace,
-}: ProjectWorkspaceSummaryCardProps) {
+}: ProjectWorktreeSummaryCardProps) {
   const { hideHostPaths } = useManagedSandboxOnly();
   const visibleIssues = summary.issues.slice(0, 4);
   const hiddenIssueCount = Math.max(summary.linkedIssueCount - visibleIssues.length, 0);
-  const workspaceHref =
+  const worktreeHref =
     summary.kind === "project_workspace"
-      ? projectWorkspaceUrl({ id: projectRef, urlKey: projectRef }, summary.workspaceId)
-      : `/execution-workspaces/${summary.workspaceId}`;
+      ? projectWorktreeUrl({ id: projectRef, urlKey: projectRef }, summary.workspaceId)
+      : `/execution-worktrees/${summary.workspaceId}`;
   const hasRunningServices = summary.runningServiceCount > 0;
   const actionKey = `${summary.key}:${hasRunningServices ? "stop" : "start"}`;
 
@@ -63,7 +63,7 @@ export function ProjectWorkspaceSummaryCard({
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="border-border bg-background px-2.5 py-1 text-(length:--text-micro) uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
-                {workspaceKindLabel(summary.kind)}
+                {worktreeKindLabel(summary.kind)}
               </Badge>
               <Badge variant="outline" className="border-border/70 bg-background px-2.5 py-1 text-muted-foreground">
                 Updated {timeAgo(summary.lastUpdatedAt)}
@@ -93,7 +93,7 @@ export function ProjectWorkspaceSummaryCard({
               ) : null}
             </div>
             <Link
-              to={workspaceHref}
+              to={worktreeHref}
               className="block break-words text-base font-semibold leading-6 text-foreground hover:underline"
             >
               {summary.workspaceName}
@@ -140,7 +140,7 @@ export function ProjectWorkspaceSummaryCard({
                   status: summary.executionWorkspaceStatus!,
                 })}
               >
-                {summary.executionWorkspaceStatus === "cleanup_failed" ? "Retry close" : "Close workspace"}
+                {summary.executionWorkspaceStatus === "cleanup_failed" ? "Retry close" : "Close worktree"}
               </Button>
             ) : null}
           </div>
@@ -243,7 +243,7 @@ export function ProjectWorkspaceSummaryCard({
               ))}
               {hiddenIssueCount > 0 ? (
                 <Link
-                  to={workspaceHref}
+                  to={worktreeHref}
                   className="inline-flex items-center rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
                 >
                   +{hiddenIssueCount} more
@@ -257,7 +257,7 @@ export function ProjectWorkspaceSummaryCard({
   );
 }
 
-function IssuePill({ issue }: { issue: ProjectWorkspaceLinkedIssue }) {
+function IssuePill({ issue }: { issue: ProjectWorktreeLinkedIssue }) {
   return (
     <IssuesQuicklook issue={issue}>
       <Link

@@ -1,12 +1,12 @@
 import type {
-  WorkspaceCommandDefinition,
+  WorktreeCommandDefinition,
   RuntimeExposureStatus,
-  WorkspaceRuntimeControlTarget,
-  WorkspaceRuntimeService,
+  WorktreeRuntimeControlTarget,
+  WorktreeRuntimeService,
 } from "@paperclipai/shared";
 import {
-  listWorkspaceCommandDefinitions,
-  matchWorkspaceRuntimeServiceToCommand,
+  listWorktreeCommandDefinitions,
+  matchWorktreeRuntimeServiceToCommand,
 } from "@paperclipai/shared";
 import { Activity, ExternalLink, Loader2, Play, RotateCcw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,17 +15,17 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { timeAgo } from "@/lib/timeAgo";
 import type {
-  WorkspaceServiceControlAction,
-  WorkspaceServiceControlEntry,
+  WorktreeServiceControlAction,
+  WorktreeServiceControlEntry,
 } from "@/components/WorkspaceServiceControlBar";
 
-export type WorkspaceRuntimeAction = "start" | "stop" | "restart" | "run";
+export type WorktreeRuntimeAction = "start" | "stop" | "restart" | "run";
 
-export type WorkspaceRuntimeControlRequest = WorkspaceRuntimeControlTarget & {
-  action: WorkspaceRuntimeAction;
+export type WorktreeRuntimeControlRequest = WorktreeRuntimeControlTarget & {
+  action: WorktreeRuntimeAction;
 };
 
-export type WorkspaceRuntimeControlItem = {
+export type WorktreeRuntimeControlItem = {
   key: string;
   title: string;
   kind: "service" | "job";
@@ -45,38 +45,38 @@ export type WorkspaceRuntimeControlItem = {
   disabledReason?: string | null;
 };
 
-export type WorkspaceRuntimeControlSections = {
-  services: WorkspaceRuntimeControlItem[];
-  jobs: WorkspaceRuntimeControlItem[];
-  otherServices: WorkspaceRuntimeControlItem[];
+export type WorktreeRuntimeControlSections = {
+  services: WorktreeRuntimeControlItem[];
+  jobs: WorktreeRuntimeControlItem[];
+  otherServices: WorktreeRuntimeControlItem[];
 };
 
-type LegacyWorkspaceRuntimeControlItem = WorkspaceRuntimeControlItem & {
+type LegacyWorktreeRuntimeControlItem = WorktreeRuntimeControlItem & {
   status?: string | null;
 };
 
-type WorkspaceRuntimeControlsProps = {
-  sections: WorkspaceRuntimeControlSections;
+type WorktreeRuntimeControlsProps = {
+  sections: WorktreeRuntimeControlSections;
   items?: never;
   isPending?: boolean;
-  pendingRequest?: WorkspaceRuntimeControlRequest | null;
+  pendingRequest?: WorktreeRuntimeControlRequest | null;
   serviceEmptyMessage?: string;
   jobEmptyMessage?: string;
   emptyMessage?: never;
   disabledHint?: string | null;
-  onAction: (request: WorkspaceRuntimeControlRequest) => void;
+  onAction: (request: WorktreeRuntimeControlRequest) => void;
   className?: string;
   square?: boolean;
 } | {
   sections?: never;
-  items: LegacyWorkspaceRuntimeControlItem[];
+  items: LegacyWorktreeRuntimeControlItem[];
   isPending?: boolean;
-  pendingRequest?: WorkspaceRuntimeControlRequest | null;
+  pendingRequest?: WorktreeRuntimeControlRequest | null;
   serviceEmptyMessage?: never;
   jobEmptyMessage?: never;
   emptyMessage?: string;
   disabledHint?: string | null;
-  onAction: (request: WorkspaceRuntimeControlRequest) => void;
+  onAction: (request: WorktreeRuntimeControlRequest) => void;
   className?: string;
   square?: boolean;
 };
@@ -88,10 +88,10 @@ export function hasRunningRuntimeServices(
 }
 
 function buildServiceItem(
-  command: WorkspaceCommandDefinition,
-  runtimeService: WorkspaceRuntimeService | null,
+  command: WorktreeCommandDefinition,
+  runtimeService: WorktreeRuntimeService | null,
   canStartServices: boolean,
-): WorkspaceRuntimeControlItem {
+): WorktreeRuntimeControlItem {
   return {
     key: `command:${command.id}:${runtimeService?.id ?? "idle"}`,
     title: command.name,
@@ -114,9 +114,9 @@ function buildServiceItem(
 }
 
 function buildJobItem(
-  command: WorkspaceCommandDefinition,
+  command: WorktreeCommandDefinition,
   canRunJobs: boolean,
-): WorkspaceRuntimeControlItem {
+): WorktreeRuntimeControlItem {
   return {
     key: `command:${command.id}`,
     title: command.name,
@@ -138,17 +138,17 @@ function buildJobItem(
   };
 }
 
-export function buildWorkspaceRuntimeControlSections(input: {
+export function buildWorktreeRuntimeControlSections(input: {
   runtimeConfig: Record<string, unknown> | null | undefined;
-  runtimeServices: WorkspaceRuntimeService[] | null | undefined;
+  runtimeServices: WorktreeRuntimeService[] | null | undefined;
   canStartServices: boolean;
   canRunJobs?: boolean;
-}): WorkspaceRuntimeControlSections {
-  const commands = listWorkspaceCommandDefinitions(input.runtimeConfig);
+}): WorktreeRuntimeControlSections {
+  const commands = listWorktreeCommandDefinitions(input.runtimeConfig);
   const runtimeServices = [...(input.runtimeServices ?? [])];
   const matchedRuntimeServiceIds = new Set<string>();
-  const services: WorkspaceRuntimeControlItem[] = [];
-  const jobs: WorkspaceRuntimeControlItem[] = [];
+  const services: WorktreeRuntimeControlItem[] = [];
+  const jobs: WorktreeRuntimeControlItem[] = [];
 
   for (const command of commands) {
     if (command.kind === "job") {
@@ -156,7 +156,7 @@ export function buildWorkspaceRuntimeControlSections(input: {
       continue;
     }
 
-    const runtimeService = matchWorkspaceRuntimeServiceToCommand(command, runtimeServices);
+    const runtimeService = matchWorktreeRuntimeServiceToCommand(command, runtimeServices);
     if (runtimeService) matchedRuntimeServiceIds.add(runtimeService.id);
     services.push(buildServiceItem(command, runtimeService, input.canStartServices));
   }
@@ -184,7 +184,7 @@ export function buildWorkspaceRuntimeControlSections(input: {
       workspaceCommandId: null,
       runtimeServiceId: runtimeService.id,
       serviceIndex: runtimeService.configIndex ?? null,
-      disabledReason: "This runtime service no longer matches a configured workspace command.",
+      disabledReason: "This runtime service no longer matches a configured worktree command.",
     }));
 
   return {
@@ -194,20 +194,20 @@ export function buildWorkspaceRuntimeControlSections(input: {
   };
 }
 
-export function buildWorkspaceRuntimeControlItems(input: {
+export function buildWorktreeRuntimeControlItems(input: {
   runtimeConfig: Record<string, unknown> | null | undefined;
-  runtimeServices: WorkspaceRuntimeService[] | null | undefined;
+  runtimeServices: WorktreeRuntimeService[] | null | undefined;
   canStartServices: boolean;
   canRunJobs?: boolean;
-}): LegacyWorkspaceRuntimeControlItem[] {
-  return buildWorkspaceRuntimeControlSections(input).services.map((item) => ({
+}): LegacyWorktreeRuntimeControlItem[] {
+  return buildWorktreeRuntimeControlSections(input).services.map((item) => ({
     ...item,
     status: item.statusLabel,
   }));
 }
 
 export function getRunningRuntimeServiceUrl(
-  sections: WorkspaceRuntimeControlSections,
+  sections: WorktreeRuntimeControlSections,
 ) {
   const runningService = [...sections.services, ...sections.otherServices].find(
     (item) => (item.statusLabel === "running" || item.statusLabel === "starting") && item.url,
@@ -257,13 +257,13 @@ function ExposureFailureDetail({ exposure }: { exposure: RuntimeExposureStatus |
  * model. In-flight mutations overlay the transitional states (starting /
  * stopping / restarting) that the server status enum does not carry.
  */
-export function buildWorkspaceServiceControlEntries(input: {
-  sections: WorkspaceRuntimeControlSections;
-  runtimeServices?: WorkspaceRuntimeService[] | null;
+export function buildWorktreeServiceControlEntries(input: {
+  sections: WorktreeRuntimeControlSections;
+  runtimeServices?: WorktreeRuntimeService[] | null;
   isPending?: boolean;
-  pendingRequest?: WorkspaceRuntimeControlRequest | null;
-  pendingRequests?: WorkspaceRuntimeControlRequest[];
-}): WorkspaceServiceControlEntry[] {
+  pendingRequest?: WorktreeRuntimeControlRequest | null;
+  pendingRequests?: WorktreeRuntimeControlRequest[];
+}): WorktreeServiceControlEntry[] {
   const runtimeServicesById = new Map(
     (input.runtimeServices ?? []).map((runtimeService) => [runtimeService.id, runtimeService]),
   );
@@ -271,7 +271,7 @@ export function buildWorkspaceServiceControlEntries(input: {
     ?? (input.isPending && input.pendingRequest ? [input.pendingRequest] : []);
 
   return [...input.sections.services, ...input.sections.otherServices].map((item) => {
-    let state: WorkspaceServiceControlEntry["state"] =
+    let state: WorktreeServiceControlEntry["state"] =
       item.statusLabel === "running"
         ? "running"
         : item.statusLabel === "provisioning"
@@ -329,11 +329,11 @@ export function buildWorkspaceServiceControlEntries(input: {
  * A null serviceKey targets every applicable service (the aggregate bar and
  * popover bulk actions).
  */
-export function resolveWorkspaceServiceControlRequests(
-  sections: WorkspaceRuntimeControlSections,
-  action: WorkspaceServiceControlAction,
+export function resolveWorktreeServiceControlRequests(
+  sections: WorktreeRuntimeControlSections,
+  action: WorktreeServiceControlAction,
   serviceKey: string | null,
-): WorkspaceRuntimeControlRequest[] {
+): WorktreeRuntimeControlRequest[] {
   const items = [...sections.services, ...sections.otherServices];
   if (serviceKey !== null) {
     const item = items.find((candidate) => candidate.key === serviceKey);
@@ -357,8 +357,8 @@ export function resolveWorkspaceServiceControlRequests(
 }
 
 function requestMatchesPending(
-  pendingRequest: WorkspaceRuntimeControlRequest | null | undefined,
-  nextRequest: WorkspaceRuntimeControlRequest,
+  pendingRequest: WorktreeRuntimeControlRequest | null | undefined,
+  nextRequest: WorktreeRuntimeControlRequest,
 ) {
   return pendingRequest?.action === nextRequest.action
     && (pendingRequest?.workspaceCommandId ?? null) === (nextRequest.workspaceCommandId ?? null)
@@ -366,7 +366,7 @@ function requestMatchesPending(
     && (pendingRequest?.serviceIndex ?? null) === (nextRequest.serviceIndex ?? null);
 }
 
-function buildRequest(item: WorkspaceRuntimeControlItem, action: WorkspaceRuntimeAction): WorkspaceRuntimeControlRequest {
+function buildRequest(item: WorktreeRuntimeControlItem, action: WorktreeRuntimeAction): WorktreeRuntimeControlRequest {
   return {
     action,
     workspaceCommandId: item.workspaceCommandId ?? null,
@@ -383,14 +383,14 @@ function CommandActionButtons({
   square,
   iconOnly,
 }: {
-  item: WorkspaceRuntimeControlItem;
+  item: WorktreeRuntimeControlItem;
   isPending: boolean;
-  pendingRequest: WorkspaceRuntimeControlRequest | null | undefined;
-  onAction: (request: WorkspaceRuntimeControlRequest) => void;
+  pendingRequest: WorktreeRuntimeControlRequest | null | undefined;
+  onAction: (request: WorktreeRuntimeControlRequest) => void;
   square?: boolean;
   iconOnly?: boolean;
 }) {
-  const actions: WorkspaceRuntimeAction[] =
+  const actions: WorktreeRuntimeAction[] =
     item.kind === "job"
       ? ["run"]
       : item.statusLabel === "running" || item.statusLabel === "starting"
@@ -452,12 +452,12 @@ function CommandSection({
 }: {
   title: string;
   description: string;
-  items: WorkspaceRuntimeControlItem[];
+  items: WorktreeRuntimeControlItem[];
   emptyMessage: string;
   disabledHint?: string | null;
   isPending: boolean;
-  pendingRequest: WorkspaceRuntimeControlRequest | null | undefined;
-  onAction: (request: WorkspaceRuntimeControlRequest) => void;
+  pendingRequest: WorktreeRuntimeControlRequest | null | undefined;
+  onAction: (request: WorktreeRuntimeControlRequest) => void;
   square?: boolean;
   iconOnly?: boolean;
 }) {
@@ -535,19 +535,19 @@ function CommandSection({
   );
 }
 
-export function WorkspaceRuntimeControls({
+export function WorktreeRuntimeControls({
   sections,
   items,
   isPending = false,
   pendingRequest = null,
-  serviceEmptyMessage = "No services are configured for this workspace.",
-  jobEmptyMessage = "No one-shot jobs are configured for this workspace.",
+  serviceEmptyMessage = "No services are configured for this worktree.",
+  jobEmptyMessage = "No one-shot jobs are configured for this worktree.",
   emptyMessage,
   disabledHint = null,
   onAction,
   className,
   square,
-}: WorkspaceRuntimeControlsProps) {
+}: WorktreeRuntimeControlsProps) {
   const resolvedSections = sections ?? {
     services: (items ?? []).map((item) => ({
       ...item,
@@ -566,7 +566,7 @@ export function WorkspaceRuntimeControls({
     <div className={cn("space-y-4", className)}>
       <div className={cn("border border-border/70 bg-background p-3", square ? "rounded-none" : "rounded-xl")}>
         <div className="space-y-1">
-          <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Workspace commands</div>
+          <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Worktree commands</div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline"
               className={cn(
@@ -591,7 +591,7 @@ export function WorkspaceRuntimeControls({
 
       <CommandSection
         title="Services"
-        description="Long-running commands that Paperclip can supervise for this workspace."
+        description="Long-running commands that Paperclip can supervise for this worktree."
         items={resolvedSections.services}
         emptyMessage={resolvedServiceEmptyMessage}
         disabledHint={visibleDisabledHint}
@@ -615,7 +615,7 @@ export function WorkspaceRuntimeControls({
       {resolvedSections.otherServices.length > 0 ? (
         <CommandSection
           title="Untracked services"
-          description="Running services that no longer match the current workspace command config."
+          description="Running services that no longer match the current worktree command config."
           items={resolvedSections.otherServices}
           emptyMessage=""
           isPending={isPending}
@@ -628,7 +628,7 @@ export function WorkspaceRuntimeControls({
   );
 }
 
-export function WorkspaceRuntimeQuickControls({
+export function WorktreeRuntimeQuickControls({
   sections,
   isPending = false,
   pendingRequest = null,
@@ -637,10 +637,10 @@ export function WorkspaceRuntimeQuickControls({
   align = "end",
   iconOnly = false,
 }: {
-  sections: WorkspaceRuntimeControlSections;
+  sections: WorktreeRuntimeControlSections;
   isPending?: boolean;
-  pendingRequest?: WorkspaceRuntimeControlRequest | null;
-  onAction: (request: WorkspaceRuntimeControlRequest) => void;
+  pendingRequest?: WorktreeRuntimeControlRequest | null;
+  onAction: (request: WorktreeRuntimeControlRequest) => void;
   square?: boolean;
   align?: "start" | "end";
   iconOnly?: boolean;

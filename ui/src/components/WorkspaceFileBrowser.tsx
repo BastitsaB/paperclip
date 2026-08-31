@@ -17,13 +17,13 @@ import { projectsApi } from "@/api/projects";
 import { ApiError } from "@/api/client";
 import { queryKeys } from "@/lib/queryKeys";
 import { usePageVisibility } from "@/lib/page-visibility";
-import { parseWorkspaceFileRef } from "@/lib/workspace-file-parser";
+import { parseWorktreeFileRef } from "@/lib/workspace-file-parser";
 import type {
   Project,
-  WorkspaceFileListItem,
-  WorkspaceFileListFileItem,
-  WorkspaceFileListMode,
-  WorkspaceFileSelector,
+  WorktreeFileListItem,
+  WorktreeFileListFileItem,
+  WorktreeFileListMode,
+  WorktreeFileSelector,
 } from "@paperclipai/shared";
 
 type BrowserSource = "current" | "other";
@@ -80,28 +80,28 @@ export function describeUnavailable(reason: string): { title: string; body: stri
   if (lower.includes("remote")) {
     return {
       icon: <Cloud aria-hidden="true" className="h-5 w-5 text-muted-foreground" />,
-      title: "Remote workspace preview not supported",
-      body: "This workspace is hosted remotely and is not available for inline preview yet.",
+      title: "Remote worktree preview not supported",
+      body: "This worktree is hosted remotely and is not available for inline preview yet.",
     };
   }
   if (lower.includes("no_workspace") || lower.includes("no_local")) {
     return {
       icon: <FolderOpen aria-hidden="true" className="h-5 w-5 text-muted-foreground" />,
-      title: "No workspace yet",
-      body: "This issue does not have a workspace to browse. Files appear here once a run creates one.",
+      title: "No worktree yet",
+      body: "This issue does not have a worktree to browse. Files appear here once a run creates one.",
     };
   }
   if (lower.includes("archiv") || lower.includes("cleaned") || lower.includes("unavailable")) {
     return {
       icon: <FolderOpen aria-hidden="true" className="h-5 w-5 text-muted-foreground" />,
-      title: "Workspace is no longer available",
+      title: "Worktree is no longer available",
       body: "The isolated worktree for this issue has been cleaned up, so files cannot be previewed.",
     };
   }
   return {
     icon: <AlertTriangle aria-hidden="true" className="h-5 w-5 text-amber-500" />,
-    title: "Workspace unavailable",
-    body: "These workspace files can't be browsed right now.",
+    title: "Worktree unavailable",
+    body: "These worktree files can't be browsed right now.",
   };
 }
 
@@ -128,7 +128,7 @@ function StateMessage({
   );
 }
 
-function WorkspaceFileBreadcrumbs({
+function WorktreeFileBreadcrumbs({
   rootLabel,
   folderPath,
   onOpenFolder,
@@ -176,8 +176,8 @@ function WorkspaceFileBreadcrumbs({
   );
 }
 
-interface WorkspaceFileRowProps {
-  item: WorkspaceFileListFileItem;
+interface WorktreeFileRowProps {
+  item: WorktreeFileListFileItem;
   treeItemId: string;
   selected: boolean;
   highlighted: boolean;
@@ -187,7 +187,7 @@ interface WorkspaceFileRowProps {
   downloadUrl: string | null;
 }
 
-function WorkspaceFileRow({ item, treeItemId, selected, highlighted, depth, onOpen, onHover, downloadUrl }: WorkspaceFileRowProps) {
+function WorktreeFileRow({ item, treeItemId, selected, highlighted, depth, onOpen, onHover, downloadUrl }: WorktreeFileRowProps) {
   const name = basename(item.relativePath);
   return (
     <div
@@ -221,23 +221,23 @@ function WorkspaceFileRow({ item, treeItemId, selected, highlighted, depth, onOp
   );
 }
 
-interface WorkspaceFileTreeFolderNode {
+interface WorktreeFileTreeFolderNode {
   kind: "folder";
   key: string;
   name: string;
   depth: number;
-  children: WorkspaceFileTreeNode[];
+  children: WorktreeFileTreeNode[];
   lazy: boolean;
 }
 
-interface WorkspaceFileTreeFileNode {
+interface WorktreeFileTreeFileNode {
   kind: "file";
   key: string;
-  item: WorkspaceFileListFileItem;
+  item: WorktreeFileListFileItem;
   depth: number;
 }
 
-type WorkspaceFileTreeNode = WorkspaceFileTreeFolderNode | WorkspaceFileTreeFileNode;
+type WorktreeFileTreeNode = WorktreeFileTreeFolderNode | WorktreeFileTreeFileNode;
 
 interface MutableTreeFolder {
   kind: "folder";
@@ -245,22 +245,22 @@ interface MutableTreeFolder {
   name: string;
   depth: number;
   folders: Map<string, MutableTreeFolder>;
-  files: WorkspaceFileTreeFileNode[];
+  files: WorktreeFileTreeFileNode[];
 }
 
-function itemKey(item: Pick<WorkspaceFileListItem, "kind" | "workspaceId" | "relativePath">): string {
+function itemKey(item: Pick<WorktreeFileListItem, "kind" | "workspaceId" | "relativePath">): string {
   return `${item.kind}:${item.workspaceId}:${item.relativePath}`;
 }
 
-function compareTreeNodes(a: WorkspaceFileTreeNode, b: WorkspaceFileTreeNode): number {
+function compareTreeNodes(a: WorktreeFileTreeNode, b: WorktreeFileTreeNode): number {
   if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
   const aName = a.kind === "folder" ? a.name : basename(a.item.relativePath);
   const bName = b.kind === "folder" ? b.name : basename(b.item.relativePath);
   return aName.localeCompare(bName);
 }
 
-function finalizeTreeFolder(folder: MutableTreeFolder): WorkspaceFileTreeFolderNode {
-  const children: WorkspaceFileTreeNode[] = [
+function finalizeTreeFolder(folder: MutableTreeFolder): WorktreeFileTreeFolderNode {
+  const children: WorktreeFileTreeNode[] = [
     ...Array.from(folder.folders.values()).map(finalizeTreeFolder),
     ...folder.files,
   ];
@@ -275,7 +275,7 @@ function finalizeTreeFolder(folder: MutableTreeFolder): WorkspaceFileTreeFolderN
   };
 }
 
-function buildWorkspaceFileTree(items: WorkspaceFileListItem[], rootPath: string | null | undefined) {
+function buildWorktreeFileTree(items: WorktreeFileListItem[], rootPath: string | null | undefined) {
   const rootPrefix = normalizeFolderPrefix(rootPath);
   const root: MutableTreeFolder = {
     kind: "folder",
@@ -323,8 +323,8 @@ function buildWorkspaceFileTree(items: WorkspaceFileListItem[], rootPath: string
   return tree.children;
 }
 
-function buildWorkspaceDirectoryTree(items: WorkspaceFileListItem[]) {
-  const nodes = items.map((item): WorkspaceFileTreeNode => {
+function buildWorktreeDirectoryTree(items: WorktreeFileListItem[]) {
+  const nodes = items.map((item): WorktreeFileTreeNode => {
     if (item.kind === "directory") {
       return {
         kind: "folder",
@@ -346,25 +346,25 @@ function buildWorkspaceDirectoryTree(items: WorkspaceFileListItem[]) {
   return nodes;
 }
 
-interface WorkspaceFileTreeProps {
-  nodes: WorkspaceFileTreeNode[];
+interface WorktreeFileTreeProps {
+  nodes: WorktreeFileTreeNode[];
   listboxId: string;
   highlightedItemKey: string | null;
   selectedItemKey: string | null;
   collapsedFolders: Set<string>;
   expandedLazyFolders: Set<string>;
   forcedExpandedFolders: Set<string>;
-  getLazyChildren?: (path: string, depth: number) => WorkspaceFileTreeNode[];
+  getLazyChildren?: (path: string, depth: number) => WorktreeFileTreeNode[];
   isLazyFolderFetching?: (path: string) => boolean;
   isLazyFolderTruncated?: (path: string) => boolean;
   onLoadMoreFolder?: (path: string) => void;
   onToggleFolder: (key: string) => void;
-  onOpen: (item: WorkspaceFileListFileItem) => void;
-  onHoverFile: (item: WorkspaceFileListFileItem) => void;
-  getDownloadUrl: (item: WorkspaceFileListFileItem) => string | null;
+  onOpen: (item: WorktreeFileListFileItem) => void;
+  onHoverFile: (item: WorktreeFileListFileItem) => void;
+  getDownloadUrl: (item: WorktreeFileListFileItem) => string | null;
 }
 
-function WorkspaceFileTree({
+function WorktreeFileTree({
   nodes,
   listboxId,
   highlightedItemKey,
@@ -380,8 +380,8 @@ function WorkspaceFileTree({
   onOpen,
   onHoverFile,
   getDownloadUrl,
-}: WorkspaceFileTreeProps) {
-  function renderNode(node: WorkspaceFileTreeNode): ReactNode {
+}: WorktreeFileTreeProps) {
+  function renderNode(node: WorktreeFileTreeNode): ReactNode {
     if (node.kind === "folder") {
       const expanded = node.lazy
         ? forcedExpandedFolders.has(node.key) || expandedLazyFolders.has(node.key)
@@ -438,7 +438,7 @@ function WorkspaceFileTree({
     }
 
     return (
-      <WorkspaceFileRow
+      <WorktreeFileRow
         key={node.key}
         item={node.item}
         treeItemId={`${listboxId}-file-${node.key}`}
@@ -453,18 +453,18 @@ function WorkspaceFileTree({
   }
 
   return (
-    <div role="tree" id={listboxId} aria-label="Workspace files" className="space-y-0.5 py-1">
+    <div role="tree" id={listboxId} aria-label="Worktree files" className="space-y-0.5 py-1">
       {nodes.map(renderNode)}
     </div>
   );
 }
 
-export interface WorkspaceFileBrowserProps {
+export interface WorktreeFileBrowserProps {
   issueId: string;
   companyId?: string | null;
   onOpen: (ref: {
     path: string;
-    workspace: WorkspaceFileSelector;
+    workspace: WorktreeFileSelector;
     line?: number | null;
     column?: number | null;
     projectId?: string | null;
@@ -493,7 +493,7 @@ export interface WorkspaceFileBrowserProps {
   className?: string;
 }
 
-export function WorkspaceFileBrowser({
+export function WorktreeFileBrowser({
   issueId,
   companyId,
   onOpen,
@@ -505,22 +505,22 @@ export function WorkspaceFileBrowser({
   autoFocusSearch = true,
   selectedPath,
   selectedProjectId: activeProjectId,
-  selectedWorkspaceId: activeWorkspaceId,
+  selectedWorkspaceId: activeWorktreeId,
   active = true,
   className,
-}: WorkspaceFileBrowserProps) {
+}: WorktreeFileBrowserProps) {
   const queryClient = useQueryClient();
   const { visible: pageVisible } = usePageVisibility();
   const source: BrowserSource =
     initialProjectId && initialWorkspaceId ? "other" : "current";
-  const workspace: WorkspaceFileSelector = "auto";
+  const workspace: WorktreeFileSelector = "auto";
   const selectedParentPath = useMemo(() => parentFolderPath(selectedPath), [selectedPath]);
   const effectiveInitialFolderPath = useMemo(() => {
     if (typeof initialFolderPath !== "undefined") return initialFolderPath;
     return initialQuery?.trim() ? null : selectedParentPath;
   }, [initialFolderPath, initialQuery, selectedParentPath]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId ?? null);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(initialWorkspaceId ?? null);
+  const [selectedWorktreeId, setSelectedWorktreeId] = useState<string | null>(initialWorkspaceId ?? null);
   const [folderPath, setFolderPath] = useState<string | null>(effectiveInitialFolderPath ?? null);
   const [searchInput, setSearchInput] = useState(initialQuery ?? "");
   const [debouncedQuery, setDebouncedQuery] = useState(initialQuery?.trim() ?? "");
@@ -548,40 +548,40 @@ export function WorkspaceFileBrowser({
     () => Array.isArray(projectsQuery.data) ? projectsQuery.data : [],
     [projectsQuery.data],
   );
-  const projectsWithWorkspaces = useMemo(
+  const projectsWithWorktrees = useMemo(
     () => projectRows.filter((project: Project) => project.workspaces.length > 0),
     [projectRows],
   );
   const selectedProject = useMemo(
-    () => projectsWithWorkspaces.find((project) => project.id === selectedProjectId) ?? null,
-    [projectsWithWorkspaces, selectedProjectId],
+    () => projectsWithWorktrees.find((project) => project.id === selectedProjectId) ?? null,
+    [projectsWithWorktrees, selectedProjectId],
   );
-  const selectedWorkspace = useMemo(
-    () => selectedProject?.workspaces.find((item) => item.id === selectedWorkspaceId) ?? null,
-    [selectedProject, selectedWorkspaceId],
+  const selectedWorktree = useMemo(
+    () => selectedProject?.workspaces.find((item) => item.id === selectedWorktreeId) ?? null,
+    [selectedProject, selectedWorktreeId],
   );
 
   useEffect(() => {
     if (source !== "other" || !projectsQuery.data) return;
-    const nextProject = selectedProject ?? projectsWithWorkspaces[0] ?? null;
+    const nextProject = selectedProject ?? projectsWithWorktrees[0] ?? null;
     if (!nextProject) {
       setSelectedProjectId(null);
-      setSelectedWorkspaceId(null);
+      setSelectedWorktreeId(null);
       return;
     }
     if (selectedProjectId !== nextProject.id) {
       setSelectedProjectId(nextProject.id);
     }
-    const nextWorkspace = nextProject.workspaces.find((item) => item.id === selectedWorkspaceId)
+    const nextWorktree = nextProject.workspaces.find((item) => item.id === selectedWorktreeId)
       ?? nextProject.primaryWorkspace
       ?? nextProject.workspaces[0]
       ?? null;
-    setSelectedWorkspaceId(nextWorkspace?.id ?? null);
-  }, [projectsQuery.data, projectsWithWorkspaces, selectedProject, selectedProjectId, selectedWorkspaceId, source]);
+    setSelectedWorktreeId(nextWorktree?.id ?? null);
+  }, [projectsQuery.data, projectsWithWorktrees, selectedProject, selectedProjectId, selectedWorktreeId, source]);
 
   useEffect(() => {
     setSelectedProjectId(initialProjectId ?? null);
-    setSelectedWorkspaceId(initialWorkspaceId ?? null);
+    setSelectedWorktreeId(initialWorkspaceId ?? null);
   }, [initialProjectId, initialWorkspaceId]);
 
   useEffect(() => {
@@ -598,23 +598,23 @@ export function WorkspaceFileBrowser({
   // A new search or workspace should re-attempt recent-change tracking.
   useEffect(() => {
     setRecentUnavailable(false);
-  }, [workspace, source, selectedProjectId, selectedWorkspaceId, folderPath]);
+  }, [workspace, source, selectedProjectId, selectedWorktreeId, folderPath]);
 
   useEffect(() => {
     setExpandedLazyFolders(new Set());
     setFolderPageCounts({});
-  }, [workspace, source, selectedProjectId, selectedWorkspaceId, folderPath, debouncedQuery]);
+  }, [workspace, source, selectedProjectId, selectedWorktreeId, folderPath, debouncedQuery]);
 
   const q = debouncedQuery || null;
   const isSearch = q !== null;
-  const mode: WorkspaceFileListMode = folderPath || isSearch || selectedPath ? "all" : recentUnavailable ? "all" : "changed";
+  const mode: WorktreeFileListMode = folderPath || isSearch || selectedPath ? "all" : recentUnavailable ? "all" : "changed";
   const targetProjectId = source === "other" ? selectedProjectId : null;
-  const targetWorkspaceId = source === "other" ? selectedWorkspaceId : null;
-  const effectiveWorkspace: WorkspaceFileSelector = source === "other" ? "project" : workspace;
-  const canListFiles = source === "current" || Boolean(targetProjectId && targetWorkspaceId);
+  const targetWorktreeId = source === "other" ? selectedWorktreeId : null;
+  const effectiveWorkspace: WorktreeFileSelector = source === "other" ? "project" : workspace;
+  const canListFiles = source === "current" || Boolean(targetProjectId && targetWorktreeId);
   const queriesEnabled = active && pageVisible && canListFiles;
-  const targetRef = targetProjectId && targetWorkspaceId
-    ? { projectId: targetProjectId, workspaceId: targetWorkspaceId }
+  const targetRef = targetProjectId && targetWorktreeId
+    ? { projectId: targetProjectId, workspaceId: targetWorktreeId }
     : {};
 
   useEffect(() => {
@@ -622,26 +622,26 @@ export function WorkspaceFileBrowser({
       q: searchInput.trim() || null,
       folderPath,
       projectId: targetProjectId,
-      workspaceId: targetWorkspaceId,
+      workspaceId: targetWorktreeId,
     });
-  }, [folderPath, onBrowseStateChange, searchInput, targetProjectId, targetWorkspaceId]);
+  }, [folderPath, onBrowseStateChange, searchInput, targetProjectId, targetWorktreeId]);
 
   const listQueryKey = useMemo(() => queryKeys.issues.fileResources(issueId, {
       workspace: effectiveWorkspace,
       projectId: targetProjectId,
-      workspaceId: targetWorkspaceId,
+      workspaceId: targetWorktreeId,
       mode,
       q,
       limit: LIST_LIMIT,
       offset: 0,
       path: folderPath,
-    }), [effectiveWorkspace, folderPath, issueId, mode, q, targetProjectId, targetWorkspaceId]);
+    }), [effectiveWorkspace, folderPath, issueId, mode, q, targetProjectId, targetWorktreeId]);
   const listQuery = useQuery({
     queryKey: listQueryKey,
     queryFn: ({ signal }) => fileResourcesApi.list(issueId, {
       workspace: effectiveWorkspace,
       projectId: targetProjectId,
-      workspaceId: targetWorkspaceId,
+      workspaceId: targetWorktreeId,
       mode,
       q,
       limit: LIST_LIMIT,
@@ -664,7 +664,7 @@ export function WorkspaceFileBrowser({
 
   const data = listQuery.data;
   const items = useMemo(() => data?.items ?? [], [data]);
-  const workspaceLabel = data?.workspace?.workspaceLabel ?? null;
+  const worktreeLabel = data?.workspace?.workspaceLabel ?? null;
   const isLazyBrowse = data?.query.mode === "all" && !q;
   const currentFolderKey = folderKey(folderPath);
   const selectedFolders = useMemo(
@@ -698,7 +698,7 @@ export function WorkspaceFileBrowser({
       queryKey: queryKeys.issues.fileResources(issueId, {
         workspace: effectiveWorkspace,
         projectId: targetProjectId,
-        workspaceId: targetWorkspaceId,
+        workspaceId: targetWorktreeId,
         mode: "all",
         q: null,
         limit: LIST_LIMIT,
@@ -708,7 +708,7 @@ export function WorkspaceFileBrowser({
       queryFn: ({ signal }: { signal: AbortSignal }) => fileResourcesApi.list(issueId, {
         workspace: effectiveWorkspace,
         projectId: targetProjectId,
-        workspaceId: targetWorkspaceId,
+        workspaceId: targetWorktreeId,
         mode: "all",
         q: null,
         limit: LIST_LIMIT,
@@ -723,7 +723,7 @@ export function WorkspaceFileBrowser({
     })),
   });
   const lazyItemsByFolder = useMemo(() => {
-    const map = new Map<string, WorkspaceFileListItem[]>();
+    const map = new Map<string, WorktreeFileListItem[]>();
     if (isLazyBrowse) map.set(currentFolderKey, [...items]);
     folderPageSpecs.forEach((spec, index) => {
       const response = folderPageQueries[index]?.data;
@@ -770,20 +770,20 @@ export function WorkspaceFileBrowser({
     return Array.from(lazyItemsByFolder.values()).flat();
   }, [isLazyBrowse, items, lazyItemsByFolder]);
   const allLoadedFileItems = useMemo(
-    () => allLoadedItems.filter((item): item is WorkspaceFileListFileItem => item.kind === "file"),
+    () => allLoadedItems.filter((item): item is WorktreeFileListFileItem => item.kind === "file"),
     [allLoadedItems],
   );
   const treeNodes = useMemo(() => {
     if (isLazyBrowse) {
-      return buildWorkspaceDirectoryTree(lazyItemsByFolder.get(currentFolderKey) ?? items);
+      return buildWorktreeDirectoryTree(lazyItemsByFolder.get(currentFolderKey) ?? items);
     }
-    return buildWorkspaceFileTree(items, folderPath);
+    return buildWorktreeFileTree(items, folderPath);
   }, [currentFolderKey, folderPath, isLazyBrowse, items, lazyItemsByFolder]);
   const selectedItemIndex = selectedPath
     ? allLoadedFileItems.findIndex((item) =>
       item.relativePath === selectedPath &&
       (activeProjectId ? item.projectId === activeProjectId : true) &&
-      (activeWorkspaceId ? item.workspaceId === activeWorkspaceId : true)
+      (activeWorktreeId ? item.workspaceId === activeWorktreeId : true)
     )
     : -1;
 
@@ -801,7 +801,7 @@ export function WorkspaceFileBrowser({
       return;
     }
     setHighlightedIndex(allLoadedFileItems.length > 0 ? 0 : -1);
-  }, [allLoadedFileItems.length, q, workspace, source, selectedProjectId, selectedWorkspaceId, folderPath, selectedPath, selectedItemIndex]);
+  }, [allLoadedFileItems.length, q, workspace, source, selectedProjectId, selectedWorktreeId, folderPath, selectedPath, selectedItemIndex]);
 
   useEffect(() => {
     if (!selectedPath || !isLazyBrowse) return;
@@ -814,7 +814,7 @@ export function WorkspaceFileBrowser({
       item.kind === "file" &&
       item.relativePath === selectedPath &&
       (activeProjectId ? item.projectId === activeProjectId : true) &&
-      (activeWorkspaceId ? item.workspaceId === activeWorkspaceId : true)
+      (activeWorktreeId ? item.workspaceId === activeWorktreeId : true)
     );
     if (selectedLoaded) return;
     setFolderPageCounts((current) => ({
@@ -823,7 +823,7 @@ export function WorkspaceFileBrowser({
     }));
   }, [
     activeProjectId,
-    activeWorkspaceId,
+    activeWorktreeId,
     currentFolderKey,
     isLazyBrowse,
     lazyErroredFolders,
@@ -835,8 +835,8 @@ export function WorkspaceFileBrowser({
   ]);
 
   const announcement = useMemo(() => {
-    if (listQuery.isFetching) return "Loading workspace files…";
-    if (listQuery.isError) return "Unable to load workspace files.";
+    if (listQuery.isFetching) return "Loading worktree files…";
+    if (listQuery.isError) return "Unable to load worktree files.";
     if (data?.state === "unavailable") return describeUnavailable(data.unavailableReason ?? "").title;
     if (items.length === 0) return "No matching files.";
     return `${items.length} item${items.length === 1 ? "" : "s"} found.`;
@@ -845,7 +845,7 @@ export function WorkspaceFileBrowser({
   function openTypedPath() {
     const value = searchInput.trim();
     if (!value) return;
-    const parsed = parseWorkspaceFileRef(value);
+    const parsed = parseWorktreeFileRef(value);
     const target = { workspace: effectiveWorkspace, ...targetRef };
     if (parsed?.resourceKind === "directory") {
       setFolderPath(parsed.path);
@@ -921,7 +921,7 @@ export function WorkspaceFileBrowser({
     setDebouncedQuery("");
   }
 
-  function openItem(item: WorkspaceFileListFileItem) {
+  function openItem(item: WorktreeFileListFileItem) {
     const itemTarget = item.projectId
       ? { projectId: item.projectId, workspaceId: item.workspaceId }
       : targetRef;
@@ -959,13 +959,13 @@ export function WorkspaceFileBrowser({
     }));
   }
 
-  function handleHoverFile(item: WorkspaceFileListFileItem) {
+  function handleHoverFile(item: WorktreeFileListFileItem) {
     const key = itemKey(item);
     const index = allLoadedFileItems.findIndex((candidate) => itemKey(candidate) === key);
     if (index >= 0) setHighlightedIndex(index);
   }
 
-  function getDownloadUrl(item: WorkspaceFileListFileItem): string | null {
+  function getDownloadUrl(item: WorktreeFileListFileItem): string | null {
     if (!item.capabilities.download) return null;
     const itemTarget = item.projectId
       ? { projectId: item.projectId, workspaceId: item.workspaceId }
@@ -978,7 +978,7 @@ export function WorkspaceFileBrowser({
   }
 
   function lazyChildren(path: string, depth: number) {
-    const children = buildWorkspaceDirectoryTree(lazyItemsByFolder.get(path) ?? []);
+    const children = buildWorktreeDirectoryTree(lazyItemsByFolder.get(path) ?? []);
     return children.map((node) => ({ ...node, depth }));
   }
 
@@ -988,23 +988,23 @@ export function WorkspaceFileBrowser({
       <StateMessage
         icon={<FolderOpen aria-hidden="true" className="h-5 w-5 text-muted-foreground" />}
         title="No organization selected"
-        body="Choose an organization before browsing another project workspace."
+        body="Choose an organization before browsing another project worktree."
       />
     );
-  } else if (source === "other" && projectsQuery.isFetching && projectsWithWorkspaces.length === 0) {
+  } else if (source === "other" && projectsQuery.isFetching && projectsWithWorktrees.length === 0) {
     body = (
       <StateMessage
         icon={<Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-muted-foreground" />}
-        title="Loading project workspaces"
-        body="Registered workspaces will appear here."
+        title="Loading project worktrees"
+        body="Registered worktrees will appear here."
       />
     );
   } else if (source === "other" && !canListFiles) {
     body = (
       <StateMessage
         icon={<FolderOpen aria-hidden="true" className="h-5 w-5 text-muted-foreground" />}
-        title="No project workspaces"
-        body="No same-organization project has a registered workspace to browse."
+        title="No project worktrees"
+        body="No same-organization project has a registered worktree to browse."
       />
     );
   } else if (listQuery.isFetching && !data) {
@@ -1035,10 +1035,10 @@ export function WorkspaceFileBrowser({
         title={changedFilesTemporarilyUnavailable ? "Changed files temporarily unavailable" : "Couldn't load files"}
         body={
           changedFilesTemporarilyUnavailable
-            ? "Paperclip is limiting workspace scans to keep the server responsive. Try again in a moment."
+            ? "Paperclip is limiting worktree scans to keep the server responsive. Try again in a moment."
             : status === 404
-            ? "Workspace browsing isn't available for this issue."
-            : "Something went wrong loading workspace files."
+            ? "Worktree browsing isn't available for this issue."
+            : "Something went wrong loading worktree files."
         }
         actions={changedFilesTemporarilyUnavailable ? (
           <Button
@@ -1066,7 +1066,7 @@ export function WorkspaceFileBrowser({
     );
   } else {
     body = (
-      <WorkspaceFileTree
+      <WorktreeFileTree
         nodes={treeNodes}
         listboxId={listboxId}
         highlightedItemKey={highlightedItemKey}
@@ -1101,7 +1101,7 @@ export function WorkspaceFileBrowser({
             onChange={(event) => setSearchInput(event.target.value)}
             onKeyDown={handleSearchKeyDown}
             placeholder="Search files by name or path…"
-            aria-label="Search workspace files"
+            aria-label="Search worktree files"
             role="combobox"
             aria-expanded={items.length > 0}
             aria-controls={items.length > 0 ? listboxId : undefined}
@@ -1118,16 +1118,16 @@ export function WorkspaceFileBrowser({
           size="icon-sm"
           onClick={() => void listQuery.refetch()}
           disabled={!queriesEnabled || listQuery.isFetching}
-          aria-label="Refresh workspace files"
-          title="Refresh workspace files"
+          aria-label="Refresh worktree files"
+          title="Refresh worktree files"
           className="h-8 w-8 shrink-0"
         >
           <RefreshCcw aria-hidden="true" className={cn("h-3.5 w-3.5", listQuery.isFetching && "animate-spin")} />
         </Button>
       </div>
 
-      <WorkspaceFileBreadcrumbs
-        rootLabel={selectedProject && selectedWorkspace ? `${selectedProject.name} / ${selectedWorkspace.name}` : workspaceLabel}
+      <WorktreeFileBreadcrumbs
+        rootLabel={selectedProject && selectedWorktree ? `${selectedProject.name} / ${selectedWorktree.name}` : worktreeLabel}
         folderPath={folderPath}
         onOpenFolder={openFolder}
       />

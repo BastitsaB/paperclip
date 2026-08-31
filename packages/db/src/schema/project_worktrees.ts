@@ -11,7 +11,7 @@ import {
 import { companies } from "./companies.js";
 import { projects } from "./projects.js";
 
-export const projectWorkspaces = pgTable(
+export const projectWorktrees = pgTable(
   "project_workspaces",
   {
     id: uuid("id").primaryKey().defaultRandom(),

@@ -1,8 +1,8 @@
 import { useMemo, type MouseEvent } from "react";
 import { readFileViewerStateFromSearch, useFileViewer } from "@/context/FileViewerContext";
-import { parseWorkspaceFileRef } from "@/lib/workspace-file-parser";
-import { buildWorkspaceFileHref, type WorkspaceFileRefResolver } from "@/lib/remark-workspace-file-refs";
-import { workspaceFileAvailabilityRef } from "@/lib/workspace-file-availability";
+import { parseWorktreeFileRef } from "@/lib/workspace-file-parser";
+import { buildWorktreeFileHref, type WorktreeFileRefResolver } from "@/lib/remark-workspace-file-refs";
+import { worktreeFileAvailabilityRef } from "@/lib/workspace-file-availability";
 import { MarkdownBody } from "./MarkdownBody";
 
 type MarkdownBodyProps = Parameters<typeof MarkdownBody>[0];
@@ -15,13 +15,13 @@ function escapeMarkdownLinkLabel(value: string) {
 
 export function linkWorkspaceFileInlineCode(markdown: string, _currentPathname: string, _currentSearch: string, _currentHash: string) {
   return markdown.replace(INLINE_CODE_RE, (token, rawCode: string) => {
-    const ref = parseWorkspaceFileRef(rawCode);
+    const ref = parseWorktreeFileRef(rawCode);
     if (!ref) return token;
-    return `[\`${escapeMarkdownLinkLabel(ref.raw)}\`](${buildWorkspaceFileHref(ref)})`;
+    return `[\`${escapeMarkdownLinkLabel(ref.raw)}\`](${buildWorktreeFileHref(ref)})`;
   });
 }
 
-export function WorkspaceFileMarkdownBody({
+export function WorktreeFileMarkdownBody({
   children,
   ...props
 }: MarkdownBodyProps) {
@@ -30,10 +30,10 @@ export function WorkspaceFileMarkdownBody({
 
   // Identity changes with the registry version, so completed batches re-parse
   // the markdown and promote the references that came back openable.
-  const resolveWorkspaceFileRef = useMemo<WorkspaceFileRefResolver | undefined>(() => {
+  const resolveWorktreeFileRef = useMemo<WorktreeFileRefResolver | undefined>(() => {
     if (!availability) return undefined;
     return (ref) => {
-      const result = availability.check(workspaceFileAvailabilityRef(ref));
+      const result = availability.check(worktreeFileAvailabilityRef(ref));
       return result.state === "openable" ? result.target : null;
     };
   }, [availability]);
@@ -55,7 +55,7 @@ export function WorkspaceFileMarkdownBody({
 
   return (
     <div onClick={handleClick}>
-      <MarkdownBody {...props} resolveWorkspaceFileRef={resolveWorkspaceFileRef}>{children}</MarkdownBody>
+      <MarkdownBody {...props} resolveWorkspaceFileRef={resolveWorktreeFileRef}>{children}</MarkdownBody>
     </div>
   );
 }

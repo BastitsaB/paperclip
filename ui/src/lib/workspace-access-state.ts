@@ -1,8 +1,8 @@
 import type {
-  WorkspaceOperation,
-  WorkspaceReadiness,
-  WorkspaceReadinessState,
-  WorkspaceRuntimeService,
+  WorktreeOperation,
+  WorktreeReadiness,
+  WorktreeReadinessState,
+  WorktreeRuntimeService,
 } from "@paperclipai/shared";
 
 /**
@@ -18,7 +18,7 @@ import type {
  * about whether to wait, start, repair, or read a log.
  */
 
-export type WorkspaceAccessActionKind =
+export type WorktreeAccessActionKind =
   | "open"
   | "start"
   | "repair"
@@ -26,40 +26,40 @@ export type WorkspaceAccessActionKind =
   /** Nothing to do but wait for a running operation. */
   | "wait";
 
-export type WorkspaceAccessAction = {
-  kind: WorkspaceAccessActionKind;
+export type WorktreeAccessAction = {
+  kind: WorktreeAccessActionKind;
   label: string;
 };
 
-export type WorkspaceAccessNotice = {
+export type WorktreeAccessNotice = {
   title: string;
   description: string;
-  action: WorkspaceAccessAction;
+  action: WorktreeAccessAction;
 };
 
-export type WorkspaceAccessState = {
-  state: WorkspaceReadinessState;
+export type WorktreeAccessState = {
+  state: WorktreeReadinessState;
   title: string;
   description: string;
-  action: WorkspaceAccessAction;
+  action: WorktreeAccessAction;
   /** True when a password-independent handoff is the expected way in. */
   handoffAvailable: boolean;
   /** A non-blocking historical failure that is still useful to inspect. */
-  secondaryNotice?: WorkspaceAccessNotice;
+  secondaryNotice?: WorktreeAccessNotice;
 };
 
 /** What the control plane said the last time a handoff was requested. */
-export type WorkspaceLoginHandoffFailureInfo = {
+export type WorktreeLoginHandoffFailureInfo = {
   reason: string;
   detail?: string | null;
-  readiness?: WorkspaceReadiness | null;
+  readiness?: WorktreeReadiness | null;
 };
 
-function latestOperation(operations: WorkspaceOperation[], phase: WorkspaceOperation["phase"]) {
+function latestOperation(operations: WorktreeOperation[], phase: WorktreeOperation["phase"]) {
   return operations.find((operation) => operation.phase === phase) ?? null;
 }
 
-function describeSeedPhase(readiness: WorkspaceReadiness | null | undefined): string | null {
+function describeSeedPhase(readiness: WorktreeReadiness | null | undefined): string | null {
   if (!readiness?.failurePhase && !readiness?.seedPhase) return null;
   return readiness.failurePhase ?? readiness.seedPhase ?? null;
 }
@@ -70,7 +70,7 @@ function timestampMs(value: Date | string | null | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function failedRepairNotice(repair: WorkspaceOperation): WorkspaceAccessNotice {
+function failedRepairNotice(repair: WorktreeOperation): WorktreeAccessNotice {
   const phase = typeof repair.metadata?.repairPhase === "string" ? repair.metadata.repairPhase : null;
   return {
     title: "Repair failed",
@@ -81,7 +81,7 @@ function failedRepairNotice(repair: WorkspaceOperation): WorkspaceAccessNotice {
   };
 }
 
-function failedProvisionNotice(provision: WorkspaceOperation): WorkspaceAccessNotice {
+function failedProvisionNotice(provision: WorktreeOperation): WorktreeAccessNotice {
   const phase = typeof provision.metadata?.seedFailurePhase === "string"
     ? provision.metadata.seedFailurePhase
     : null;
@@ -118,8 +118,8 @@ const READINESS_FAILURE_COPY: Record<string, string> = {
  * Human cause for a readiness rejection, preferring the specific recorded phase
  * over a generic sentence so the copy names what to fix.
  */
-export function describeWorkspaceReadinessCause(
-  failure: WorkspaceLoginHandoffFailureInfo | null | undefined,
+export function describeWorktreeReadinessCause(
+  failure: WorktreeLoginHandoffFailureInfo | null | undefined,
 ): string | null {
   if (!failure) return null;
   const phase = describeSeedPhase(failure.readiness);
@@ -129,11 +129,11 @@ export function describeWorkspaceReadinessCause(
   return HANDOFF_REASON_COPY[failure.reason] ?? null;
 }
 
-export function resolveWorkspaceAccessState(input: {
-  runtimeServices: WorkspaceRuntimeService[] | null | undefined;
-  operations: WorkspaceOperation[] | null | undefined;
-  handoffFailure?: WorkspaceLoginHandoffFailureInfo | null;
-}): WorkspaceAccessState {
+export function resolveWorktreeAccessState(input: {
+  runtimeServices: WorktreeRuntimeService[] | null | undefined;
+  operations: WorktreeOperation[] | null | undefined;
+  handoffFailure?: WorktreeLoginHandoffFailureInfo | null;
+}): WorktreeAccessState {
   const operations = input.operations ?? [];
   const runtimeServices = input.runtimeServices ?? [];
   const repair = latestOperation(operations, "workspace_repair");
@@ -142,7 +142,7 @@ export function resolveWorkspaceAccessState(input: {
     ?? latestOperation(operations, "workspace_runtime_provision")
     ?? latestOperation(operations, "workspace_provision");
   const failure = input.handoffFailure ?? null;
-  const cause = describeWorkspaceReadinessCause(failure);
+  const cause = describeWorktreeReadinessCause(failure);
   const handoffAvailable = failure?.reason !== "handoff_not_configured" && failure?.reason !== "no_board_identity";
   const servingService = runtimeServices.find(
     (service) => service.status === "running" && service.healthStatus === "healthy" && service.url,

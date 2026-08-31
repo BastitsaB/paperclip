@@ -4,9 +4,9 @@ import type { ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import type { Project, ProjectWorkspace, WorkspaceFileListDirectoryItem, WorkspaceFileListFileItem, WorkspaceFileListItem, WorkspaceFileListResponse } from "@paperclipai/shared";
+import type { Project, ProjectWorktree, WorktreeFileListDirectoryItem, WorktreeFileListFileItem, WorktreeFileListItem, WorktreeFileListResponse } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceFileBrowser, describeUnavailable } from "./WorkspaceFileBrowser";
+import { WorktreeFileBrowser, describeUnavailable } from "./WorkspaceFileBrowser";
 import { ApiError } from "@/api/client";
 
 function act(callback: () => void | Promise<void>) {
@@ -51,14 +51,14 @@ vi.mock("@tanstack/react-query", async () => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-function createItem(overrides: Partial<WorkspaceFileListFileItem> = {}): WorkspaceFileListFileItem {
+function createItem(overrides: Partial<WorktreeFileListFileItem> = {}): WorktreeFileListFileItem {
   return {
     kind: "file",
     provider: "git_worktree",
     title: "IssueDetail.tsx",
     relativePath: "ui/src/pages/IssueDetail.tsx",
     displayPath: "ui/src/pages/IssueDetail.tsx",
-    workspaceLabel: "Isolated workspace",
+    workspaceLabel: "Isolated worktree",
     workspaceKind: "execution_workspace",
     workspaceId: "ws-1",
     contentType: "text/plain; charset=utf-8",
@@ -70,14 +70,14 @@ function createItem(overrides: Partial<WorkspaceFileListFileItem> = {}): Workspa
   };
 }
 
-function createDirectoryItem(overrides: Partial<WorkspaceFileListDirectoryItem> = {}): WorkspaceFileListDirectoryItem {
+function createDirectoryItem(overrides: Partial<WorktreeFileListDirectoryItem> = {}): WorktreeFileListDirectoryItem {
   return {
     kind: "directory",
     provider: "git_worktree",
     title: "src",
     relativePath: "ui/src",
     displayPath: "ui/src/",
-    workspaceLabel: "Isolated workspace",
+    workspaceLabel: "Isolated worktree",
     workspaceKind: "execution_workspace",
     workspaceId: "ws-1",
     contentType: null,
@@ -89,13 +89,13 @@ function createDirectoryItem(overrides: Partial<WorkspaceFileListDirectoryItem> 
   };
 }
 
-function availableResponse(items: WorkspaceFileListItem[], truncated = false): WorkspaceFileListResponse {
+function availableResponse(items: WorktreeFileListItem[], truncated = false): WorktreeFileListResponse {
   return {
     kind: "workspace_file_list",
     state: "available",
     workspace: {
       provider: "git_worktree",
-      workspaceLabel: "Isolated workspace",
+      workspaceLabel: "Isolated worktree",
       workspaceKind: "execution_workspace",
       workspaceId: "ws-1",
     },
@@ -107,17 +107,17 @@ function availableResponse(items: WorkspaceFileListItem[], truncated = false): W
 }
 
 function availableAllResponse(
-  items: WorkspaceFileListItem[],
+  items: WorktreeFileListItem[],
   path: string | null,
   truncated = false,
   offset = 0,
-): WorkspaceFileListResponse {
+): WorktreeFileListResponse {
   const response = availableResponse(items, truncated);
   response.query = { ...response.query, mode: "all", path, offset };
   return response;
 }
 
-function createWorkspace(overrides: Partial<ProjectWorkspace> = {}): ProjectWorkspace {
+function createWorktree(overrides: Partial<ProjectWorktree> = {}): ProjectWorktree {
   return {
     id: "workspace-content",
     companyId: "company-1",
@@ -144,7 +144,7 @@ function createWorkspace(overrides: Partial<ProjectWorkspace> = {}): ProjectWork
 }
 
 function createProject(overrides: Partial<Project> = {}): Project {
-  const workspace = createWorkspace();
+  const worktree = createWorktree();
   return {
     id: "project-content",
     companyId: "company-1",
@@ -164,18 +164,18 @@ function createProject(overrides: Partial<Project> = {}): Project {
     pausedAt: null,
     executionWorkspacePolicy: null,
     codebase: {
-      workspaceId: workspace.id,
+      workspaceId: worktree.id,
       repoUrl: null,
       repoRef: null,
       defaultRef: null,
       repoName: null,
-      localFolder: workspace.cwd,
+      localFolder: worktree.cwd,
       managedFolder: "",
-      effectiveLocalFolder: workspace.cwd ?? "",
+      effectiveLocalFolder: worktree.cwd ?? "",
       origin: "local_folder",
     },
-    workspaces: [workspace],
-    primaryWorkspace: workspace,
+    workspaces: [worktree],
+    primaryWorkspace: worktree,
     archivedAt: null,
     createdAt: new Date("2026-06-08T00:00:00.000Z"),
     updatedAt: new Date("2026-06-08T00:00:00.000Z"),
@@ -183,7 +183,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
   };
 }
 
-function unavailableResponse(reason: string): WorkspaceFileListResponse {
+function unavailableResponse(reason: string): WorktreeFileListResponse {
   return {
     kind: "workspace_file_list",
     state: "unavailable",
@@ -200,7 +200,7 @@ function ok<T>(data: T) {
   return { data, isFetching: false, isError: false, error: null, refetch: vi.fn() };
 }
 
-describe("WorkspaceFileBrowser", () => {
+describe("WorktreeFileBrowser", () => {
   let container: HTMLDivElement;
   const roots: Root[] = [];
 
@@ -229,11 +229,11 @@ describe("WorkspaceFileBrowser", () => {
     vi.restoreAllMocks();
   });
 
-  function renderBrowser(onOpen = vi.fn(), props: Partial<ComponentProps<typeof WorkspaceFileBrowser>> = {}) {
+  function renderBrowser(onOpen = vi.fn(), props: Partial<ComponentProps<typeof WorktreeFileBrowser>> = {}) {
     const root = createRoot(container);
     roots.push(root);
     act(() => {
-      root.render(<WorkspaceFileBrowser issueId="issue-1" onOpen={onOpen} {...props} />);
+      root.render(<WorktreeFileBrowser issueId="issue-1" onOpen={onOpen} {...props} />);
     });
     return { root, onOpen };
   }
@@ -305,7 +305,7 @@ describe("WorkspaceFileBrowser", () => {
     });
 
     renderBrowser();
-    const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh workspace files"]');
+    const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh worktree files"]');
     expect(refresh).not.toBeNull();
     act(() => refresh!.click());
 
@@ -347,9 +347,9 @@ describe("WorkspaceFileBrowser", () => {
     const { onOpen } = renderBrowser();
 
     expect(container.querySelector('[role="tree"]')).not.toBeNull();
-    expect(container.textContent).toContain("Isolated workspace");
+    expect(container.textContent).toContain("Isolated worktree");
     expect(container.textContent).not.toContain("Recently changed");
-    expect(container.textContent).not.toContain("From Isolated workspace");
+    expect(container.textContent).not.toContain("From Isolated worktree");
 
     const option = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
       (el) => el.getAttribute("title") === "ui/src/pages/IssueDetail.tsx",
@@ -414,7 +414,7 @@ describe("WorkspaceFileBrowser", () => {
     expect(container.querySelector("input")?.className).toContain("max-w-full");
   });
 
-  it("hides source controls, folder headings, workspace labels, and timestamps", () => {
+  it("hides source controls, folder headings, worktree labels, and timestamps", () => {
     useQueryMock.mockReturnValue(ok(availableResponse([
       createItem({
         relativePath: "videos/90-days-paperclip/tweet.md",
@@ -425,10 +425,10 @@ describe("WorkspaceFileBrowser", () => {
     renderBrowser(vi.fn(), { compact: true, autoFocusSearch: false });
 
     expect(container.textContent).not.toContain("Source");
-    expect(container.textContent).not.toContain("Workspace");
+    expect(container.textContent).not.toContain("Worktree");
     expect(container.textContent).not.toContain("Recently changed");
     expect(container.textContent).not.toContain("Files in folder");
-    expect(container.textContent).not.toContain("From Isolated workspace");
+    expect(container.textContent).not.toContain("From Isolated worktree");
     expect(container.querySelector(".tabular-nums")).toBeNull();
     expect(container.textContent).toContain("videos");
     expect(container.textContent).toContain("tweet.md");
@@ -470,7 +470,7 @@ describe("WorkspaceFileBrowser", () => {
     expect(container.textContent).toContain("commands.md");
   });
 
-  it("treats an explicit null initial folder as the workspace root", () => {
+  it("treats an explicit null initial folder as the worktree root", () => {
     useQueryMock.mockReturnValue(ok(availableResponse([createItem({
       title: "README.md",
       relativePath: "README.md",
@@ -633,17 +633,17 @@ describe("WorkspaceFileBrowser", () => {
   it("shows the remote-workspace state without file rows", () => {
     useQueryMock.mockReturnValue(ok(unavailableResponse("remote_workspace")));
     renderBrowser();
-    expect(container.textContent).toContain("Remote workspace preview not supported");
+    expect(container.textContent).toContain("Remote worktree preview not supported");
     expect(container.querySelector('[role="tree"]')).toBeNull();
   });
 
   it("shows the no-workspace state when the issue has no workspace", () => {
     useQueryMock.mockReturnValue(ok(unavailableResponse("no_workspace")));
     renderBrowser();
-    expect(container.textContent).toContain("No workspace yet");
+    expect(container.textContent).toContain("No worktree yet");
   });
 
-  it("opens a result from a selected other project workspace", () => {
+  it("opens a result from a selected other project worktree", () => {
     const contentItem = createItem({
       relativePath: "content-os/cases/active/2026-06-06-pap-10199-bundled-skills/README.md",
       displayPath: "Paperclip Content / content-os/cases/active/2026-06-06-pap-10199-bundled-skills/README.md",
@@ -689,7 +689,7 @@ describe("WorkspaceFileBrowser", () => {
     });
   });
 
-  it("focuses an initial folder in a selected other project workspace", () => {
+  it("focuses an initial folder in a selected other project worktree", () => {
     const folderPath = "content-os/cases/active/2026-06-06-pap-10199-bundled-skills/";
     const contentItem = createItem({
       relativePath: `${folderPath}README.md`,
@@ -852,7 +852,7 @@ describe("WorkspaceFileBrowser", () => {
 
   it("auto-pages the selected file's current folder until the selected row is loaded", async () => {
     const folderPath = "ui/src/components";
-    const selectedPath = `${folderPath}/WorkspaceFileBrowser.tsx`;
+    const selectedPath = `${folderPath}/WorktreeFileBrowser.tsx`;
     const pageZero = availableAllResponse([
       createItem({
         title: "ActivityCharts.tsx",
@@ -869,7 +869,7 @@ describe("WorkspaceFileBrowser", () => {
     ], folderPath, true, LIST_LIMIT);
     const pageTwo = availableAllResponse([
       createItem({
-        title: "WorkspaceFileBrowser.tsx",
+        title: "WorktreeFileBrowser.tsx",
         relativePath: selectedPath,
         displayPath: selectedPath,
       }),
@@ -899,7 +899,7 @@ describe("WorkspaceFileBrowser", () => {
         (el) => el.getAttribute("title") === selectedPath,
       );
       expect(selected?.getAttribute("aria-selected")).toBe("true");
-      expect(container.textContent).toContain("WorkspaceFileBrowser.tsx");
+      expect(container.textContent).toContain("WorktreeFileBrowser.tsx");
     });
   });
 
@@ -925,11 +925,11 @@ describe("WorkspaceFileBrowser", () => {
 
 describe("describeUnavailable", () => {
   it("maps reasons to copy that matches the viewer's denial voice", () => {
-    expect(describeUnavailable("remote_workspace").title).toBe("Remote workspace preview not supported");
-    expect(describeUnavailable("no_workspace").title).toBe("No workspace yet");
-    expect(describeUnavailable("no_local_workspace").title).toBe("No workspace yet");
-    expect(describeUnavailable("workspace_unavailable").title).toBe("Workspace is no longer available");
-    expect(describeUnavailable("archived").title).toBe("Workspace is no longer available");
+    expect(describeUnavailable("remote_workspace").title).toBe("Remote worktree preview not supported");
+    expect(describeUnavailable("no_workspace").title).toBe("No worktree yet");
+    expect(describeUnavailable("no_local_workspace").title).toBe("No worktree yet");
+    expect(describeUnavailable("workspace_unavailable").title).toBe("Worktree is no longer available");
+    expect(describeUnavailable("archived").title).toBe("Worktree is no longer available");
   });
 
   it("never leaks the raw reason code as the body", () => {

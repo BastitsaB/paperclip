@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ExecutionWorkspace, Issue, Project, ProjectWorkspace, RoutineListItem, WorkspaceOperation } from "@paperclipai/shared";
+import type { ExecutionWorktree, Issue, Project, ProjectWorktree, RoutineListItem, WorktreeOperation } from "@paperclipai/shared";
 import { Copy, ExternalLink, Loader2, Play, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction } from "@/components/ui/card";
@@ -10,11 +10,11 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyText } from "../components/CopyText";
-import { ExecutionWorkspaceCloseDialog } from "../components/ExecutionWorkspaceCloseDialog";
+import { ExecutionWorktreeCloseDialog } from "../components/ExecutionWorkspaceCloseDialog";
 import { MissingPluginTabPlaceholder } from "../components/MissingPluginTabPlaceholder";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
-import { executionWorkspacesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-workspaces";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -29,32 +29,32 @@ import {
   type RoutineRunDialogSubmitData,
 } from "../components/RoutineRunVariablesDialog";
 import {
-  buildWorkspaceRuntimeControlSections,
-  buildWorkspaceServiceControlEntries,
-  resolveWorkspaceServiceControlRequests,
-  WorkspaceRuntimeControls,
-  type WorkspaceRuntimeControlRequest,
+  buildWorktreeRuntimeControlSections,
+  buildWorktreeServiceControlEntries,
+  resolveWorktreeServiceControlRequests,
+  WorktreeRuntimeControls,
+  type WorktreeRuntimeControlRequest,
 } from "../components/WorkspaceRuntimeControls";
-import { WorkspaceServiceControlBar } from "../components/WorkspaceServiceControlBar";
-import { WorkspaceAccessCard } from "../components/WorkspaceAccessCard";
+import { WorktreeServiceControlBar } from "../components/WorkspaceServiceControlBar";
+import { WorktreeAccessCard } from "../components/WorkspaceAccessCard";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useManagedSandboxOnly } from "../hooks/useManagedSandboxOnly";
 import { useToastActions } from "../context/ToastContext";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
 import { queryKeys } from "../lib/queryKeys";
-import { cn, formatDateTime, issueUrl, projectRouteRef, projectWorkspaceUrl } from "../lib/utils";
+import { cn, formatDateTime, issueUrl, projectRouteRef, projectWorktreeUrl } from "../lib/utils";
 import {
-  resolveWorkspaceAccessState,
-  type WorkspaceLoginHandoffFailureInfo,
+  resolveWorktreeAccessState,
+  type WorktreeLoginHandoffFailureInfo,
 } from "../lib/workspace-access-state";
 import {
-  getWorkspaceSpecificRoutineVariableNames,
-  routineHasWorkspaceSpecificVariables,
-  sortWorkspaceRoutinesByName,
+  getWorktreeSpecificRoutineVariableNames,
+  routineHasWorktreeSpecificVariables,
+  sortWorktreeRoutinesByName,
 } from "../lib/workspace-routines";
 
-type WorkspaceFormState = {
+type WorktreeFormState = {
   name: string;
   cwd: string;
   repoUrl: string;
@@ -77,17 +77,17 @@ type ConfiguredRuntimeServicePort = {
   invalidPort: boolean;
 };
 
-type ExecutionWorkspaceBaseTab = "services" | "configuration" | "runtime_logs" | "issues" | "routines";
-type ExecutionWorkspacePluginTab = `plugin:${string}`;
-type ExecutionWorkspaceTab = ExecutionWorkspaceBaseTab | ExecutionWorkspacePluginTab;
-type OrderedExecutionWorkspaceTabItem = {
-  value: ExecutionWorkspaceTab;
+type ExecutionWorktreeBaseTab = "services" | "configuration" | "runtime_logs" | "issues" | "routines";
+type ExecutionWorktreePluginTab = `plugin:${string}`;
+type ExecutionWorktreeTab = ExecutionWorktreeBaseTab | ExecutionWorktreePluginTab;
+type OrderedExecutionWorktreeTabItem = {
+  value: ExecutionWorktreeTab;
   label: string;
   order: number;
 };
 
 const DEFAULT_PLUGIN_DETAIL_TAB_ORDER = 100;
-const EXECUTION_WORKSPACE_BASE_TAB_ITEMS: OrderedExecutionWorkspaceTabItem[] = [
+const EXECUTION_WORKSPACE_BASE_TAB_ITEMS: OrderedExecutionWorktreeTabItem[] = [
   { value: "issues", label: "Tasks", order: 10 },
   { value: "services", label: "Services", order: 20 },
   { value: "configuration", label: "Configuration", order: 30 },
@@ -95,22 +95,22 @@ const EXECUTION_WORKSPACE_BASE_TAB_ITEMS: OrderedExecutionWorkspaceTabItem[] = [
   { value: "routines", label: "Routines", order: 60 },
 ];
 
-function isExecutionWorkspacePluginTab(value: string | null): value is ExecutionWorkspacePluginTab {
+function isExecutionWorktreePluginTab(value: string | null): value is ExecutionWorktreePluginTab {
   return typeof value === "string" && value.startsWith("plugin:");
 }
 
-function orderExecutionWorkspaceTabItems(items: OrderedExecutionWorkspaceTabItem[]) {
+function orderExecutionWorktreeTabItems(items: OrderedExecutionWorktreeTabItem[]) {
   return items
     .map((item, index) => ({ item, index }))
     .sort((left, right) => left.item.order - right.item.order || left.index - right.index)
     .map(({ item }) => item);
 }
 
-function resolveExecutionWorkspaceTab(pathname: string, workspaceId: string): ExecutionWorkspaceBaseTab | null {
+function resolveExecutionWorktreeTab(pathname: string, workspaceId: string): ExecutionWorktreeBaseTab | null {
   const segments = pathname.split("/").filter(Boolean);
-  const executionWorkspacesIndex = segments.indexOf("execution-workspaces");
-  if (executionWorkspacesIndex === -1 || segments[executionWorkspacesIndex + 1] !== workspaceId) return null;
-  const tab = segments[executionWorkspacesIndex + 2];
+  const executionWorktreesIndex = segments.indexOf("execution-worktrees");
+  if (executionWorktreesIndex === -1 || segments[executionWorktreesIndex + 1] !== workspaceId) return null;
+  const tab = segments[executionWorktreesIndex + 2];
   if (tab === "services") return "services";
   if (tab === "issues") return "issues";
   if (tab === "routines") return "routines";
@@ -119,19 +119,19 @@ function resolveExecutionWorkspaceTab(pathname: string, workspaceId: string): Ex
   return null;
 }
 
-function executionWorkspaceTabPath(workspaceId: string, tab: ExecutionWorkspaceBaseTab) {
+function executionWorktreeTabPath(workspaceId: string, tab: ExecutionWorktreeBaseTab) {
   const segment = tab === "runtime_logs" ? "runtime-logs" : tab;
-  return `/execution-workspaces/${workspaceId}/${segment}`;
+  return `/execution-worktrees/${workspaceId}/${segment}`;
 }
 
-function LegacyWorkspaceTabRedirect({ workspaceId }: { workspaceId: string }) {
+function LegacyWorktreeTabRedirect({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     try {
-      localStorage.removeItem(`paperclip:execution-workspace-tab:${workspaceId}`);
+      localStorage.removeItem(`paperclip:execution-workspace-tab:${WorktreeLink}`);
     } catch {}
-  }, [workspaceId]);
+  }, [WorktreeLink]);
 
-  return <Navigate to={executionWorkspaceTabPath(workspaceId, "issues")} replace />;
+  return <Navigate to={executionWorktreeTabPath(workspaceId, "issues")} replace />;
 }
 
 function isSafeExternalUrl(value: string | null | undefined) {
@@ -162,7 +162,7 @@ function normalizeText(value: string) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function parseWorkspaceRuntimeJson(value: string) {
+function parseWorktreeRuntimeJson(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return { ok: true as const, value: null as Record<string, unknown> | null };
 
@@ -171,7 +171,7 @@ function parseWorkspaceRuntimeJson(value: string) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false as const,
-        error: "Workspace commands JSON must be a JSON object.",
+        error: "Worktree commands JSON must be a JSON object.",
       };
     }
     return { ok: true as const, value: parsed as Record<string, unknown> };
@@ -270,7 +270,7 @@ export function getConfiguredRuntimeServicePortWarnings(services: ConfiguredRunt
     );
 }
 
-function formStateFromWorkspace(workspace: ExecutionWorkspace): WorkspaceFormState {
+function formStateFromWorktree(workspace: ExecutionWorktree): WorktreeFormState {
   return {
     name: workspace.name,
     cwd: readText(workspace.cwd),
@@ -287,12 +287,12 @@ function formStateFromWorkspace(workspace: ExecutionWorkspace): WorkspaceFormSta
   };
 }
 
-function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
+function buildWorktreePatch(initialState: WorktreeFormState, nextState: WorktreeFormState) {
   const patch: Record<string, unknown> = {};
   const configPatch: Record<string, unknown> = {};
 
   const maybeAssign = (
-    key: keyof Pick<WorkspaceFormState, "name" | "cwd" | "repoUrl" | "baseRef" | "branchName" | "providerRef">,
+    key: keyof Pick<WorktreeFormState, "name" | "cwd" | "repoUrl" | "baseRef" | "branchName" | "providerRef">,
   ) => {
     if (initialState[key] === nextState[key]) return;
     patch[key] = key === "name" ? (normalizeText(nextState[key]) ?? initialState.name) : normalizeText(nextState[key]);
@@ -305,7 +305,7 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   maybeAssign("branchName");
   maybeAssign("providerRef");
 
-  const maybeAssignConfigText = (key: keyof Pick<WorkspaceFormState, "provisionCommand" | "runtimeProvisionCommand" | "teardownCommand" | "cleanupCommand">) => {
+  const maybeAssignConfigText = (key: keyof Pick<WorktreeFormState, "provisionCommand" | "runtimeProvisionCommand" | "teardownCommand" | "cleanupCommand">) => {
     if (initialState[key] === nextState[key]) return;
     configPatch[key] = normalizeText(nextState[key]);
   };
@@ -316,7 +316,7 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   maybeAssignConfigText("cleanupCommand");
 
   if (initialState.inheritRuntime !== nextState.inheritRuntime || initialState.workspaceRuntime !== nextState.workspaceRuntime) {
-    const parsed = parseWorkspaceRuntimeJson(nextState.workspaceRuntime);
+    const parsed = parseWorktreeRuntimeJson(nextState.workspaceRuntime);
     if (!parsed.ok) throw new Error(parsed.error);
     configPatch.workspaceRuntime = nextState.inheritRuntime ? null : parsed.value;
   }
@@ -328,7 +328,7 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   return patch;
 }
 
-function validateForm(form: WorkspaceFormState) {
+function validateForm(form: WorktreeFormState) {
   const repoUrl = normalizeText(form.repoUrl);
   if (repoUrl) {
     try {
@@ -339,7 +339,7 @@ function validateForm(form: WorkspaceFormState) {
   }
 
   if (!form.inheritRuntime) {
-    const runtimeJson = parseWorkspaceRuntimeJson(form.workspaceRuntime);
+    const runtimeJson = parseWorktreeRuntimeJson(form.workspaceRuntime);
     if (!runtimeJson.ok) {
       return runtimeJson.error;
     }
@@ -370,7 +370,7 @@ function Field({
   );
 }
 
-function workspaceOperationPhaseLabel(phase: string) {
+function worktreeOperationPhaseLabel(phase: string) {
   switch (phase) {
     case "worktree_prepare":
       return "Worktree setup";
@@ -407,7 +407,7 @@ export type RuntimeProvisionStatus =
  */
 export function resolveRuntimeProvisionStatus(input: {
   runtimeProvisionCommand: string | null | undefined;
-  operations: WorkspaceOperation[] | undefined;
+  operations: WorktreeOperation[] | undefined;
 }): RuntimeProvisionStatus {
   const latest = (input.operations ?? []).find((operation) => (
     operation.phase === "workspace_seed" || operation.phase === "workspace_runtime_provision"
@@ -430,7 +430,7 @@ export function resolveRuntimeProvisionStatus(input: {
  * readiness) on the error body so the UI can name the cause instead of showing a
  * bare HTTP failure. Anything else is a genuine transport error.
  */
-export function readWorkspaceHandoffFailure(error: unknown): WorkspaceLoginHandoffFailureInfo | null {
+export function readWorktreeHandoffFailure(error: unknown): WorktreeLoginHandoffFailureInfo | null {
   if (!(error instanceof ApiError)) return null;
   const body = error.body as
     | { reason?: unknown; detail?: unknown; readiness?: unknown }
@@ -440,7 +440,7 @@ export function readWorkspaceHandoffFailure(error: unknown): WorkspaceLoginHando
   return {
     reason: body.reason,
     detail: typeof body.detail === "string" ? body.detail : null,
-    readiness: (body.readiness as WorkspaceLoginHandoffFailureInfo["readiness"]) ?? null,
+    readiness: (body.readiness as WorktreeLoginHandoffFailureInfo["readiness"]) ?? null,
   };
 }
 
@@ -470,7 +470,7 @@ export function RuntimeProvisionStatusValue({
 }) {
   if (status.kind === "eager") {
     return (
-      <span className="text-sm text-muted-foreground">Eager · provisioned during workspace setup</span>
+      <span className="text-sm text-muted-foreground">Eager · provisioned during worktree setup</span>
     );
   }
   if (status.kind === "deferred") {
@@ -523,17 +523,17 @@ function MonoValue({ value, copy }: { value: string; copy?: boolean }) {
   );
 }
 
-function WorkspaceLink({
+function WorktreeLink({
   project,
   workspace,
 }: {
   project: Project;
-  workspace: ProjectWorkspace;
+  workspace: ProjectWorktree;
 }) {
-  return <Link to={projectWorkspaceUrl(project, workspace.id)} className="hover:underline">{workspace.name}</Link>;
+  return <Link to={projectWorktreeUrl(project, workspace.id)} className="hover:underline">{workspace.name}</Link>;
 }
 
-function ExecutionWorkspaceIssuesList({
+function ExecutionWorktreeIssuesList({
   companyId,
   workspace,
   issues,
@@ -542,7 +542,7 @@ function ExecutionWorkspaceIssuesList({
   project,
 }: {
   companyId: string;
-  workspace: ExecutionWorkspace;
+  workspace: ExecutionWorktree;
   issues: Issue[];
   isLoading: boolean;
   error: Error | null;
@@ -617,7 +617,7 @@ function ExecutionWorkspaceIssuesList({
   );
 }
 
-function WorkspaceRoutineRow({
+function WorktreeRoutineRow({
   routine,
   variableNames,
   runningRoutineId,
@@ -668,11 +668,11 @@ function WorkspaceRoutineRow({
   );
 }
 
-function ExecutionWorkspaceRoutinesList({
+function ExecutionWorktreeRoutinesList({
   workspace,
   project,
 }: {
-  workspace: ExecutionWorkspace;
+  workspace: ExecutionWorktree;
   project: Project | null;
 }) {
   const queryClient = useQueryClient();
@@ -690,8 +690,8 @@ function ExecutionWorkspaceRoutinesList({
     queryFn: () => agentsApi.list(workspace.companyId),
   });
 
-  const workspaceRoutines = useMemo(
-    () => sortWorkspaceRoutinesByName((routines ?? []).filter(routineHasWorkspaceSpecificVariables)),
+  const worktreeRoutines = useMemo(
+    () => sortWorktreeRoutinesByName((routines ?? []).filter(routineHasWorktreeSpecificVariables)),
     [routines],
   );
 
@@ -721,7 +721,7 @@ function ExecutionWorkspaceRoutinesList({
       ]);
       pushToast({
         title: "Routine started",
-        body: "Paperclip created a run using this execution workspace.",
+        body: "Paperclip created a run using this execution worktree.",
         tone: "success",
       });
     },
@@ -741,9 +741,9 @@ function ExecutionWorkspaceRoutinesList({
     <>
       <Card className="rounded-none">
         <CardHeader>
-          <CardTitle>Workspace routines</CardTitle>
+          <CardTitle>Worktree routines</CardTitle>
           <CardDescription>
-            Routines that use workspace-specific variables can be run against this execution workspace.
+            Routines that use worktree-specific variables can be run against this execution worktree.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -753,20 +753,20 @@ function ExecutionWorkspaceRoutinesList({
             <p className="text-sm text-destructive">
               {error instanceof Error ? error.message : "Failed to load routines."}
             </p>
-          ) : workspaceRoutines.length === 0 ? (
+          ) : worktreeRoutines.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-10 text-center">
               <Repeat className="h-5 w-5 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                No routines use workspace-specific variables yet.
+                No routines use worktree-specific variables yet.
               </p>
             </div>
           ) : (
             <div className="rounded-lg border border-border">
-              {workspaceRoutines.map((routine) => (
-                <WorkspaceRoutineRow
+              {worktreeRoutines.map((routine) => (
+                <WorktreeRoutineRow
                   key={routine.id}
                   routine={routine}
-                  variableNames={getWorkspaceSpecificRoutineVariableNames(routine)}
+                  variableNames={getWorktreeSpecificRoutineVariableNames(routine)}
                   runningRoutineId={runningRoutineId}
                   onRunNow={setRunDialogRoutine}
                 />
@@ -799,99 +799,99 @@ function ExecutionWorkspaceRoutinesList({
   );
 }
 
-export function ExecutionWorkspaceDetail() {
-  const { workspaceId } = useParams<{ workspaceId: string }>();
+export function ExecutionWorktreeDetail() {
+  const { worktreeId: worktreeId } = useParams<{ worktreeId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { hideHostPaths } = useManagedSandboxOnly();
-  const [form, setForm] = useState<WorkspaceFormState | null>(null);
+  const [form, setForm] = useState<WorktreeFormState | null>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [runtimeActionErrorMessage, setRuntimeActionErrorMessage] = useState<string | null>(null);
   const [runtimeActionMessage, setRuntimeActionMessage] = useState<string | null>(null);
-  const [handoffFailure, setHandoffFailure] = useState<WorkspaceLoginHandoffFailureInfo | null>(null);
+  const [handoffFailure, setHandoffFailure] = useState<WorktreeLoginHandoffFailureInfo | null>(null);
   const [handoffErrorMessage, setHandoffErrorMessage] = useState<string | null>(null);
-  const [pendingRuntimeActions, setPendingRuntimeActions] = useState<WorkspaceRuntimeControlRequest[]>([]);
-  const activeRouteTab = workspaceId ? resolveExecutionWorkspaceTab(location.pathname, workspaceId) : null;
+  const [pendingRuntimeActions, setPendingRuntimeActions] = useState<WorktreeRuntimeControlRequest[]>([]);
+  const activeRouteTab = worktreeId ? resolveExecutionWorktreeTab(location.pathname, worktreeId) : null;
   const pluginTabFromSearch = useMemo(() => {
     const tab = new URLSearchParams(location.search).get("tab");
-    return isExecutionWorkspacePluginTab(tab) ? tab : null;
+    return isExecutionWorktreePluginTab(tab) ? tab : null;
   }, [location.search]);
-  const activeTab: ExecutionWorkspaceTab | null = activeRouteTab ?? pluginTabFromSearch;
+  const activeTab: ExecutionWorktreeTab | null = activeRouteTab ?? pluginTabFromSearch;
 
-  const workspaceQuery = useQuery({
-    queryKey: queryKeys.executionWorkspaces.detail(workspaceId!),
-    queryFn: () => executionWorkspacesApi.get(workspaceId!),
-    enabled: Boolean(workspaceId),
+  const worktreeQuery = useQuery({
+    queryKey: queryKeys.executionWorktrees.detail(worktreeId!),
+    queryFn: () => executionWorktreesApi.get(worktreeId!),
+    enabled: Boolean(worktreeId),
   });
-  const workspace = workspaceQuery.data ?? null;
+  const worktree = worktreeQuery.data ?? null;
 
   const projectQuery = useQuery({
-    queryKey: workspace ? [...queryKeys.projects.detail(workspace.projectId), workspace.companyId] : ["projects", "detail", "__pending__"],
-    queryFn: () => projectsApi.get(workspace!.projectId, workspace!.companyId),
-    enabled: Boolean(workspace?.projectId),
+    queryKey: worktree ? [...queryKeys.projects.detail(worktree.projectId), worktree.companyId] : ["projects", "detail", "__pending__"],
+    queryFn: () => projectsApi.get(worktree!.projectId, worktree!.companyId),
+    enabled: Boolean(worktree?.projectId),
   });
   const project = projectQuery.data ?? null;
 
   const sourceIssueQuery = useQuery({
-    queryKey: workspace?.sourceIssueId ? queryKeys.issues.detail(workspace.sourceIssueId) : ["issues", "detail", "__none__"],
-    queryFn: () => issuesApi.get(workspace!.sourceIssueId!),
-    enabled: Boolean(workspace?.sourceIssueId),
+    queryKey: worktree?.sourceIssueId ? queryKeys.issues.detail(worktree.sourceIssueId) : ["issues", "detail", "__none__"],
+    queryFn: () => issuesApi.get(worktree!.sourceIssueId!),
+    enabled: Boolean(worktree?.sourceIssueId),
   });
   const sourceIssue = sourceIssueQuery.data ?? null;
 
-  const derivedWorkspaceQuery = useQuery({
-    queryKey: workspace?.derivedFromExecutionWorkspaceId
-      ? queryKeys.executionWorkspaces.detail(workspace.derivedFromExecutionWorkspaceId)
-      : ["execution-workspaces", "detail", "__none__"],
-    queryFn: () => executionWorkspacesApi.get(workspace!.derivedFromExecutionWorkspaceId!),
-    enabled: Boolean(workspace?.derivedFromExecutionWorkspaceId),
+  const derivedWorktreeQuery = useQuery({
+    queryKey: worktree?.derivedFromExecutionWorkspaceId
+      ? queryKeys.executionWorktrees.detail(worktree.derivedFromExecutionWorkspaceId)
+      : ["execution-worktrees", "detail", "__none__"],
+    queryFn: () => executionWorktreesApi.get(worktree!.derivedFromExecutionWorkspaceId!),
+    enabled: Boolean(worktree?.derivedFromExecutionWorkspaceId),
   });
-  const derivedWorkspace = derivedWorkspaceQuery.data ?? null;
+  const derivedWorktree = derivedWorktreeQuery.data ?? null;
   const linkedIssuesQuery = useQuery({
-    queryKey: workspace
-      ? queryKeys.issues.listByExecutionWorkspace(workspace.companyId, workspace.id)
+    queryKey: worktree
+      ? queryKeys.issues.listByExecutionWorkspace(worktree.companyId, worktree.id)
       : ["issues", "__execution-workspace__", "__none__"],
-    queryFn: () => issuesApi.list(workspace!.companyId, { executionWorkspaceId: workspace!.id }),
-    enabled: Boolean(workspace?.companyId),
+    queryFn: () => issuesApi.list(worktree!.companyId, { executionWorkspaceId: worktree!.id }),
+    enabled: Boolean(worktree?.companyId),
   });
   const linkedIssues = linkedIssuesQuery.data ?? [];
 
-  const linkedProjectWorkspace = useMemo(
-    () => project?.workspaces.find((item) => item.id === workspace?.projectWorkspaceId) ?? null,
-    [project, workspace?.projectWorkspaceId],
+  const linkedProjectWorktree = useMemo(
+    () => project?.workspaces.find((item) => item.id === worktree?.projectWorkspaceId) ?? null,
+    [project, worktree?.projectWorkspaceId],
   );
 
   const {
-    slots: workspacePluginDetailSlots,
-    isLoading: workspacePluginDetailSlotsLoading,
-    errorMessage: workspacePluginDetailSlotsError,
+    slots: worktreePluginDetailSlots,
+    isLoading: worktreePluginDetailSlotsLoading,
+    errorMessage: worktreePluginDetailSlotsError,
   } = usePluginSlots({
     slotTypes: ["detailTab"],
     entityType: "execution_workspace",
-    companyId: workspace?.companyId ?? null,
-    enabled: !!workspace?.companyId,
+    companyId: worktree?.companyId ?? null,
+    enabled: !!worktree?.companyId,
   });
-  const workspacePluginTabItems = useMemo(
-    () => workspacePluginDetailSlots.map((slot) => ({
-      value: `plugin:${slot.pluginKey}:${slot.id}` as ExecutionWorkspacePluginTab,
+  const worktreePluginTabItems = useMemo(
+    () => worktreePluginDetailSlots.map((slot) => ({
+      value: `plugin:${slot.pluginKey}:${slot.id}` as ExecutionWorktreePluginTab,
       label: slot.displayName,
       order: slot.order ?? DEFAULT_PLUGIN_DETAIL_TAB_ORDER,
       slot,
     })),
-    [workspacePluginDetailSlots],
+    [worktreePluginDetailSlots],
   );
-  const workspaceTabItems = useMemo(
-    () => orderExecutionWorkspaceTabItems([...EXECUTION_WORKSPACE_BASE_TAB_ITEMS, ...workspacePluginTabItems]),
-    [workspacePluginTabItems],
+  const worktreeTabItems = useMemo(
+    () => orderExecutionWorktreeTabItems([...EXECUTION_WORKSPACE_BASE_TAB_ITEMS, ...worktreePluginTabItems]),
+    [worktreePluginTabItems],
   );
-  const inheritedRuntimeConfig = linkedProjectWorkspace?.runtimeConfig?.workspaceRuntime ?? null;
-  const effectiveRuntimeConfig = workspace?.config?.workspaceRuntime ?? inheritedRuntimeConfig;
+  const inheritedRuntimeConfig = linkedProjectWorktree?.runtimeConfig?.workspaceRuntime ?? null;
+  const effectiveRuntimeConfig = worktree?.config?.workspaceRuntime ?? inheritedRuntimeConfig;
   const runtimeConfigSource =
-    workspace?.config?.workspaceRuntime
+    worktree?.config?.workspaceRuntime
       ? "execution_workspace"
       : inheritedRuntimeConfig
         ? "project_workspace"
@@ -899,7 +899,7 @@ export function ExecutionWorkspaceDetail() {
 
   const configuredRuntimeConfig = useMemo(() => {
     if (!form || form.inheritRuntime) return inheritedRuntimeConfig;
-    const parsed = parseWorkspaceRuntimeJson(form.workspaceRuntime);
+    const parsed = parseWorktreeRuntimeJson(form.workspaceRuntime);
     return parsed.ok ? parsed.value : null;
   }, [form, inheritedRuntimeConfig]);
   const configuredRuntimeServicePorts = useMemo(
@@ -911,40 +911,40 @@ export function ExecutionWorkspaceDetail() {
     [configuredRuntimeServicePorts],
   );
 
-  const initialState = useMemo(() => (workspace ? formStateFromWorkspace(workspace) : null), [workspace]);
+  const initialState = useMemo(() => (worktree ? formStateFromWorktree(worktree) : null), [worktree]);
   const isDirty = Boolean(form && initialState && JSON.stringify(form) !== JSON.stringify(initialState));
-  const projectRef = project ? projectRouteRef(project) : workspace?.projectId ?? "";
+  const projectRef = project ? projectRouteRef(project) : worktree?.projectId ?? "";
 
   useEffect(() => {
-    if (!workspace?.companyId || workspace.companyId === selectedCompanyId) return;
-    setSelectedCompanyId(workspace.companyId, { source: "route_sync" });
-  }, [workspace?.companyId, selectedCompanyId, setSelectedCompanyId]);
+    if (!worktree?.companyId || worktree.companyId === selectedCompanyId) return;
+    setSelectedCompanyId(worktree.companyId, { source: "route_sync" });
+  }, [worktree?.companyId, selectedCompanyId, setSelectedCompanyId]);
 
   useEffect(() => {
-    if (!workspace) return;
-    setForm(formStateFromWorkspace(workspace));
+    if (!worktree) return;
+    setForm(formStateFromWorktree(worktree));
     setErrorMessage(null);
     setRuntimeActionErrorMessage(null);
     setPendingRuntimeActions([]);
-  }, [workspace]);
+  }, [worktree]);
 
   useEffect(() => {
-    if (!workspace) return;
+    if (!worktree) return;
     const crumbs = [
       { label: "Projects", href: "/projects" },
       ...(project ? [{ label: project.name, href: `/projects/${projectRef}` }] : []),
-      ...(project ? [{ label: "Workspaces", href: `/projects/${projectRef}/workspaces` }] : []),
-      { label: workspace.name },
+      ...(project ? [{ label: "Worktrees", href: `/projects/${projectRef}/worktrees` }] : []),
+      { label: worktree.name },
     ];
     setBreadcrumbs(crumbs);
-  }, [setBreadcrumbs, workspace, project, projectRef]);
+  }, [setBreadcrumbs, worktree, project, projectRef]);
 
-  const updateWorkspace = useMutation({
-    mutationFn: (patch: Record<string, unknown>) => executionWorkspacesApi.update(workspace!.id, patch),
-    onSuccess: (nextWorkspace) => {
-      queryClient.setQueryData(queryKeys.executionWorkspaces.detail(nextWorkspace.id), nextWorkspace);
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.closeReadiness(nextWorkspace.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(nextWorkspace.id) });
+  const updateWorktree = useMutation({
+    mutationFn: (patch: Record<string, unknown>) => executionWorktreesApi.update(worktree!.id, patch),
+    onSuccess: (nextWorktree) => {
+      queryClient.setQueryData(queryKeys.executionWorktrees.detail(nextWorktree.id), nextWorktree);
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.closeReadiness(nextWorktree.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.worktreeOperations(nextWorktree.id) });
       if (project) {
         queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(project.id) });
         queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(project.urlKey) });
@@ -955,48 +955,48 @@ export function ExecutionWorkspaceDetail() {
       setErrorMessage(null);
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to save execution workspace.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to save execution worktree.");
     },
   });
-  const workspaceOperationsQuery = useQuery({
-    queryKey: queryKeys.executionWorkspaces.workspaceOperations(workspaceId!),
-    queryFn: () => executionWorkspacesApi.listWorkspaceOperations(workspaceId!),
-    enabled: Boolean(workspaceId),
+  const worktreeOperationsQuery = useQuery({
+    queryKey: queryKeys.executionWorktrees.worktreeOperations(worktreeId!),
+    queryFn: () => executionWorktreesApi.listWorkspaceOperations(worktreeId!),
+    enabled: Boolean(worktreeId),
   });
   const runtimeProvisionCommand =
-    workspace?.config?.runtimeProvisionCommand
+    worktree?.config?.runtimeProvisionCommand
     ?? project?.executionWorkspacePolicy?.workspaceStrategy?.runtimeProvisionCommand
     ?? null;
   const runtimeProvisionStatus = useMemo(
     () =>
       resolveRuntimeProvisionStatus({
         runtimeProvisionCommand,
-        operations: workspaceOperationsQuery.data,
+        operations: worktreeOperationsQuery.data,
       }),
-    [runtimeProvisionCommand, workspaceOperationsQuery.data],
+    [runtimeProvisionCommand, worktreeOperationsQuery.data],
   );
   const controlRuntimeServices = useMutation({
-    mutationFn: (request: WorkspaceRuntimeControlRequest) =>
-      executionWorkspacesApi.controlRuntimeCommands(workspace!.id, request.action, request),
+    mutationFn: (request: WorktreeRuntimeControlRequest) =>
+      executionWorktreesApi.controlRuntimeCommands(worktree!.id, request.action, request),
     onSuccess: (result, request) => {
-      queryClient.setQueryData(queryKeys.executionWorkspaces.detail(result.workspace.id), result.workspace);
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.overview(result.workspace.companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(result.workspace.id) });
+      queryClient.setQueryData(queryKeys.executionWorktrees.detail(result.workspace.id), result.workspace);
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.overview(result.workspace.companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.worktreeOperations(result.workspace.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(result.workspace.projectId) });
       setRuntimeActionErrorMessage(null);
       setRuntimeActionMessage(
         request.action === "run"
-          ? "Workspace job completed."
+          ? "Worktree job completed."
           : request.action === "stop"
-            ? "Workspace service stopped."
+            ? "Worktree service stopped."
             : request.action === "restart"
-              ? "Workspace service restarted."
-              : "Workspace service started.",
+              ? "Worktree service restarted."
+              : "Worktree service started.",
       );
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setRuntimeActionErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
+      setRuntimeActionErrorMessage(error instanceof Error ? error.message : "Failed to control worktree commands.");
     },
     onSettled: (_result, _error, request) => {
       setPendingRuntimeActions((current) => current.filter((pendingRequest) => pendingRequest !== request));
@@ -1015,11 +1015,11 @@ export function ExecutionWorkspaceDetail() {
    * block exactly that. If the tab could not be opened anyway, fall back to
    * navigating this one rather than silently doing nothing.
    */
-  const openWorkspace = useMutation({
+  const openWorktree = useMutation({
     mutationFn: async () => {
       const target = window.open("about:blank", "_blank", "noopener,noreferrer");
       try {
-        return { ticket: await executionWorkspacesApi.requestLoginHandoff(workspace!.id), target };
+        return { ticket: await executionWorktreesApi.requestLoginHandoff(worktree!.id), target };
       } catch (error) {
         target?.close();
         throw error;
@@ -1034,84 +1034,84 @@ export function ExecutionWorkspaceDetail() {
     onError: async (error) => {
       // A structured refusal is rendered as workspace state by the access card,
       // so only an unrecognized transport error needs its own message line.
-      const failure = readWorkspaceHandoffFailure(error);
+      const failure = readWorktreeHandoffFailure(error);
       setHandoffFailure(failure);
       setHandoffErrorMessage(
-        failure ? null : error instanceof Error ? error.message : "Failed to open the workspace.",
+        failure ? null : error instanceof Error ? error.message : "Failed to open the worktree.",
       );
       // The refusal reason often comes from an operation that has since advanced,
       // so refresh the log the access card derives its state from.
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.executionWorkspaces.workspaceOperations(workspace!.id),
+        queryKey: queryKeys.executionWorktrees.worktreeOperations(worktree!.id),
       });
     },
   });
-  const repairWorkspace = useMutation({
-    mutationFn: () => executionWorkspacesApi.repair(workspace!.id),
+  const repairWorktree = useMutation({
+    mutationFn: () => executionWorktreesApi.repair(worktree!.id),
     onSuccess: (result) => {
-      queryClient.setQueryData(queryKeys.executionWorkspaces.detail(result.workspace.id), result.workspace);
+      queryClient.setQueryData(queryKeys.executionWorktrees.detail(result.workspace.id), result.workspace);
       queryClient.invalidateQueries({
-        queryKey: queryKeys.executionWorkspaces.workspaceOperations(result.workspace.id),
+        queryKey: queryKeys.executionWorktrees.worktreeOperations(result.workspace.id),
       });
       setHandoffFailure(null);
       setHandoffErrorMessage(null);
       setRuntimeActionErrorMessage(null);
-      setRuntimeActionMessage("Workspace database repaired.");
+      setRuntimeActionMessage("Worktree database repaired.");
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setRuntimeActionErrorMessage(error instanceof Error ? error.message : "Failed to repair the workspace.");
+      setRuntimeActionErrorMessage(error instanceof Error ? error.message : "Failed to repair the worktree.");
     },
   });
 
-  if (workspaceQuery.isLoading) return <p className="text-sm text-muted-foreground">Loading workspace…</p>;
-  if (workspaceQuery.error) {
+  if (worktreeQuery.isLoading) return <p className="text-sm text-muted-foreground">Loading worktree…</p>;
+  if (worktreeQuery.error) {
     return (
       <p className="text-sm text-destructive">
-        {workspaceQuery.error instanceof Error ? workspaceQuery.error.message : "Failed to load workspace"}
+        {worktreeQuery.error instanceof Error ? worktreeQuery.error.message : "Failed to load worktree"}
       </p>
     );
   }
-  if (!workspace || !form || !initialState) return null;
+  if (!worktree || !form || !initialState) return null;
 
-  const canRunWorkspaceCommands = Boolean(workspace.cwd);
-  const canStartRuntimeServices = Boolean(effectiveRuntimeConfig) && canRunWorkspaceCommands;
-  const runtimeControlSections = buildWorkspaceRuntimeControlSections({
+  const canRunWorktreeCommands = Boolean(worktree.cwd);
+  const canStartRuntimeServices = Boolean(effectiveRuntimeConfig) && canRunWorktreeCommands;
+  const runtimeControlSections = buildWorktreeRuntimeControlSections({
     runtimeConfig: effectiveRuntimeConfig,
-    runtimeServices: workspace.runtimeServices ?? [],
+    runtimeServices: worktree.runtimeServices ?? [],
     canStartServices: canStartRuntimeServices,
-    canRunJobs: canRunWorkspaceCommands,
+    canRunJobs: canRunWorktreeCommands,
   });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
-  const serviceControlEntries = buildWorkspaceServiceControlEntries({
+  const serviceControlEntries = buildWorktreeServiceControlEntries({
     sections: runtimeControlSections,
-    runtimeServices: workspace.runtimeServices ?? [],
+    runtimeServices: worktree.runtimeServices ?? [],
     pendingRequests: pendingRuntimeActions,
   });
-  const workspaceAccess = resolveWorkspaceAccessState({
-    runtimeServices: workspace.runtimeServices ?? [],
-    operations: workspaceOperationsQuery.data,
+  const worktreeAccess = resolveWorktreeAccessState({
+    runtimeServices: worktree.runtimeServices ?? [],
+    operations: worktreeOperationsQuery.data,
     handoffFailure,
   });
 
   const pluginSlotContext = {
-    companyId: workspace.companyId,
-    projectId: workspace.projectId,
-    entityId: workspace.id,
+    companyId: worktree.companyId,
+    projectId: worktree.projectId,
+    entityId: worktree.id,
     entityType: "execution_workspace" as const,
   };
-  const activePluginTab = workspacePluginTabItems.find((item) => item.value === activeTab) ?? null;
+  const activePluginTab = worktreePluginTabItems.find((item) => item.value === activeTab) ?? null;
 
-  if (workspaceId && activeTab === null) {
-    return <LegacyWorkspaceTabRedirect workspaceId={workspaceId} />;
+  if (worktreeId && activeTab === null) {
+    return <LegacyWorktreeTabRedirect workspaceId={worktreeId} />;
   }
 
-  const handleTabChange = (tab: ExecutionWorkspaceTab) => {
-    if (isExecutionWorkspacePluginTab(tab)) {
-      navigate(`/execution-workspaces/${workspace.id}?tab=${encodeURIComponent(tab)}`);
+  const handleTabChange = (tab: ExecutionWorktreeTab) => {
+    if (isExecutionWorktreePluginTab(tab)) {
+      navigate(`/execution-worktrees/${worktree.id}?tab=${encodeURIComponent(tab)}`);
       return;
     }
-    navigate(executionWorkspaceTabPath(workspace.id, tab));
+    navigate(executionWorktreeTabPath(worktree.id, tab));
   };
 
   const saveChanges = () => {
@@ -1123,17 +1123,17 @@ export function ExecutionWorkspaceDetail() {
 
     let patch: Record<string, unknown>;
     try {
-      patch = buildWorkspacePatch(initialState, form);
+      patch = buildWorktreePatch(initialState, form);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to build workspace update.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to build worktree update.");
       return;
     }
 
     if (Object.keys(patch).length === 0) return;
-    updateWorkspace.mutate(patch);
+    updateWorktree.mutate(patch);
   };
 
-  const runRuntimeControlRequests = (requests: WorkspaceRuntimeControlRequest[]) => {
+  const runRuntimeControlRequests = (requests: WorktreeRuntimeControlRequest[]) => {
     if (requests.length === 0) return;
     setPendingRuntimeActions((current) => [...current, ...requests]);
     for (const request of requests) controlRuntimeServices.mutate(request);
@@ -1145,15 +1145,15 @@ export function ExecutionWorkspaceDetail() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-2">
             <div className="text-xs font-medium uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
-              Execution workspace
+              Execution worktree
             </div>
-            <h1 className="truncate text-xl font-semibold sm:text-2xl">{workspace.name}</h1>
+            <h1 className="truncate text-xl font-semibold sm:text-2xl">{worktree.name}</h1>
           </div>
-          <WorkspaceServiceControlBar
+          <WorktreeServiceControlBar
             services={serviceControlEntries}
             onAction={(action, serviceKey) => {
               runRuntimeControlRequests(
-                resolveWorkspaceServiceControlRequests(runtimeControlSections, action, serviceKey),
+                resolveWorktreeServiceControlRequests(runtimeControlSections, action, serviceKey),
               );
             }}
             onViewLogs={() => handleTabChange("runtime_logs")}
@@ -1163,16 +1163,16 @@ export function ExecutionWorkspaceDetail() {
         {runtimeActionErrorMessage ? <p className="text-sm text-destructive">{runtimeActionErrorMessage}</p> : null}
         {!runtimeActionErrorMessage && runtimeActionMessage ? <p className="text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
 
-        <WorkspaceAccessCard
-          access={workspaceAccess}
-          isBusy={openWorkspace.isPending || repairWorkspace.isPending}
-          onOpen={() => openWorkspace.mutate()}
+        <WorktreeAccessCard
+          access={worktreeAccess}
+          isBusy={openWorktree.isPending || repairWorktree.isPending}
+          onOpen={() => openWorktree.mutate()}
           onStart={() => {
             runRuntimeControlRequests(
-              resolveWorkspaceServiceControlRequests(runtimeControlSections, "start", null),
+              resolveWorktreeServiceControlRequests(runtimeControlSections, "start", null),
             );
           }}
-          onRepair={() => repairWorkspace.mutate()}
+          onRepair={() => repairWorktree.mutate()}
           onViewLogs={() => handleTabChange("runtime_logs")}
           errorMessage={handoffErrorMessage}
         />
@@ -1186,30 +1186,30 @@ export function ExecutionWorkspaceDetail() {
           missingBehavior="placeholder"
         />
 
-        <Tabs value={activeTab ?? "issues"} onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}>
+        <Tabs value={activeTab ?? "issues"} onValueChange={(value) => handleTabChange(value as ExecutionWorktreeTab)}>
           <PageTabBar
-            items={workspaceTabItems.map((item) => ({ value: item.value, label: item.label }))}
+            items={worktreeTabItems.map((item) => ({ value: item.value, label: item.label }))}
             align="start"
             value={activeTab ?? "issues"}
-            onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}
+            onValueChange={(value) => handleTabChange(value as ExecutionWorktreeTab)}
           />
         </Tabs>
 
         {activeTab === "services" ? (
-          <WorkspaceRuntimeControls
+          <WorktreeRuntimeControls
             sections={runtimeControlSections}
             isPending={controlRuntimeServices.isPending}
             pendingRequest={pendingRuntimeAction}
             serviceEmptyMessage={
               effectiveRuntimeConfig
-                ? "No services have been started for this execution workspace yet."
-                : "No workspace command config is defined for this execution workspace yet."
+                ? "No services have been started for this execution worktree yet."
+                : "No worktree command config is defined for this execution worktree yet."
             }
-            jobEmptyMessage="No one-shot jobs are configured for this execution workspace yet."
+            jobEmptyMessage="No one-shot jobs are configured for this execution worktree yet."
             disabledHint={
               canStartRuntimeServices
                 ? null
-                : "Execution workspaces need a working directory before local commands can run, and services also need runtime config."
+                : "Execution worktrees need a working directory before local commands can run, and services also need runtime config."
             }
             onAction={(request) => runRuntimeControlRequests([request])}
           />
@@ -1217,9 +1217,9 @@ export function ExecutionWorkspaceDetail() {
           <div className="space-y-4 sm:space-y-6">
             <Card className="rounded-none">
               <CardHeader>
-                <CardTitle>Workspace settings</CardTitle>
+                <CardTitle>Worktree settings</CardTitle>
                 <CardDescription>
-                  Edit the concrete path, repo, branch, provisioning, teardown, and runtime overrides attached to this execution workspace. Saved changes affect future runs; Paperclip may refresh or replace a reused workspace when config changes.
+                  Edit the concrete path, repo, branch, provisioning, teardown, and runtime overrides attached to this execution worktree. Saved changes affect future runs; Paperclip may refresh or replace a reused worktree when config changes.
                 </CardDescription>
                 <CardAction>
                   <Button
@@ -1227,9 +1227,9 @@ export function ExecutionWorkspaceDetail() {
                     size="sm"
                     className="w-full sm:w-auto"
                     onClick={() => setCloseDialogOpen(true)}
-                    disabled={workspace.status === "archived"}
+                    disabled={worktree.status === "archived"}
                   >
-                    {workspace.status === "cleanup_failed" ? "Retry close" : "Close workspace"}
+                    {worktree.status === "cleanup_failed" ? "Retry close" : "Close worktree"}
                   </Button>
                 </CardAction>
               </CardHeader>
@@ -1239,11 +1239,11 @@ export function ExecutionWorkspaceDetail() {
               <div className="space-y-6">
                 <div className="space-y-4">
                   <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">General</div>
-                  <Field label="Workspace name">
+                  <Field label="Worktree name">
                     <Input
                       value={form.name}
                       onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
-                      placeholder="Execution workspace name"
+                      placeholder="Execution worktree name"
                     />
                   </Field>
                 </div>
@@ -1328,7 +1328,7 @@ export function ExecutionWorkspaceDetail() {
                   <>
                     <div className="space-y-4">
                       <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Lifecycle commands</div>
-                      <Field label="Provision command" hint="Runs when Paperclip prepares this execution workspace">
+                      <Field label="Provision command" hint="Runs when Paperclip prepares this execution worktree">
                         <Textarea
                           className="min-h-20 font-mono"
                           value={form.provisionCommand}
@@ -1349,7 +1349,7 @@ export function ExecutionWorkspaceDetail() {
                         />
                       </Field>
 
-                      <Field label="Teardown command" hint="Runs when the execution workspace is archived or cleaned up">
+                      <Field label="Teardown command" hint="Runs when the execution worktree is archived or cleaned up">
                         <Textarea
                           className="min-h-20 font-mono"
                           value={form.teardownCommand}
@@ -1382,17 +1382,17 @@ export function ExecutionWorkspaceDetail() {
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {runtimeConfigSource === "execution_workspace"
-                            ? "This execution workspace currently overrides the project workspace runtime config."
+                            ? "This execution worktree currently overrides the project worktree runtime config."
                             : runtimeConfigSource === "project_workspace"
-                              ? "This execution workspace is inheriting the project workspace runtime config."
-                              : "No runtime config is currently defined on this execution workspace or its project workspace."}
+                              ? "This execution worktree is inheriting the project worktree runtime config."
+                              : "No runtime config is currently defined on this execution worktree or its project worktree."}
                         </p>
                       </div>
                       <Button
                         variant="outline"
                         className="w-full sm:w-auto"
                         size="sm"
-                        disabled={!linkedProjectWorkspace?.runtimeConfig?.workspaceRuntime}
+                        disabled={!linkedProjectWorktree?.runtimeConfig?.workspaceRuntime}
                         onClick={() =>
                           setForm((current) => current ? {
                             ...current,
@@ -1409,10 +1409,10 @@ export function ExecutionWorkspaceDetail() {
                   <details className="rounded-md border border-dashed border-border/70 bg-background px-4 py-3">
                     <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
                     <p className="mt-2 text-sm text-muted-foreground">
-                      Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
+                      Override the inherited worktree command model only when this execution worktree truly needs different service or job behavior.
                     </p>
                     <div className="mt-3">
-                      <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+                      <Field label="Worktree commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
                         <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
                           <input
                             id="inherit-runtime-config"
@@ -1430,7 +1430,7 @@ export function ExecutionWorkspaceDetail() {
                               });
                             }}
                           />
-                          <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
+                          <label htmlFor="inherit-runtime-config">Inherit project worktree runtime config</label>
                         </div>
                         <Textarea
                           className="min-h-64 font-mono sm:min-h-96"
@@ -1448,7 +1448,7 @@ export function ExecutionWorkspaceDetail() {
                       <div>
                         <div className="text-sm font-medium">Service ports</div>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          Set a fixed port for a service or leave it blank to use its configured automatic behavior. Editing an inherited service creates an execution-workspace runtime override.
+                          Set a fixed port for a service or leave it blank to use its configured automatic behavior. Editing an inherited service creates an execution-worktree runtime override.
                         </p>
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -1465,7 +1465,7 @@ export function ExecutionWorkspaceDetail() {
                                   if (!current) return current;
                                   const parsed = current.inheritRuntime
                                     ? { ok: true as const, value: inheritedRuntimeConfig }
-                                    : parseWorkspaceRuntimeJson(current.workspaceRuntime);
+                                    : parseWorktreeRuntimeJson(current.workspaceRuntime);
                                   if (!parsed.ok || !parsed.value) return current;
                                   return {
                                     ...current,
@@ -1488,7 +1488,7 @@ export function ExecutionWorkspaceDetail() {
                         </div>
                       ) : null}
                       <p className="text-sm text-muted-foreground">
-                        Paperclip checks fixed ports again when a service starts and rejects cross-workspace conflicts.
+                        Paperclip checks fixed ports again when a service starts and rejects cross-worktree conflicts.
                       </p>
                     </div>
                   ) : null}
@@ -1496,14 +1496,14 @@ export function ExecutionWorkspaceDetail() {
               </div>
 
               <div className="mt-6 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <Button className="w-full sm:w-auto" disabled={!isDirty || updateWorkspace.isPending} onClick={saveChanges}>
-                  {updateWorkspace.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                <Button className="w-full sm:w-auto" disabled={!isDirty || updateWorktree.isPending} onClick={saveChanges}>
+                  {updateWorktree.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Save changes
                 </Button>
                 <Button
                   variant="outline"
                   className="w-full sm:w-auto"
-                  disabled={!isDirty || updateWorkspace.isPending}
+                  disabled={!isDirty || updateWorktree.isPending}
                   onClick={() => {
                     setForm(initialState);
                     setErrorMessage(null);
@@ -1521,18 +1521,18 @@ export function ExecutionWorkspaceDetail() {
 
             <Card className="rounded-none">
               <CardHeader>
-                <CardTitle>Workspace context</CardTitle>
+                <CardTitle>Worktree context</CardTitle>
                 <CardDescription>Linked objects and relationships</CardDescription>
               </CardHeader>
               <CardContent>
               <DetailRow label="Project">
-                {project ? <Link to={`/projects/${projectRef}`} className="hover:underline">{project.name}</Link> : <MonoValue value={workspace.projectId} />}
+                {project ? <Link to={`/projects/${projectRef}`} className="hover:underline">{project.name}</Link> : <MonoValue value={worktree.projectId} />}
               </DetailRow>
-              <DetailRow label="Project workspace">
-                {project && linkedProjectWorkspace ? (
-                  <WorkspaceLink project={project} workspace={linkedProjectWorkspace} />
-                ) : workspace.projectWorkspaceId ? (
-                  <MonoValue value={workspace.projectWorkspaceId} />
+              <DetailRow label="Project worktree">
+                {project && linkedProjectWorktree ? (
+                  <WorktreeLink project={project} workspace={linkedProjectWorktree} />
+                ) : worktree.projectWorkspaceId ? (
+                  <MonoValue value={worktree.projectWorkspaceId} />
                 ) : (
                   "None"
                 )}
@@ -1542,19 +1542,19 @@ export function ExecutionWorkspaceDetail() {
                   <Link to={issueUrl(sourceIssue)} className="hover:underline">
                     {sourceIssue.identifier ?? sourceIssue.id} · {sourceIssue.title}
                   </Link>
-                ) : workspace.sourceIssueId ? (
-                  <MonoValue value={workspace.sourceIssueId} />
+                ) : worktree.sourceIssueId ? (
+                  <MonoValue value={worktree.sourceIssueId} />
                 ) : (
                   "None"
                 )}
               </DetailRow>
               <DetailRow label="Derived from">
-                {derivedWorkspace ? (
-                  <Link to={executionWorkspaceTabPath(derivedWorkspace.id, "configuration")} className="hover:underline">
-                    {derivedWorkspace.name}
+                {derivedWorktree ? (
+                  <Link to={executionWorktreeTabPath(derivedWorktree.id, "configuration")} className="hover:underline">
+                    {derivedWorktree.name}
                   </Link>
-                ) : workspace.derivedFromExecutionWorkspaceId ? (
-                  <MonoValue value={workspace.derivedFromExecutionWorkspaceId} />
+                ) : worktree.derivedFromExecutionWorkspaceId ? (
+                  <MonoValue value={worktree.derivedFromExecutionWorkspaceId} />
                 ) : (
                   "None"
                 )}
@@ -1565,8 +1565,8 @@ export function ExecutionWorkspaceDetail() {
                   onViewLogs={() => handleTabChange("runtime_logs")}
                 />
               </DetailRow>
-              <DetailRow label="Workspace ID">
-                <MonoValue value={workspace.id} />
+              <DetailRow label="Worktree ID">
+                <MonoValue value={worktree.id} />
               </DetailRow>
               </CardContent>
             </Card>
@@ -1578,39 +1578,39 @@ export function ExecutionWorkspaceDetail() {
               </CardHeader>
               <CardContent>
               <DetailRow label="Working dir">
-                {workspace.cwd ? <MonoValue value={workspace.cwd} copy /> : "None"}
+                {worktree.cwd ? <MonoValue value={worktree.cwd} copy /> : "None"}
               </DetailRow>
               <DetailRow label="Provider ref">
-                {workspace.providerRef ? <MonoValue value={workspace.providerRef} copy /> : "None"}
+                {worktree.providerRef ? <MonoValue value={worktree.providerRef} copy /> : "None"}
               </DetailRow>
               <DetailRow label="Repo URL">
-                {workspace.repoUrl && isSafeExternalUrl(workspace.repoUrl) ? (
+                {worktree.repoUrl && isSafeExternalUrl(worktree.repoUrl) ? (
                   <div className="inline-flex max-w-full items-start gap-2">
-                    <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 break-all hover:underline">
-                      {workspace.repoUrl}
+                    <a href={worktree.repoUrl} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 break-all hover:underline">
+                      {worktree.repoUrl}
                       <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                     </a>
-                    <CopyText text={workspace.repoUrl} className="shrink-0 text-muted-foreground hover:text-foreground" copiedLabel="Copied">
+                    <CopyText text={worktree.repoUrl} className="shrink-0 text-muted-foreground hover:text-foreground" copiedLabel="Copied">
                       <Copy className="h-3.5 w-3.5" />
                     </CopyText>
                   </div>
-                ) : workspace.repoUrl ? (
-                  <MonoValue value={workspace.repoUrl} copy />
+                ) : worktree.repoUrl ? (
+                  <MonoValue value={worktree.repoUrl} copy />
                 ) : (
                   "None"
                 )}
               </DetailRow>
               <DetailRow label="Base ref">
-                {workspace.baseRef ? <MonoValue value={workspace.baseRef} copy /> : "None"}
+                {worktree.baseRef ? <MonoValue value={worktree.baseRef} copy /> : "None"}
               </DetailRow>
               <DetailRow label="Branch">
-                {workspace.branchName ? <MonoValue value={workspace.branchName} copy /> : "None"}
+                {worktree.branchName ? <MonoValue value={worktree.branchName} copy /> : "None"}
               </DetailRow>
-              <DetailRow label="Opened">{formatDateTime(workspace.openedAt)}</DetailRow>
-              <DetailRow label="Last used">{formatDateTime(workspace.lastUsedAt)}</DetailRow>
+              <DetailRow label="Opened">{formatDateTime(worktree.openedAt)}</DetailRow>
+              <DetailRow label="Last used">{formatDateTime(worktree.lastUsedAt)}</DetailRow>
               <DetailRow label="Cleanup">
-                {workspace.cleanupEligibleAt
-                  ? `${formatDateTime(workspace.cleanupEligibleAt)}${workspace.cleanupReason ? ` · ${workspace.cleanupReason}` : ""}`
+                {worktree.cleanupEligibleAt
+                  ? `${formatDateTime(worktree.cleanupEligibleAt)}${worktree.cleanupReason ? ` · ${worktree.cleanupReason}` : ""}`
                   : "Not scheduled"}
               </DetailRow>
               </CardContent>
@@ -1623,21 +1623,21 @@ export function ExecutionWorkspaceDetail() {
               <CardDescription>Recent operations</CardDescription>
             </CardHeader>
             <CardContent>
-            {workspaceOperationsQuery.isLoading ? (
-              <p className="text-sm text-muted-foreground">Loading workspace operations…</p>
-            ) : workspaceOperationsQuery.error ? (
+            {worktreeOperationsQuery.isLoading ? (
+              <p className="text-sm text-muted-foreground">Loading worktree operations…</p>
+            ) : worktreeOperationsQuery.error ? (
               <p className="text-sm text-destructive">
-                {workspaceOperationsQuery.error instanceof Error
-                  ? workspaceOperationsQuery.error.message
-                  : "Failed to load workspace operations."}
+                {worktreeOperationsQuery.error instanceof Error
+                  ? worktreeOperationsQuery.error.message
+                  : "Failed to load worktree operations."}
               </p>
-            ) : workspaceOperationsQuery.data && workspaceOperationsQuery.data.length > 0 ? (
+            ) : worktreeOperationsQuery.data && worktreeOperationsQuery.data.length > 0 ? (
               <div className="space-y-3">
-                {workspaceOperationsQuery.data.map((operation) => (
+                {worktreeOperationsQuery.data.map((operation) => (
                   <div key={operation.id} className="rounded-none border border-border/80 bg-background px-4 py-3">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1">
-                        <div className="text-sm font-medium">{operation.command ?? workspaceOperationPhaseLabel(operation.phase)}</div>
+                        <div className="text-sm font-medium">{operation.command ?? worktreeOperationPhaseLabel(operation.phase)}</div>
                         <div className="text-xs text-muted-foreground">
                           {formatDateTime(operation.startedAt)}
                           {operation.finishedAt ? ` → ${formatDateTime(operation.finishedAt)}` : ""}
@@ -1654,22 +1654,22 @@ export function ExecutionWorkspaceDetail() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No workspace operations have been recorded yet.</p>
+              <p className="text-sm text-muted-foreground">No worktree operations have been recorded yet.</p>
             )}
             </CardContent>
           </Card>
         ) : activeTab === "issues" ? (
           <div className="space-y-6">
             <SummarySlotCard
-              companyId={workspace.companyId}
+              companyId={worktree.companyId}
               scopeKind="execution_workspace"
-              scopeId={workspace.id}
-              title="Workspace summary"
-              description="Summarizer keeps the latest workspace status, next step, and operator-needed items here."
+              scopeId={worktree.id}
+              title="Worktree summary"
+              description="Summarizer keeps the latest worktree status, next step, and operator-needed items here."
             />
-            <ExecutionWorkspaceIssuesList
-              companyId={workspace.companyId}
-              workspace={workspace}
+            <ExecutionWorktreeIssuesList
+              companyId={worktree.companyId}
+              workspace={worktree}
               issues={linkedIssues}
               isLoading={linkedIssuesQuery.isLoading}
               error={linkedIssuesQuery.error as Error | null}
@@ -1682,42 +1682,42 @@ export function ExecutionWorkspaceDetail() {
             context={pluginSlotContext}
             missingBehavior="placeholder"
           />
-        ) : isExecutionWorkspacePluginTab(activeTab) && workspacePluginDetailSlotsLoading ? (
+        ) : isExecutionWorktreePluginTab(activeTab) && worktreePluginDetailSlotsLoading ? (
           <Card>
-            <CardContent className="py-6 text-sm text-muted-foreground">Loading workspace plugin...</CardContent>
+            <CardContent className="py-6 text-sm text-muted-foreground">Loading worktree plugin...</CardContent>
           </Card>
-        ) : isExecutionWorkspacePluginTab(activeTab) && workspacePluginDetailSlotsError ? (
+        ) : isExecutionWorktreePluginTab(activeTab) && worktreePluginDetailSlotsError ? (
           <Card>
-            <CardContent className="py-6 text-sm text-destructive">{workspacePluginDetailSlotsError}</CardContent>
+            <CardContent className="py-6 text-sm text-destructive">{worktreePluginDetailSlotsError}</CardContent>
           </Card>
-        ) : isExecutionWorkspacePluginTab(activeTab) ? (
+        ) : isExecutionWorktreePluginTab(activeTab) ? (
           <MissingPluginTabPlaceholder
-            defaultTabHref={executionWorkspaceTabPath(workspace.id, "issues")}
+            defaultTabHref={executionWorktreeTabPath(worktree.id, "issues")}
             defaultTabLabel="Back to tasks"
           />
         ) : activeTab === "routines" ? (
-          <ExecutionWorkspaceRoutinesList
-            workspace={workspace}
+          <ExecutionWorktreeRoutinesList
+            workspace={worktree}
             project={project}
           />
         ) : (
-          <LegacyWorkspaceTabRedirect workspaceId={workspace.id} />
+          <LegacyWorktreeTabRedirect workspaceId={worktree.id} />
         )}
       </div>
-      <ExecutionWorkspaceCloseDialog
-        workspaceId={workspace.id}
-        workspaceName={workspace.name}
-        currentStatus={workspace.status}
+      <ExecutionWorktreeCloseDialog
+        workspaceId={worktree.id}
+        workspaceName={worktree.name}
+        currentStatus={worktree.status}
         open={closeDialogOpen}
         onOpenChange={setCloseDialogOpen}
-        onClosed={(nextWorkspace) => {
-          queryClient.setQueryData(queryKeys.executionWorkspaces.detail(nextWorkspace.id), nextWorkspace);
-          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.overview(nextWorkspace.companyId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.closeReadiness(nextWorkspace.id) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(nextWorkspace.id) });
+        onClosed={(nextWorktree) => {
+          queryClient.setQueryData(queryKeys.executionWorktrees.detail(nextWorktree.id), nextWorktree);
+          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.overview(nextWorktree.companyId) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.closeReadiness(nextWorktree.id) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.worktreeOperations(nextWorktree.id) });
           if (project) {
             queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(project.id) });
-            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.list(project.companyId, { projectId: project.id }) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.list(project.companyId, { projectId: project.id }) });
           }
           if (sourceIssue) {
             queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(sourceIssue.id) });

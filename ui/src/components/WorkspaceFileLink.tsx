@@ -2,47 +2,47 @@ import type { MouseEvent, ReactNode } from "react";
 import { FileCode2, FolderOpen } from "lucide-react";
 import { useLocation } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import type { ParsedWorkspaceFileRef } from "@/lib/workspace-file-parser";
-import { formatWorkspaceFileRefDisplay } from "@/lib/workspace-file-parser";
+import type { ParsedWorktreeFileRef } from "@/lib/workspace-file-parser";
+import { formatWorktreeFileRefDisplay } from "@/lib/workspace-file-parser";
 import {
   useFileViewer,
   writeFolderViewerStateToSearch,
   writeFileViewerStateToSearch,
 } from "@/context/FileViewerContext";
 
-export interface WorkspaceFileLinkProps {
-  workspaceFileRef: ParsedWorkspaceFileRef;
+export interface WorktreeFileLinkProps {
+  workspaceFileRef: ParsedWorktreeFileRef;
   /** Override the rendered label. Defaults to `path:line:col`. */
   label?: ReactNode;
   className?: string;
   /** Optional override if the consumer wants to customize activation. */
-  onOpen?: (ref: ParsedWorkspaceFileRef) => void;
+  onOpen?: (ref: ParsedWorktreeFileRef) => void;
   showIcon?: boolean;
   title?: string;
 }
 
-export function WorkspaceFileLink({
+export function WorktreeFileLink({
   workspaceFileRef,
   label,
   className,
   onOpen,
   showIcon = true,
   title,
-}: WorkspaceFileLinkProps) {
+}: WorktreeFileLinkProps) {
   const viewer = useFileViewer();
   const location = useLocation();
-  const display = typeof label !== "undefined" ? label : formatWorkspaceFileRefDisplay(workspaceFileRef);
+  const display = typeof label !== "undefined" ? label : formatWorktreeFileRefDisplay(workspaceFileRef);
   const canOpen = !!(onOpen || viewer);
   const isDirectory = workspaceFileRef.resourceKind === "directory" || workspaceFileRef.path.endsWith("/");
   const lineSuffix = workspaceFileRef.line
     ? ` line ${workspaceFileRef.line}${workspaceFileRef.column ? ` column ${workspaceFileRef.column}` : ""}`
     : "";
   const ariaLabel = canOpen
-    ? `Open ${workspaceFileRef.path}${lineSuffix} in the ${isDirectory ? "workspace browser" : "file viewer"}`
-    : `Workspace ${isDirectory ? "folder" : "file"} ${workspaceFileRef.path}${lineSuffix}`;
+    ? `Open ${workspaceFileRef.path}${lineSuffix} in the ${isDirectory ? "worktree browser" : "file viewer"}`
+    : `Worktree ${isDirectory ? "folder" : "file"} ${workspaceFileRef.path}${lineSuffix}`;
   const tooltip = title ?? (canOpen
-    ? `Open ${workspaceFileRef.path}${lineSuffix} in the ${isDirectory ? "workspace browser" : "file viewer"}`
-    : `Workspace ${isDirectory ? "folder" : "file"} ${workspaceFileRef.path}${lineSuffix}`);
+    ? `Open ${workspaceFileRef.path}${lineSuffix} in the ${isDirectory ? "worktree browser" : "file viewer"}`
+    : `Worktree ${isDirectory ? "folder" : "file"} ${workspaceFileRef.path}${lineSuffix}`);
 
   const deepLinkSearch = isDirectory
     ? writeFolderViewerStateToSearch(location.search, {
@@ -80,8 +80,8 @@ export function WorkspaceFileLink({
     <a
       href={href}
       role={canOpen ? "button" : undefined}
-      data-workspace-file-link="true"
-      data-workspace-file-path={workspaceFileRef.path}
+      data-worktree-file-link="true"
+      data-worktree-file-path={workspaceFileRef.path}
       aria-label={ariaLabel}
       title={tooltip}
       className={cn(

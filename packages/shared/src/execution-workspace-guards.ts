@@ -1,19 +1,19 @@
-import type { ExecutionWorkspace } from "./types/workspace-runtime.js";
+import type { ExecutionWorktree } from "./types/workspace-runtime.js";
 
-type ExecutionWorkspaceGuardTarget = Pick<ExecutionWorkspace, "closedAt" | "mode" | "name" | "status">;
+type ExecutionWorktreeGuardTarget = Pick<ExecutionWorktree, "closedAt" | "mode" | "name" | "status">;
 
-const CLOSED_EXECUTION_WORKSPACE_STATUSES = new Set<ExecutionWorkspace["status"]>(["archived", "cleanup_failed"]);
+const CLOSED_EXECUTION_WORKSPACE_STATUSES = new Set<ExecutionWorktree["status"]>(["archived", "cleanup_failed"]);
 
-export function isClosedIsolatedExecutionWorkspace(
-  workspace: Pick<ExecutionWorkspaceGuardTarget, "closedAt" | "mode" | "status"> | null | undefined,
+export function isClosedIsolatedExecutionWorktree(
+  worktree: Pick<ExecutionWorktreeGuardTarget, "closedAt" | "mode" | "status"> | null | undefined,
 ): boolean {
-  if (!workspace) return false;
-  if (workspace.mode !== "isolated_workspace") return false;
-  return workspace.closedAt != null || CLOSED_EXECUTION_WORKSPACE_STATUSES.has(workspace.status);
+  if (!worktree) return false;
+  if (worktree.mode !== "isolated_workspace") return false;
+  return worktree.closedAt != null || CLOSED_EXECUTION_WORKSPACE_STATUSES.has(worktree.status);
 }
 
-export function getClosedIsolatedExecutionWorkspaceMessage(
-  workspace: Pick<ExecutionWorkspaceGuardTarget, "name">,
+export function getClosedIsolatedExecutionWorktreeMessage(
+  worktree: Pick<ExecutionWorktreeGuardTarget, "name">,
 ): string {
-  return `This issue is linked to the closed workspace "${workspace.name}". Move it to an open workspace before adding comments or resuming work.`;
+  return `This issue is linked to the closed worktree "${worktree.name}". Move it to an open worktree before adding comments or resuming work.`;
 }

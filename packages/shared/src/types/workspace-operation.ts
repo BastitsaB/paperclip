@@ -1,4 +1,4 @@
-export type WorkspaceOperationPhase =
+export type WorktreeOperationPhase =
   | "worktree_prepare"
   | "workspace_config_freshness"
   | "workspace_provision"
@@ -9,18 +9,18 @@ export type WorkspaceOperationPhase =
   | "worktree_cleanup"
   | "workspace_finalize";
 
-export type WorkspaceOperationStatus = "running" | "succeeded" | "failed" | "skipped";
+export type WorktreeOperationStatus = "running" | "succeeded" | "failed" | "skipped";
 
-export interface WorkspaceOperation {
+export interface WorktreeOperation {
   id: string;
   companyId: string;
   executionWorkspaceId: string | null;
   heartbeatRunId: string | null;
   issueId: string | null;
-  phase: WorkspaceOperationPhase;
+  phase: WorktreeOperationPhase;
   command: string | null;
   cwd: string | null;
-  status: WorkspaceOperationStatus;
+  status: WorktreeOperationStatus;
   exitCode: number | null;
   logStore: string | null;
   logRef: string | null;

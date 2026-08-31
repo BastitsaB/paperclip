@@ -4,7 +4,7 @@ import {
   WORKSPACE_OVERVIEW_MAX_LIMIT,
 } from "../constants.js";
 
-export const executionWorkspaceStatusSchema = z.enum([
+export const executionWorktreeStatusSchema = z.enum([
   "active",
   "idle",
   "in_review",
@@ -12,14 +12,14 @@ export const executionWorkspaceStatusSchema = z.enum([
   "cleanup_failed",
 ]);
 
-export const executionWorkspaceDeliveryStateSchema = z.enum([
+export const executionWorktreeDeliveryStateSchema = z.enum([
   "merged_via_pr",
   "merged_by_ancestry",
   "unmerged",
   "unknown",
 ]);
 
-const workspaceOverviewStatusFilterSchema = z.preprocess((value) => {
+const worktreeOverviewStatusFilterSchema = z.preprocess((value) => {
   if (value === undefined || value === null) return undefined;
   const rawValues = Array.isArray(value) ? value : [value];
   const statuses = rawValues.flatMap((entry) => {
@@ -27,16 +27,16 @@ const workspaceOverviewStatusFilterSchema = z.preprocess((value) => {
     return entry.split(",").map((part) => part.trim()).filter(Boolean);
   });
   return statuses.length > 0 ? statuses : undefined;
-}, z.array(executionWorkspaceStatusSchema).optional());
+}, z.array(executionWorktreeStatusSchema).optional());
 
-export const workspaceOverviewQuerySchema = z.object({
+export const worktreeOverviewQuerySchema = z.object({
   projectId: z.string().guid().optional(),
-  status: workspaceOverviewStatusFilterSchema,
+  status: worktreeOverviewStatusFilterSchema,
   limit: z.coerce.number().int().min(1).max(WORKSPACE_OVERVIEW_MAX_LIMIT).optional().default(WORKSPACE_OVERVIEW_DEFAULT_LIMIT),
   offset: z.coerce.number().int().min(0).optional().default(0),
 }).strict();
 
-export const executionWorkspaceConfigSchema = z.object({
+export const executionWorktreeConfigSchema = z.object({
   environmentId: z.string().guid().optional().nullable(),
   provisionCommand: z.string().optional().nullable(),
   runtimeProvisionCommand: z.string().optional().nullable(),
@@ -47,19 +47,19 @@ export const executionWorkspaceConfigSchema = z.object({
   serviceStates: z.record(z.string(), z.enum(["running", "stopped", "manual"])).optional().nullable(),
 }).strict();
 
-export const workspaceRuntimeControlTargetSchema = z.object({
+export const worktreeRuntimeControlTargetSchema = z.object({
   workspaceCommandId: z.string().min(1).optional().nullable(),
   runtimeServiceId: z.string().guid().optional().nullable(),
   serviceIndex: z.number().int().nonnegative().optional().nullable(),
 }).strict();
 
-export const executionWorkspaceCloseReadinessStateSchema = z.enum([
+export const executionWorktreeCloseReadinessStateSchema = z.enum([
   "ready",
   "ready_with_warnings",
   "blocked",
 ]);
 
-export const executionWorkspaceCloseActionKindSchema = z.enum([
+export const executionWorktreeCloseActionKindSchema = z.enum([
   "archive_record",
   "stop_runtime_services",
   "cleanup_command",
@@ -69,14 +69,14 @@ export const executionWorkspaceCloseActionKindSchema = z.enum([
   "remove_local_directory",
 ]);
 
-export const executionWorkspaceCloseActionSchema = z.object({
-  kind: executionWorkspaceCloseActionKindSchema,
+export const executionWorktreeCloseActionSchema = z.object({
+  kind: executionWorktreeCloseActionKindSchema,
   label: z.string(),
   description: z.string(),
   command: z.string().nullable(),
 }).strict();
 
-export const executionWorkspaceCloseLinkedIssueSchema = z.object({
+export const executionWorktreeCloseLinkedIssueSchema = z.object({
   id: z.string().guid(),
   identifier: z.string().nullable(),
   title: z.string(),
@@ -84,7 +84,7 @@ export const executionWorkspaceCloseLinkedIssueSchema = z.object({
   isTerminal: z.boolean(),
 }).strict();
 
-export const executionWorkspaceCloseGitReadinessSchema = z.object({
+export const executionWorktreeCloseGitReadinessSchema = z.object({
   repoRoot: z.string().nullable(),
   workspacePath: z.string().nullable(),
   branchName: z.string().nullable(),
@@ -99,7 +99,7 @@ export const executionWorkspaceCloseGitReadinessSchema = z.object({
   createdByRuntime: z.boolean(),
 }).strict();
 
-export const workspaceRuntimeServiceSchema = z.object({
+export const worktreeRuntimeServiceSchema = z.object({
   id: z.string(),
   companyId: z.string().guid(),
   projectId: z.string().guid().nullable(),
@@ -129,38 +129,38 @@ export const workspaceRuntimeServiceSchema = z.object({
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 }).strict();
-export const executionWorkspaceCloseReadinessSchema = z.object({
+export const executionWorktreeCloseReadinessSchema = z.object({
   workspaceId: z.string().guid(),
-  deliveryState: executionWorkspaceDeliveryStateSchema,
-  state: executionWorkspaceCloseReadinessStateSchema,
+  deliveryState: executionWorktreeDeliveryStateSchema,
+  state: executionWorktreeCloseReadinessStateSchema,
   blockingReasons: z.array(z.string()),
   warnings: z.array(z.string()),
-  linkedIssues: z.array(executionWorkspaceCloseLinkedIssueSchema),
-  plannedActions: z.array(executionWorkspaceCloseActionSchema),
+  linkedIssues: z.array(executionWorktreeCloseLinkedIssueSchema),
+  plannedActions: z.array(executionWorktreeCloseActionSchema),
   isDestructiveCloseAllowed: z.boolean(),
   isSharedWorkspace: z.boolean(),
   isProjectPrimaryWorkspace: z.boolean(),
-  git: executionWorkspaceCloseGitReadinessSchema.nullable(),
-  runtimeServices: z.array(workspaceRuntimeServiceSchema),
+  git: executionWorktreeCloseGitReadinessSchema.nullable(),
+  runtimeServices: z.array(worktreeRuntimeServiceSchema),
 }).strict();
 
-export const updateExecutionWorkspaceSchema = z.object({
+export const updateExecutionWorktreeSchema = z.object({
   name: z.string().min(1).optional(),
   cwd: z.string().optional().nullable(),
   repoUrl: z.string().optional().nullable(),
   baseRef: z.string().optional().nullable(),
   branchName: z.string().optional().nullable(),
   providerRef: z.string().optional().nullable(),
-  status: executionWorkspaceStatusSchema.optional(),
+  status: executionWorktreeStatusSchema.optional(),
   cleanupEligibleAt: z.string().datetime().optional().nullable(),
   cleanupReason: z.string().optional().nullable(),
-  config: executionWorkspaceConfigSchema.optional().nullable(),
+  config: executionWorktreeConfigSchema.optional().nullable(),
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
 }).strict();
 
 const branchReconcileReasonSchema = z.string().trim().min(1);
 
-export const reconcileExecutionWorkspaceBranchSchema = z.discriminatedUnion("mode", [
+export const reconcileExecutionWorktreeBranchSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("forward"),
     reason: branchReconcileReasonSchema.optional().nullable(),
@@ -175,6 +175,6 @@ export const reconcileExecutionWorkspaceBranchSchema = z.discriminatedUnion("mod
   }).strict(),
 ]);
 
-export type UpdateExecutionWorkspace = z.infer<typeof updateExecutionWorkspaceSchema>;
-export type ReconcileExecutionWorkspaceBranch = z.infer<typeof reconcileExecutionWorkspaceBranchSchema>;
-export type WorkspaceOverviewQuery = z.infer<typeof workspaceOverviewQuerySchema>;
+export type UpdateExecutionWorktree = z.infer<typeof updateExecutionWorktreeSchema>;
+export type ReconcileExecutionWorktreeBranch = z.infer<typeof reconcileExecutionWorktreeBranchSchema>;
+export type WorktreeOverviewQuery = z.infer<typeof worktreeOverviewQuerySchema>;

@@ -4,11 +4,11 @@ import type { ComponentProps, ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ExecutionWorkspace, Issue } from "@paperclipai/shared";
+import type { ExecutionWorktree, Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectWorkspaceSummary } from "../lib/project-workspaces-tab";
+import type { ProjectWorktreeSummary } from "../lib/project-workspaces-tab";
 import { queryKeys } from "../lib/queryKeys";
-import { ProjectWorkspaceSummaryCard } from "./ProjectWorkspaceSummaryCard";
+import { ProjectWorktreeSummaryCard } from "./ProjectWorkspaceSummaryCard";
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
@@ -94,7 +94,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
   } as Issue;
 }
 
-function createSummary(overrides: Partial<ProjectWorkspaceSummary> = {}): ProjectWorkspaceSummary {
+function createSummary(overrides: Partial<ProjectWorktreeSummary> = {}): ProjectWorktreeSummary {
   const issues = overrides.issues ?? [
     createIssue({ id: "issue-1", identifier: "PAP-1364" }),
     createIssue({ id: "issue-2", identifier: "PAP-1367" }),
@@ -123,7 +123,7 @@ function createSummary(overrides: Partial<ProjectWorkspaceSummary> = {}): Projec
   };
 }
 
-describe("ProjectWorkspaceSummaryCard", () => {
+describe("ProjectWorktreeSummaryCard", () => {
   let container: HTMLDivElement;
   let writeClipboard: ReturnType<typeof vi.fn>;
 
@@ -153,7 +153,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
     const root = createRoot(container);
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary()}
           runtimeActionKey={null}
@@ -186,7 +186,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <ProjectWorkspaceSummaryCard
+          <ProjectWorktreeSummaryCard
             projectRef="paperclip-app"
             summary={createSummary()}
             runtimeActionKey={null}
@@ -221,7 +221,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
     const root = createRoot(container);
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary()}
           runtimeActionKey={null}
@@ -248,7 +248,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
     const root = createRoot(container);
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary()}
           runtimeActionKey={null}
@@ -259,13 +259,13 @@ describe("ProjectWorkspaceSummaryCard", () => {
       ));
     });
 
-    expect(container.textContent).toContain("Execution workspace");
+    expect(container.textContent).toContain("Execution worktree");
     expect(container.textContent).toContain("Branch");
     expect(container.textContent).toContain("Path");
     expect(container.textContent).toContain("Service");
     expect(container.textContent).toContain("Linked tasks");
     expect(container.textContent).toContain("Start services");
-    expect(container.textContent).toContain("Close workspace");
+    expect(container.textContent).toContain("Close worktree");
     expect(container.textContent).toContain("+1 more");
 
     const actions = container.querySelector('[data-testid="workspace-summary-actions"]');
@@ -279,14 +279,14 @@ describe("ProjectWorkspaceSummaryCard", () => {
     });
   });
 
-  it("uses project workspace routes and omits close controls for project workspaces", () => {
+  it("uses project worktree routes and omits close controls for project worktrees", () => {
     const runtimeSpy = vi.fn();
     const closeSpy = vi.fn();
     const root = createRoot(container);
 
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary({
             key: "project:workspace-2",
@@ -306,7 +306,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     const titleLink = container.querySelector("a[href='/projects/paperclip-app/workspaces/workspace-1']");
     expect(titleLink).not.toBeNull();
-    expect(container.textContent).not.toContain("Close workspace");
+    expect(container.textContent).not.toContain("Close worktree");
     expect(container.textContent).not.toContain("Start services");
 
     act(() => {
@@ -319,10 +319,10 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary({
-            executionWorkspaceStatus: "cleanup_failed" as ExecutionWorkspace["status"],
+            executionWorkspaceStatus: "cleanup_failed" as ExecutionWorktree["status"],
           })}
           runtimeActionKey={null}
           runtimeActionPending={false}
@@ -348,7 +348,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     await act(async () => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={summary}
           runtimeActionKey={null}
@@ -401,7 +401,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     act(() => {
       root.render(withQueryClient(
-        <ProjectWorkspaceSummaryCard
+        <ProjectWorktreeSummaryCard
           projectRef="paperclip-app"
           summary={createSummary({
             primaryServiceUrl: "http://127.0.0.1:62475",

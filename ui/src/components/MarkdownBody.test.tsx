@@ -15,10 +15,10 @@ import {
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
 import { queryKeys } from "../lib/queryKeys";
-import type { WorkspaceFileAvailabilityTarget } from "../lib/workspace-file-availability";
+import type { WorktreeFileAvailabilityTarget } from "../lib/workspace-file-availability";
 
 /** Stands in for a server-confirmed openable reference in the issue's workspace. */
-const OPENABLE_AUTO_TARGET: WorkspaceFileAvailabilityTarget = {
+const OPENABLE_AUTO_TARGET: WorktreeFileAvailabilityTarget = {
   workspace: "auto",
   projectId: null,
   workspaceId: null,
@@ -322,7 +322,7 @@ describe("MarkdownBody", () => {
     expect(html).toContain("paperclip-markdown-issue-ref");
   });
 
-  it("renders linked inline-code workspace paths as file viewer links before issue links", () => {
+  it("renders linked inline-code worktree paths as file viewer links before issue links", () => {
     const html = renderMarkdown(
       "- **MP4**: [`videos/90-days-paperclip/out/90-days-paperclip-1x1.mp4`](/PAP/issues/PAP-10306 \"Publish handoff\")",
       [{ identifier: "PAP-10306", status: "in_review", title: "Publish handoff" }],
@@ -337,7 +337,7 @@ describe("MarkdownBody", () => {
     expect(html).not.toContain('href="/issues/PAP-10306"');
   });
 
-  it("renders auto-detected workspace paths as plain code without an availability resolver", () => {
+  it("renders auto-detected worktree paths as plain code without an availability resolver", () => {
     const html = renderMarkdown("Check `ui/src/pages/IssueDetail.tsx:42` please.");
 
     expect(html).not.toContain("data-workspace-file-link");
@@ -369,7 +369,7 @@ describe("MarkdownBody", () => {
     expect(html).toContain('href="/issues/PAP-10306"');
   });
 
-  it("promotes an openable auto-detected path to a workspace file chip", () => {
+  it("promotes an openable auto-detected path to a worktree file chip", () => {
     const html = renderMarkdown(
       "Check `ui/src/pages/IssueDetail.tsx:42` please.",
       [],

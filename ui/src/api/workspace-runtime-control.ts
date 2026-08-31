@@ -1,8 +1,8 @@
-import type { WorkspaceRuntimeControlTarget } from "@paperclipai/shared";
+import type { WorktreeRuntimeControlTarget } from "@paperclipai/shared";
 
-export function sanitizeWorkspaceRuntimeControlTarget(
-  target: WorkspaceRuntimeControlTarget = {},
-): WorkspaceRuntimeControlTarget {
+export function sanitizeWorktreeRuntimeControlTarget(
+  target: WorktreeRuntimeControlTarget = {},
+): WorktreeRuntimeControlTarget {
   return {
     workspaceCommandId: target.workspaceCommandId ?? null,
     runtimeServiceId: target.runtimeServiceId ?? null,

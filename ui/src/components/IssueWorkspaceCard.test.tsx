@@ -3,9 +3,9 @@
 import type { ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import type { ExecutionWorkspace, Issue } from "@paperclipai/shared";
+import type { ExecutionWorktree, Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IssueWorkspaceCard } from "./IssueWorkspaceCard";
+import { IssueWorktreeCard } from "./IssueWorkspaceCard";
 
 function act(callback: () => void | Promise<void>) {
   let result: void | Promise<void> | undefined;
@@ -38,7 +38,7 @@ vi.mock("@/lib/router", () => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-function createExecutionWorkspace(overrides: Partial<ExecutionWorkspace> = {}): ExecutionWorkspace {
+function createExecutionWorktree(overrides: Partial<ExecutionWorktree> = {}): ExecutionWorktree {
   return {
     id: "workspace-1",
     companyId: "company-1",
@@ -125,7 +125,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
   };
 }
 
-describe("IssueWorkspaceCard", () => {
+describe("IssueWorktreeCard", () => {
   let container: HTMLDivElement;
   let originalResizeObserver: typeof ResizeObserver | undefined;
 
@@ -146,10 +146,10 @@ describe("IssueWorkspaceCard", () => {
     container.remove();
   });
 
-  it("clears the legacy issue environment override when reusing a workspace", () => {
+  it("clears the legacy issue environment override when reusing a worktree", () => {
     const root = createRoot(container);
     const onUpdate = vi.fn();
-    const reusableWorkspace = createExecutionWorkspace();
+    const reusableWorktree = createExecutionWorktree();
 
     useQueryMock.mockImplementation((options: { queryKey: unknown[] }) => {
       if (options.queryKey[0] === "instance") {
@@ -161,14 +161,14 @@ describe("IssueWorkspaceCard", () => {
         };
       }
       if (options.queryKey[0] === "execution-workspaces") {
-        return { data: [reusableWorkspace] };
+        return { data: [reusableWorktree] };
       }
       return { data: undefined };
     });
 
     act(() => {
       root.render(
-        <IssueWorkspaceCard
+        <IssueWorktreeCard
           issue={createIssue()}
           project={{
             id: "project-1",
@@ -223,14 +223,14 @@ describe("IssueWorkspaceCard", () => {
         return { data: { enableEnvironments: false, enableIsolatedWorkspaces: true } };
       }
       if (options.queryKey[0] === "execution-workspaces") {
-        return { data: [createExecutionWorkspace()] };
+        return { data: [createExecutionWorktree()] };
       }
       return { data: undefined };
     });
 
     act(() => {
       root.render(
-        <IssueWorkspaceCard
+        <IssueWorktreeCard
           issue={createIssue()}
           project={{
             id: "project-1",
