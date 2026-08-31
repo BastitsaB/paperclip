@@ -240,7 +240,7 @@ Routine execution issues add a routine-scoped env overlay after project env and 
 - `work_mode` text not null default `standard`; supported values:
   - `standard`: normal autonomous execution. Agents may investigate, edit files, create artifacts, and complete the task.
   - `ask`: answer-only execution. Agents may use tools for investigation or temporary scratch work, but the deliverable is an issue-thread answer; they must not write implementation code or produce an implementation plan.
-  - `planning`: plan-only execution. Agents create or revise the plan without implementation work; accepted-plan continuations remain planning-specific and create child issues from the approved plan.
+  - `planning`: pre-acceptance plan-only execution. Agents create or revise the plan without implementation work. Accepting a plan atomically changes the issue to `standard` and starts a fresh same-issue execution continuation for the exact accepted revision; child issues are optional and topology is chosen by the plan-conversion guidance.
 - `billing_code` text null
 - `assignee_adapter_overrides` jsonb null
 - `execution_policy` jsonb null
@@ -736,6 +736,43 @@ decisions, and every other downstream effect must re-run its own authorization a
 approval checks. Mislabeling a governed action as an open interaction grants no
 downstream capability.
 
+### 9.8.2 Durable question-response delivery
+
+Resolving `ask_user_questions` persists the normalized answer and a content-free
+delivery receipt in the same transaction. The interaction result is the sole
+durable copy of answer content; the receipt stores the source run, deterministic
+`question-response:<interaction-id>` correlation id, canonical payload digest,
+attempt state, selected delivery mode, target run/turn, and acknowledgement time.
+
+Delivery is causal rather than an unconditional continuation wake:
+
+- A running issue turn whose run differs from the interaction's `sourceRunId`
+  receives a provider-neutral, readable `turn.steer` input. Delivery completes
+  only after the harness acknowledges that turn and no additional run is queued.
+- A queued successor absorbs the interaction response through the existing wake
+  coalescing path, so the response appears in that run's structured
+  `interactionResponses` without creating another run. Legacy adapters that do
+  not consume that runner envelope receive a readable, invocation-time-only
+  projection of the same authoritative response at the end of their wake prompt.
+  That projection is newer than coalesced comments, is not written back into the
+  heartbeat run context, and does not create another durable copy of the answers.
+- The source run that created the durable question never receives its own answer
+  as steering. While that run is still finalizing, the existing deferred
+  continuation behavior remains the fallback.
+- Missing steering support, a stale/terminal target turn, or no eligible successor
+  selects exactly one idempotent continuation wake. Native runtime requests that
+  are still attached to their provider turn continue to use `request.resolve` and
+  do not enter this delivery path.
+
+Claims serialize on the receipt. Browser retries, reconnects, concurrent workers,
+and outbox recovery therefore cannot produce duplicate steering or duplicate
+wakes. Acknowledged delivery writes an activity fact containing ids, mode, adapter,
+and payload digest but no answers. The issue timeline reconstructs the readable
+“Answered questions” input by joining that fact to the authoritative interaction,
+placing it at the successor run start for coalesced delivery or at the provider
+acknowledgement time for live steering. The original resolved question card remains
+at the point where it was asked.
+
 ## 9.9 Task Watchdog Authority Contract
 
 A task watchdog is a scoped execution capacity for a configured watchdog agent on one watched issue subtree. It is not a separate principal, does not inherit board auth, and does not expand the selected agent's company boundary. The server must enforce the watchdog contract from persisted watchdog configuration and run context; custom instructions and prompt text can narrow the mandate but cannot expand it.
@@ -802,7 +839,7 @@ named-addressee, company-cap, company-boundary, run-attribution, low-trust,
 task-bridge, target-staleness, and exact-once checks.
 
 Resolving an interaction does not authorize its downstream effect. In particular,
-an accepted plan still passes normal decomposition/idempotency checks, and a
+an accepted plan still passes normal execution-topology, delegation, and idempotency checks, and a
 governed action still requires its own typed reviewer, permission, or formal
 approval. A watchdog may not use an open coordination response to bypass any item
 in the disallowed-mutations list above.

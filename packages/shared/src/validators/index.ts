@@ -11,7 +11,6 @@ export {
 
 export {
   nativeFinalizationResultSchema,
-  nativeFinalizationResultV1Schema,
   nativeReportedWorkDispositionSchema,
   type NativeFinalizationResultInput,
 } from "./native-finalization.js";

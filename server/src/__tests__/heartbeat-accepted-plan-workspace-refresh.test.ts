@@ -418,6 +418,7 @@ describeEmbeddedPostgres("accepted plan workspace refresh", () => {
     const adapterInput = adapterExecute.mock.calls[0]?.[0] as {
       runtime: { sessionId: string | null; sessionParams: Record<string, unknown> | null };
       context: Record<string, unknown>;
+      config: { paperclipRuntimeSkills?: Array<{ key: string }> };
     };
     expect(adapterInput.runtime.sessionId).toBeNull();
     expect(adapterInput.runtime.sessionParams).toBeNull();
@@ -426,6 +427,9 @@ describeEmbeddedPostgres("accepted plan workspace refresh", () => {
       strategy: "git_worktree",
     }));
     expect((adapterInput.context.paperclipWorkspace as { cwd: string }).cwd).not.toBe(repoRoot);
+    expect(adapterInput.config.paperclipRuntimeSkills?.map((skill) => skill.key)).toContain(
+      "paperclipai/paperclip/paperclip-converting-plans-to-tasks",
+    );
 
     const refreshedIssue = await db
       .select({
@@ -1132,6 +1136,11 @@ describeEmbeddedPostgres("accepted plan workspace refresh", () => {
     };
     expect(adapterInput.runtime.sessionId).toBe("accepted-plan-retry-session");
     expect(adapterInput.context.acceptedPlanWakeRouting).toBeUndefined();
-    expect(adapterInput.context.paperclipTaskMarkdown).toContain("Create child issues from the approved plan only");
+    expect(adapterInput.context.paperclipTaskMarkdown).toContain(
+      "Implement the accepted plan on this issue when the work is small and cohesive",
+    );
+    expect(adapterInput.context.paperclipTaskMarkdown).not.toContain(
+      "exactly one standard implementation child",
+    );
   }, 20_000);
 });

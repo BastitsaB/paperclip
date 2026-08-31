@@ -19,7 +19,7 @@ export type NativeRuntimeResolution =
       reason: "eligible_opt_in";
       profile: {
         mode: "native";
-        backend: "codex_app_server" | "opencode_server" | "acpx_runtime";
+        backend: "codex_app_server" | "opencode_server" | "claude_managed_agents_api" | "aws_agentcore_harness_api" | "acpx_runtime";
         protocolVersion: 1;
       };
       authorityDecision: NativeStatusDecision;
@@ -76,13 +76,43 @@ export function resolveNativeRuntimeMode(input: {
     );
   }
   const runnerProvider = record(input.adapterConfig).provider ?? "codex";
-  if (!["codex", "opencode", "acpx"].includes(String(runnerProvider))) {
-    throw ineligible("paperclip_runner provider must be codex, opencode, or acpx");
+  if (!["codex", "opencode", "claude_managed", "aws_agentcore", "acpx"].includes(String(runnerProvider))) {
+    throw ineligible("paperclip_runner provider must be codex, opencode, claude_managed, aws_agentcore, or acpx");
   }
   if (runnerProvider === "opencode") {
     const model = record(input.adapterConfig).model;
     if (typeof model !== "string" || !model.includes("/") || model.trim().endsWith("/")) {
       throw ineligible("paperclip_runner OpenCode provider requires model in provider/model form");
+    }
+  }
+  if (runnerProvider === "claude_managed") {
+    const config = record(input.adapterConfig);
+    for (const key of ["managedProfileId", "anthropicAgentId", "agentVersion", "anthropicEnvironmentId", "model"]) {
+      if (typeof config[key] !== "string" || String(config[key]).trim().length === 0) {
+        throw ineligible(`paperclip_runner Claude Agent provider requires ${key}`);
+      }
+    }
+    if (config.managedAgentsRetentionAcknowledged !== true) {
+      throw ineligible("paperclip_runner Claude Agent provider requires retention acknowledgement");
+    }
+    const cap = Number(config.maxSessionListCostUsd);
+    if (!Number.isFinite(cap) || cap <= 0) {
+      throw ineligible("paperclip_runner Claude Agent provider requires a positive spend ceiling");
+    }
+  }
+  if (runnerProvider === "aws_agentcore") {
+    const config = record(input.adapterConfig);
+    for (const key of ["agentCoreProfileId", "model"]) {
+      if (typeof config[key] !== "string" || String(config[key]).trim().length === 0) {
+        throw ineligible(`paperclip_runner AWS AgentCore provider requires ${key}`);
+      }
+    }
+    if (config.agentCoreRetentionAcknowledged !== true) {
+      throw ineligible("paperclip_runner AWS AgentCore provider requires the 90-day retention acknowledgement");
+    }
+    const cap = Number(config.maxEstimatedSessionCostUsd);
+    if (!Number.isFinite(cap) || cap <= 0) {
+      throw ineligible("paperclip_runner AWS AgentCore provider requires a positive estimated spend ceiling");
     }
   }
   if (runnerProvider === "acpx") {
@@ -129,7 +159,11 @@ export function resolveNativeRuntimeMode(input: {
       mode: "native",
       backend: runnerProvider === "opencode"
         ? "opencode_server"
-        : runnerProvider === "acpx"
+        : runnerProvider === "claude_managed"
+          ? "claude_managed_agents_api"
+          : runnerProvider === "aws_agentcore"
+            ? "aws_agentcore_harness_api"
+          : runnerProvider === "acpx"
             ? "acpx_runtime"
           : "codex_app_server",
       protocolVersion: 1,
@@ -168,7 +202,11 @@ export function resolveHeartbeatNativeRuntimeMode(input: {
           mode: "native",
           backend: input.persisted.driverKind === "opencode_server"
             ? "opencode_server"
-            : input.persisted.driverKind === "acpx_runtime"
+            : input.persisted.driverKind === "claude_managed_agents_api"
+              ? "claude_managed_agents_api"
+              : input.persisted.driverKind === "aws_agentcore_harness_api"
+                ? "aws_agentcore_harness_api"
+              : input.persisted.driverKind === "acpx_runtime"
                 ? "acpx_runtime"
               : "codex_app_server",
           protocolVersion: 1,

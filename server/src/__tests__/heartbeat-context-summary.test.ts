@@ -51,7 +51,10 @@ describe("buildPaperclipTaskMarkdown", () => {
       },
     });
 
-    expect(acceptedConfirmation).toContain("Create child issues from the approved plan only");
+    expect(acceptedConfirmation).toContain(
+      "Implement the accepted plan on this issue when the work is small and cohesive",
+    );
+    expect(acceptedConfirmation).toContain("Do not create a child merely because a plan was accepted");
     expect(acceptedConfirmation).not.toContain("Make the plan only.");
   });
 
@@ -65,10 +68,19 @@ describe("buildPaperclipTaskMarkdown", () => {
         description: null,
       },
       acceptedPlanContinuation: true,
+      acceptedPlan: {
+        documentId: "document-plan",
+        revisionId: "revision-plan",
+        revisionNumber: 4,
+      },
     });
 
     expect(acceptedConfirmation).toContain("Accepted plan directive:");
-    expect(acceptedConfirmation).toContain("Create child issues from the approved plan only");
+    expect(acceptedConfirmation).toContain(
+      "Use the paperclip-converting-plans-to-tasks skill to decide whether decomposition is justified",
+    );
+    expect(acceptedConfirmation).toContain("Approved plan: revision 4 revision-plan of document document-plan");
+    expect(acceptedConfirmation).not.toContain("exactly one standard implementation child");
     expect(acceptedConfirmation).not.toContain("- Work mode: \"planning\"");
   });
 

@@ -1,83 +1,48 @@
-# Paperclip Runner
+# Paperclip Native Runner
 
-This private workspace package contains the staged Paperclip Runner work.
+This package is the standalone development boundary for Paperclip's native
+runner protocol, process supervision, durable transport, provider drivers, and
+normalized session backends. Rust owns the production runner under `runner/`;
+TypeScript provides the control-plane reference, browser SDK, scenario tools,
+and conformance oracle.
 
-The package currently exposes the language-neutral PRP v1 TypeScript
-contract, provider-neutral structured questions and responses, deterministic
-fixture validation/replay, structured-result normalization, and the session
-reducer oracle. It also contains a package-local Rust runner, scripted fake
-harness, bounded process supervisor, cross-language replay oracle, and durable
-PRP transport. The transport authenticates and encrypts loopback WebSocket
-sessions, persists an ACK-driven outbox and command journal, and reconnects with
-a short-lived lease. The Rust runner now includes a Codex-only app-server
-provider bridge with durable thread resume, cancellation, structured questions,
-and provider-neutral event normalization. The root surface now also exposes an
-authenticated durable PRP authority for server-side use. It stores only
-bootstrap and reconnect credential digests, validates immutable run identity on
-every connection and event, and persists commands and cumulative event ACK
-state across server restarts.
-The package also publishes the canonical semantic action declarations and
-their input and output schemas. Its package-local dispatcher projects only
-bound, run-authorized actions and emits redacted semantic receipts.
+The package includes one coherent set of capabilities: PRP v1 validation and
+replay, a supervised local runner with a scripted fake harness, durable
+WebSocket delivery and recovery, a skillless Codex app-server driver, live
+session and issue-thread surfaces, a public browser/React SDK, a standalone
+adapter demo, and a deterministic mock control plane. None of these surfaces
+imports or starts Paperclip's server, UI, CLI, or production database.
 
-The first and only provider selected directly by runnerd remains Codex. The
-package also contains the qualified OpenCode 1.18.17 proxy and the bounded ACPX
-sidecar for Codex and Claude, but this slice does not authorize the server
-to select those additional providers for a fresh native run. Dynamic semantic
-tools remain undiscoverable unless the hidden server coordinator projects one
-of the five same-task read bindings for an already persisted native Codex run.
-Catalog membership alone does not grant authority. The server can now create
-and start a Codex-backed native run only through the default-off
-`paperclip_runner` adapter. See
-[`SEMANTIC_ACTIONS.md`](SEMANTIC_ACTIONS.md) for the catalog boundary.
+## Public package surfaces
 
-The package exposes these public surfaces:
+- `@paperclipai/paperclip-runner` — production contracts, clients/backends,
+  PRP validation/replay, canonical catalog/dispatcher, and compatibility check.
+- `@paperclipai/paperclip-runner/evals` — versioned native-attempt/build
+  metadata, explicit digest-verified runnerd artifact resolution, and complete
+  App/Evals compatibility negotiation.
+- `@paperclipai/paperclip-runner/testing` — deterministic mocks plus PRP and
+  semantic conformance kits. Tests and Paperclip Evals import this explicitly.
+- `@paperclipai/paperclip-eval-kernel` — separately packed generic eval matrix
+  orchestration, permitted in Paperclip App only as a development dependency.
 
-- `@paperclipai/paperclip-runner` contains runtime contracts, validation,
-  replay/reducer logic, the semantic catalog, the authorization dispatcher, and
-  the Node-only durable server authority.
-- `@paperclipai/paperclip-runner/testing` adds Node-only fixture loading and a
-  provider-neutral semantic conformance kit for deterministic test adapters.
-- `@paperclipai/paperclip-runner/live` contains the package-local live-session
-  and runnerd/Codex transport used by the development consoles.
-- `@paperclipai/paperclip-runner/browser` and
-  `@paperclipai/paperclip-runner/react` provide the framework-neutral browser
-  client and optional React components.
-- `@paperclipai/paperclip-runner/devtools` projects bounded diagnostic state
-  for the package-local labs.
-- `@paperclipai/paperclip-runner/standalone` contains the thin standalone demo
-  adapter, and `@paperclipai/paperclip-runner/styles.css` contains its shared
-  presentation tokens.
+The package root has no mock or scenario exports, and no Paperclip Evals runtime
+dependency. See [ADR 0001](docs/adr/0001-runner-testing-eval-package-boundaries.md).
 
-These SDK and lab surfaces stay package-local and do not select a production
-provider or change Paperclip's runtime selection. No eval or managed-provider
-entry point is exported in this slice. The package remains private. The server
-route at `/api/runner/v1/connect/:runId` has no authority until the hidden
-coordinator registers an exact existing run binding. Fresh native starts are
-rejected unless the instance `enableNativeRunner` flag is enabled. Existing
-direct adapters keep their original execution path.
+The two conformance surfaces intentionally prove different contracts. The
+existing `runControlPlanePortConformance` suite checks narrow PRP run/event
+persistence. `CAPABILITY_HIGH_RISK_SEMANTIC_VECTORS` and
+`runSemanticConformanceKit` compare normalized tool authorization, state,
+effects, audit, retries, conflicts, redaction, continuation, and terminal
+decisions. The production adapter stays App-owned and invokes Paperclip's real
+route/service authorities; it does not copy those rules into this package.
 
-The package build compiles the release `paperclip-runnerd` executable and
-stages it under `dist/bin`. The normal server build vendors that directory, so
-an installed server does not depend on a separate system Rust installation or
-a manually copied binary. `pnpm-lock.yaml` remains under the repository's
-existing lockfile process.
-
-The `paperclip-runner-opencode-proxy` binary adapts the pinned OpenCode server
-protocol to the normalized harness contract. It admits only a bounded provider
-environment, uses an authenticated loopback MCP endpoint, validates dynamic
-tool inputs, keeps terminal completion tools private to the runner boundary,
-and preserves exact provider session identity for recovery. The backend factory
-requires an explicit runtime directory before constructing this provider.
+## Quick start
 
 The package also builds `paperclip-runner-acpx-sidecar`. This bounded v2
-stdin/stdout bridge admits the closed Claude and Codex ACPX profiles. It
-validates each agent's exact package/model pair, session identity, tool catalog,
-structured input, and terminal settlement at the process boundary. Claude runs
-without ambient project or local settings. Pi remains unavailable until its
-separately spawned runtime can use the same descriptor-confined verified launch
-boundary as the ACP server. Runnerd and the server do not select this sidecar
-in this slice.
+stdin/stdout bridge admits the qualified Codex ACPX profile only. It validates
+the exact model, session identity, tool catalog, structured input, and terminal
+settlement at the process boundary. Runnerd and the server do not select this
+sidecar in this slice. Other ACPX agents remain unavailable.
 
 The Rust core includes a bounded client for this sidecar protocol. It enforces
 request identity, event order, frame and queue limits, timeouts, redacted
@@ -114,7 +79,7 @@ unresolved turn-scoped requests. This reducer still does not select ACPX in
 runnerd.
 
 The package-local session bootstrap starts the bounded sidecar transport,
-verifies the selected qualified capability handshake and effective model, opens one
+verifies the Codex-only capability handshake and effective model, opens one
 identity-bound session, and confirms its run attachment. Any failed bootstrap
 terminates the process; session shutdown preserves persistent provider state.
 The session can then start one immutable-workspace turn, request interruption,
@@ -132,8 +97,9 @@ against the exact persisted question IDs, answer modes, options, required
 answers, custom-answer policy, and text constraints before provider delivery.
 Tool results and structured question responses then use two-phase resolution:
 validate retained identity and schema, require the exact sidecar
-acknowledgement, and only then clear pending local state. Permission events that
-escape the pinned sidecar policy terminate the session fail closed.
+acknowledgement, and only then clear pending local state. Codex permission
+requests violate its pinned sidecar policy and terminate the session fail
+closed.
 Safe suspension is available only with no active turn or pending request. The
 sidecar must return the exact persistent session identity before runnerd
 terminates the local process.
@@ -149,37 +115,192 @@ prospective session configuration exactly.
 Run the complete contract gate with:
 
 ```sh
-pnpm --filter @paperclipai/paperclip-runner check:protocol
+pnpm install --filter @paperclipai/paperclip-runner --lockfile=false --offline --ignore-scripts --dev
+pnpm --filter @paperclipai/paperclip-runner verify
 ```
 
-Run the Rust runner gate with:
+The verification command requires a stable Rust toolchain with `cargo` on
+`PATH`, in addition to Node.js 20+ and pnpm 9+.
+
+Minimal Debian/Ubuntu hosts without root access can extract the required
+Playwright browser libraries into a user-owned cache and run the same acceptance
+sequence with:
 
 ```sh
-pnpm --filter @paperclipai/paperclip-runner check:runner
+pnpm --filter @paperclipai/paperclip-runner verify:rootless
 ```
 
-This command checks Rust formatting, builds and tests the minimal workspace in
-release mode, verifies bounded process cleanup, launches the real
-`paperclip-runnerd` binary through the fake harness, and compares the Rust
-conformance and replay summaries with the shared fixtures. The checked-in Cargo
-lock and pinned Rust toolchain keep this verification reproducible.
+The tracer's final line is stable:
 
-Durability and failure semantics are documented in
-[`runner/DURABLE_TRANSPORT.md`](runner/DURABLE_TRANSPORT.md). The fault suite
-drops a connection before its event ACK, reconnects with the bound lease,
-replays the same event, and proves the duplicated command effect ran once.
-Codex launch, resume, cancellation, and normalization behavior is documented in
-[`runner/CODEX_PROVIDER.md`](runner/CODEX_PROVIDER.md).
+```json
+{"schemaVersion":"paperclip.runner.conformance.output.v1","runIdentity":{"runId":"run_conformance_0001","sessionId":"session_conformance_0001"},"result":{"status":"succeeded","summary":"Standalone Conformance fixture accepted."}}
+```
 
-Use `generate:protocol-manifest` after a schema or fixture change,
-`generate:protocol-types` after a schema change, and
-`generate:replay-goldens` after an intentional reducer change. Commit generated
-outputs with their sources; do not edit them by hand.
+Run only the tracer with:
 
-Use `generate:semantic-action-catalog` after changing a semantic action
-declaration. Its checked-in JSON inventory must land with the source change.
+```sh
+pnpm --filter @paperclipai/paperclip-runner trace:conformance
+```
 
-The gate compiles every schema with AJV 2020-12, validates accepted fixtures,
-rejects unsupported required versions, checks generated TypeScript schema
-drift, runs the TypeScript contract tests, and compares reducer snapshots and
-parity summaries byte-for-byte with their checked-in golden files.
+Replay the Replay happy path, run a Local session, or open the browser
+devtool:
+
+```sh
+pnpm --filter @paperclipai/paperclip-runner replay:fixture
+pnpm --filter @paperclipai/paperclip-runner trace:local-runner -- --scenario happy-path
+pnpm --filter @paperclipai/paperclip-runner trace:durable-recovery -- --fault lost-ack
+pnpm --filter @paperclipai/paperclip-runner trace:codex
+pnpm --filter @paperclipai/paperclip-runner demo:live-console -- --host 127.0.0.1 --port 4174
+
+# Live console: chat with a live session in the browser.
+pnpm --filter @paperclipai/paperclip-runner console:live-console
+pnpm --filter @paperclipai/paperclip-runner browser:dev --host 127.0.0.1 --port 4179
+
+# SDK: open the public-SDK reference console and mini consumer.
+pnpm --filter @paperclipai/paperclip-runner console:sdk
+
+# Standalone: run the standalone legacy/native/kill-switch tracer and page.
+pnpm --filter @paperclipai/paperclip-runner trace:standalone
+pnpm --filter @paperclipai/paperclip-runner trace:standalone -- --feature-flag enabled
+pnpm --filter @paperclipai/paperclip-runner trace:standalone -- --feature-flag enabled --kill-switch enabled
+pnpm --filter @paperclipai/paperclip-runner demo:standalone
+
+```
+
+Live console provider-backed routes are loopback-only and reject wildcard/LAN
+binds. Browser mutations require same-origin Fetch Metadata, matching Origin,
+and JSON content; see the protocol-server tutorial for direct `curl` examples.
+
+## AWS AgentCore Harness proof of concept
+
+The AWS remote-provider path uses the same runnerd, PRP tool bridge, durable
+state, and Runner Lab UI as the local and Claude Agent providers. AWS runs the
+agent loop; Paperclip executes only the exact caller-side inline-tool catalog
+authorized for the attached run. The Harness is never given Paperclip
+credentials, MCP servers, shell, filesystem, browser, skills, or Gateway tools.
+
+Provision the development stack with an AWS CLI v2 profile, then launch the
+existing Runner Lab:
+
+```sh
+pnpm --filter @paperclipai/paperclip-runner aws-agentcore:provision -- \
+  --aws-profile <profile> \
+  --region <region> \
+  --mode development
+pnpm --filter @paperclipai/paperclip-runner aws-agentcore:probe
+pnpm --filter @paperclipai/paperclip-runner aws-agentcore:lab
+```
+
+Open `http://127.0.0.1:4184/#/chat`, select **AWS AgentCore**, and start a new
+chat. Provisioning writes only profile and nonsecret resource metadata to the
+ignored `.paperclip-local/aws-agentcore.env` file with mode `0600`; it never
+writes AWS access keys or session tokens. The default Harness model is
+`global.anthropic.claude-sonnet-4-6`, Memory retention is 90 days, and the UI's
+dollar ceiling is an estimate rather than an AWS-enforced currency limit.
+
+Use `--mode private` to provision the isolated two-subnet VPC variant. Inspect
+changes without applying them with `aws-agentcore:provision -- --dry-run ...`.
+The teardown command is intentionally interactive and deletes the named
+endpoint before the CloudFormation stack:
+
+```sh
+pnpm --filter @paperclipai/paperclip-runner aws-agentcore:destroy
+```
+
+After provisioning, the live two-turn route-level check is:
+
+```sh
+pnpm --filter @paperclipai/paperclip-runner smoke:capability:aws-agentcore
+```
+
+## Package-owned commands
+
+| Command | Purpose |
+|---|---|
+| `build` | Compile the TypeScript public surface, Rust workspace, and browser devtool. |
+| `typecheck` | Check TypeScript, Rust, generated schema sources, and browser types. |
+| `test` | Run Rust/TypeScript fixture, supervisor, fake-driver, live/replay, and boundary tests. |
+| `check:forbidden-imports` | Reject TypeScript imports and Cargo path dependencies that cross into Paperclip core. |
+| `check:tracked-imports` | Reject tracked imports and `package.json` entry points that only resolve against untracked files, so a clean checkout of any commit builds. |
+| `check:numbered-milestones` | Reject numbered construction-milestone names in tracked package paths and source. |
+| `check:package-boundaries` | Enforce the acyclic runtime/testing/eval dependency and manifest boundary. |
+| `check:clean-consumers` | Pack runner and eval-kernel tarballs and install them in two clean consumers. |
+| `check:conformance-parity` | Require byte-for-byte equivalent Rust and TypeScript tracer output. |
+| `check:replay-goldens` | Require all reducer snapshots and cross-language summaries to match checked goldens. |
+| `check:replay-parity` | Run TypeScript and Rust against the same Replay fixture summaries. |
+| `check:browser-tokens` | Reject component-local visual literals and require the standalone token layer. |
+| `docs:validate` | Validate local documentation links and the OKF v0.2 bundle. |
+| `trace:conformance` | Run the Rust mock-core tracer, print the stable result, and exit. |
+| `trace:conformance:typescript` | Run the TypeScript reference tracer directly. |
+| `replay:fixture` | Validate and reduce a fixture to a final snapshot. |
+| `trace:local-runner` | Run one native local session through the Rust runner and fake harness. |
+| `record:local-runner` | Capture a validated happy-path live trace as a replay fixture. |
+| `trace:durable-recovery` | Run the Rust runner against the mock core with a selected recovery fault. |
+| `record:durable-recovery` | Regenerate the complete Durable recovery fault matrix and exact per-fault traces. |
+| `trace:codex` | Run the mock core with a real, local skillless Codex app-server session. |
+| `record:codex` | Run the safe Codex task and record its validated, normalized trace. |
+| `demo:live-console` | Start the package-local HTTP/SSE server with server-only Codex authentication. |
+| `console:live-console` | Start the standalone browser devtool with the Live console on `127.0.0.1:4180`. |
+| `record:live-console` | Run a safe real Codex task through the demo server and record reconnect/replay evidence. |
+| `console:sdk` | Start the public-SDK reference console and mini consumer on `127.0.0.1:4181`. |
+| `test:sdk` | Run targeted browser-client, reducer-projection, and React component contract tests. |
+| `test:browser:sdk` | Exercise both consumers with the fake driver, keyboard/a11y checks, reconnect/replay, measurements, and screenshots. |
+| `record:sdk:codex` | Run both public consumers against a safe real Codex session and capture live screenshots. |
+| `check:capability-contract` | Verify the generated capability, legacy MCP, and eval traceability contract. |
+| `check:semantic-contracts` | Verify the provider-neutral semantic tool contract is current. |
+| `trace:live-runner` | Run the real runnerd/Codex semantic loop against the mock control plane. |
+| `demo:scenarios` | Start the Capability scenario explorer over the mock control plane on `127.0.0.1:4183`. |
+| `console:issue-thread` | Start the Paperclip-style issue thread on `127.0.0.1:4184`. |
+| `aws-agentcore:provision` | Deploy or update the AgentCore Harness proof-of-concept stack and write ignored local metadata. |
+| `aws-agentcore:probe` | Read-only qualification probe for the configured Harness, endpoint, Memory, model, and invocation role. |
+| `aws-agentcore:lab` | Source the ignored AgentCore metadata and start the existing Runner Lab on `127.0.0.1:4184`. |
+| `aws-agentcore:destroy` | Confirm, delete the pinned Harness endpoint, and tear down the proof-of-concept stack. |
+| `smoke:capability:aws-agentcore` | Send two real messages through Runner Lab routes, assert session continuity, and exercise one governed read tool. |
+| `test:scenarios` | Run the scenario index, run-artifact, parity, explorer component, and route tests. |
+| `test:browser:scenarios` | Exercise both the scenario explorer and issue-thread browser contracts. |
+| `record:capability` | Record the twelve-route screenshot acceptance set at both viewports. |
+| `browser:dev` | Start the standalone live/replay/recovery browser devtool. |
+| `test:browser` | Exercise static replay and live scenarios, then capture temporary screenshots under ignored test output. |
+| `verify` | Run the complete deterministic Conformance through SDK acceptance sequence. |
+| `verify:rootless` | Extract Debian/Ubuntu browser libraries without root, then run `verify`. |
+
+## Navigate
+
+- [Architecture and dependency boundary](docs/architecture.md)
+- [ADR 0001: runner, testing, and eval package boundaries](docs/adr/0001-runner-testing-eval-package-boundaries.md)
+- [Tutorial index](docs/index.md)
+- [Conformance hand-run tutorial](docs/tutorials/conformance-standalone-tracer.md)
+- [Replay hand-run tutorial](docs/tutorials/replay.md)
+- [Local runner hand-run tutorial](docs/tutorials/local-runner.md)
+- [Local protocol reference](docs/local-runner.md)
+- [Durable recovery break-it-on-purpose tutorial](docs/tutorials/durable-recovery.md)
+- [Durable transport reference](docs/durable-recovery.md)
+- [Codex skillless Codex tutorial](docs/tutorials/codex.md)
+- [Codex skillless Codex driver reference](docs/codex-driver.md)
+- [Live console protocol/server tutorial](docs/tutorials/live-console-protocol-server.md)
+- [Live console protocol/server reference](docs/live-console-protocol-server.md)
+- [Live console tutorial](docs/tutorials/live-console.md)
+- [Live console reference](docs/live-console.md)
+- [SDK console tutorial](docs/tutorials/sdk-console.md)
+- [SDK browser SDK reference](docs/sdk.md)
+- [SDK component decision record](docs/design/sdk-component-decisions.md)
+- [Capability semantic catalog and authorization](docs/capability-semantic-catalog.md)
+- [Capability live runnerd/Codex loop](docs/capability-live-runnerd-codex.md)
+- [Capability issue-thread UI](docs/capability-issue-thread-ui.md)
+- [PRP compatibility/versioning policy](docs/protocol-compatibility.md)
+- [Adding a harness and permission-mode requirements](docs/adding-a-harness.md)
+- [Paperclip Evals integration contract](docs/evals-integration.md)
+- [PRP v1 expressiveness audit](spec/prp-v1-expressiveness-audit.md)
+- [Cumulative end-to-end tutorial](docs/tutorials/end-to-end.md)
+- [OKF knowledge bundle](knowledge/)
+
+Codex adds the package-local real-model reference driver, Live console adds the
+package-local browser console, and SDK extracts a reusable public SDK plus
+two standalone consumers. Runtime production Paperclip integration remains
+deferred; the App-owned production conformance adapter is test-only.
+
+The SDK reference console opens in direct chat mode. Enter a normal prompt,
+then open the protocol inspector to review events and reducer state. Expand a
+Terminal row and its nested **Debug details** disclosure to inspect every
+canonical event retained for that command. The header marker `🖇️ v0.1.2`
+identifies the current console iteration.

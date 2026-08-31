@@ -393,6 +393,8 @@ import {
   environmentRuntimeService,
   type ProviderResourceDisposition,
 } from "./environment-runtime.js";
+import { managedAgentProfileService } from "./managed-agent-profiles.js";
+import { remoteAgentProfileService } from "./remote-agent-profiles.js";
 import { skillVersionSelectionMap } from "./runtime-skill-selections.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import { isUnsafeSessionWorkspaceCwd } from "./session-workspace-cwd.js";
@@ -471,6 +473,8 @@ const LIVENESS_BOOKKEEPING_ACTIVITY_ACTIONS = [
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
 const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
+const ACCEPTED_PLAN_CONVERSION_SKILL_KEY =
+  "paperclipai/paperclip/paperclip-converting-plans-to-tasks";
 const PAPERCLIP_AGENT_MESSAGE_KEY = "paperclipAgentMessage";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
@@ -4062,6 +4066,31 @@ export async function buildPaperclipRuntimeMcpServers(input: {
       [profile] = await input.db.select().from(toolProfiles).where(and(eq(toolProfiles.companyId, input.agent.companyId), eq(toolProfiles.profileKey, profileKey))).limit(1);
       if (!profile) throw error;
     }
+    if (!gateway) continue;
+    const token = await service.createNamedGatewayToken({
+      companyId: connection.companyId,
+      gatewayId: gateway.id,
+      body: {
+        name: `Run ${input.runId.slice(0, 8)} ${connection.name}`,
+        subjectType: "heartbeat_run",
+        subjectId: input.runId,
+        clientLabel: `${input.agent.name} heartbeat run`,
+        ownerNote: `Short-lived runtime MCP token for heartbeat run ${input.runId}.`,
+        allowedActions: ["tools/list", "tools/call"],
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+      actor: { agentId: input.agent.id },
+    });
+    servers.push({
+      name: connection.name,
+      // Runtime MCP clients authenticate with a short-lived gateway bearer, not
+      // a Paperclip agent JWT. Route them through the public gateway protocol
+      // endpoint mounted ahead of the API auth middleware; the gateway service
+      // still validates the bearer and its run binding on every request.
+      url: `${paperclipApiBaseUrl()}/mcp/gateways/${gateway.gatewayPublicId}`,
+      token: token.token,
+      connectionId: connection.id,
+    });
   }
   let [gateway] = (await input.db.select().from(toolMcpGateways).where(and(
     eq(toolMcpGateways.companyId, input.agent.companyId),
@@ -7447,6 +7476,11 @@ export function buildPaperclipTaskMarkdown(input: {
     kind?: string | null;
     status?: string | null;
   } | null;
+  acceptedPlan?: {
+    documentId?: string | null;
+    revisionId?: string | null;
+    revisionNumber?: number | null;
+  } | null;
   acceptedPlanContinuation?: boolean;
   // false builds the compact variant used for resume deltas, where the session
   // already received the description with the assignment.
@@ -7497,7 +7531,7 @@ export function buildPaperclipTaskMarkdown(input: {
       }
       if (acceptedPlanContinuation) {
         directive =
-          "Create child issues from the approved plan only. Do not write code or perform implementation work on the planning issue.";
+          "Implement the accepted plan on this issue when the work is small and cohesive. Use the paperclip-converting-plans-to-tasks skill to decide whether decomposition is justified. Create the minimum child issue graph only for qualifying ownership, parallelism, dependency, review, or lifecycle boundaries. Do not create a child merely because a plan was accepted.";
       }
       lines.push(
         `- Work mode: ${quoteTaskScalar("planning")}`,
@@ -7516,7 +7550,18 @@ export function buildPaperclipTaskMarkdown(input: {
       lines.push(
         "",
         "Accepted plan directive:",
-        "Create child issues from the approved plan only. Do not write code or perform implementation work on the source issue.",
+        "Implement the accepted plan on this issue when the work is small and cohesive. Use the paperclip-converting-plans-to-tasks skill to decide whether decomposition is justified. Create the minimum child issue graph only for qualifying ownership, parallelism, dependency, review, or lifecycle boundaries. Do not create a child merely because a plan was accepted.",
+      );
+    }
+    if (acceptedPlanContinuation && input.acceptedPlan?.revisionId) {
+      const revisionNumber = input.acceptedPlan.revisionNumber
+        ? ` revision ${input.acceptedPlan.revisionNumber}`
+        : " revision";
+      const documentId = input.acceptedPlan.documentId
+        ? ` of document ${input.acceptedPlan.documentId}`
+        : "";
+      lines.push(
+        `- Approved plan:${revisionNumber} ${input.acceptedPlan.revisionId}${documentId}. Follow this exact revision, not a later draft.`,
       );
     }
     const description =
@@ -17669,6 +17714,21 @@ export function heartbeatService(
             "accepted_plan_confirmation" &&
           Object.keys(parseObject(context.acceptedPlanWakeRouting)).length ===
             0,
+        acceptedPlan: (() => {
+          const accepted = parseObject(
+            parseObject(context.planReviewInteraction).acceptedTargetRevision,
+          );
+          const revisionId = readNonEmptyString(accepted.revisionId);
+          if (!revisionId) return null;
+          return {
+            documentId: readNonEmptyString(accepted.documentId),
+            revisionId,
+            revisionNumber:
+              typeof accepted.revisionNumber === "number"
+                ? accepted.revisionNumber
+                : null,
+          };
+        })(),
       };
       const taskMarkdown = buildPaperclipTaskMarkdown(taskMarkdownInput);
       const taskMarkdownCompact = buildPaperclipTaskMarkdown({
@@ -18015,7 +18075,13 @@ export function heartbeatService(
           companyId: agent.companyId,
           issueId,
         });
-      const runScopedSkillKeys = runScopedMentionedSkillKeys;
+      const runScopedSkillKeys = acceptedPlanContinuationWake
+        && !acceptedPlanWakeRoutingDecision?.suppressAcceptedContinuation
+        ? [
+            ...runScopedMentionedSkillKeys,
+            ACCEPTED_PLAN_CONVERSION_SKILL_KEY,
+          ]
+        : runScopedMentionedSkillKeys;
       const pushCapabilityPreflightRequired = requiresPushCapabilityPreflight({
         adapterType: agent.adapterType,
         issueId,
@@ -19718,6 +19784,56 @@ export function heartbeatService(
                 agentId: agent.id,
                 interactionIds: interactionId ? [interactionId] : [],
               });
+            const managedProfile =
+              nativeRuntimeResolution.profile.backend ===
+              "claude_managed_agents_api"
+                ? await managedAgentProfileService(db).requireQualified(
+                    agent.companyId,
+                    readNonEmptyString(
+                      parseObject(runtimeConfig).managedProfileId,
+                    ) ?? "",
+                  )
+                : null;
+            const agentCoreProfile =
+              nativeRuntimeResolution.profile.backend ===
+              "aws_agentcore_harness_api"
+                ? await remoteAgentProfileService(db).requireQualified(
+                    agent.companyId,
+                    readNonEmptyString(
+                      parseObject(agent.adapterConfig).agentCoreProfileId,
+                    ) ?? "",
+                    "aws_bedrock_agentcore_harness",
+                  )
+                : null;
+            const agentCoreConfig = parseObject(
+              agentCoreProfile?.configuration,
+            );
+            if (managedProfile) {
+              const rawApiKeyBinding = parseObject(
+                parseObject(agent.adapterConfig).env,
+              ).ANTHROPIC_API_KEY;
+              const boundSecretId =
+                typeof rawApiKeyBinding === "object" &&
+                rawApiKeyBinding !== null
+                  ? readNonEmptyString(
+                      (rawApiKeyBinding as Record<string, unknown>).secretId,
+                    )
+                  : null;
+              if (boundSecretId !== managedProfile.apiKeySecretId) {
+                throw new ConfigurationIncompleteFailure(
+                  "configuration incomplete: Claude Agent profile API key is not bound at env.ANTHROPIC_API_KEY",
+                  {
+                    configurationIncomplete: {
+                      reason: "managed_agent_profile_secret_binding_mismatch",
+                      companyId: agent.companyId,
+                      agentId: agent.id,
+                      profileId: managedProfile.id,
+                      requiredEnvKeys: ["ANTHROPIC_API_KEY"],
+                    },
+                  },
+                );
+              }
+            }
             const executionMode =
               issueRef.workMode === "planning" && !acceptedPlanContinuationWake
                 ? ("plan" as const)
@@ -19789,9 +19905,16 @@ export function heartbeatService(
               provider:
                 nativeRuntimeResolution.profile.backend === "opencode_server"
                   ? "opencode"
-                  : nativeRuntimeResolution.profile.backend === "acpx_runtime"
-                    ? "acpx"
-                    : "codex",
+                  : nativeRuntimeResolution.profile.backend ===
+                      "claude_managed_agents_api"
+                    ? "claude_managed"
+                    : nativeRuntimeResolution.profile.backend ===
+                        "aws_agentcore_harness_api"
+                      ? "aws_agentcore"
+                      : nativeRuntimeResolution.profile.backend ===
+                          "acpx_runtime"
+                        ? "acpx"
+                        : "codex",
               ...(nativeRuntimeResolution.profile.backend === "acpx_runtime"
                 ? {
                     acpxAgent: parseObject(runtimeConfig).acpxAgent as
@@ -19813,7 +19936,95 @@ export function heartbeatService(
               model:
                 typeof parseObject(agent.adapterConfig).model === "string"
                   ? String(parseObject(agent.adapterConfig).model)
-                  : null,
+                  : (managedProfile?.defaultModel ??
+                    readNonEmptyString(agentCoreConfig.defaultModel) ??
+                    null),
+              ...(nativeRuntimeResolution.profile.backend ===
+              "claude_managed_agents_api"
+                ? {
+                    managedProfile: {
+                      profileId: managedProfile!.id,
+                      anthropicAgentId: managedProfile!.anthropicAgentId,
+                      agentVersion: managedProfile!.agentVersion,
+                      environmentId: managedProfile!.environmentId,
+                      betaVersion: "managed-agents-2026-04-01" as const,
+                    },
+                    maxSessionListCostUsd: Number(
+                      parseObject(runtimeConfig).maxSessionListCostUsd ??
+                        managedProfile!.defaultMaxListCostCents / 100,
+                    ),
+                  }
+                : {}),
+              ...(nativeRuntimeResolution.profile.backend ===
+              "aws_agentcore_harness_api"
+                ? {
+                    agentCoreProfile: {
+                      profileId: agentCoreProfile!.id,
+                      region: readNonEmptyString(agentCoreConfig.region) ?? "",
+                      accountId:
+                        readNonEmptyString(agentCoreConfig.accountId) ?? "",
+                      harnessArn:
+                        readNonEmptyString(agentCoreConfig.harnessArn) ?? "",
+                      harnessVersion:
+                        readNonEmptyString(agentCoreConfig.harnessVersion) ??
+                        "",
+                      endpointArn:
+                        readNonEmptyString(agentCoreConfig.endpointArn) ?? "",
+                      endpointQualifier:
+                        readNonEmptyString(agentCoreConfig.endpointQualifier) ??
+                        "",
+                      agentRuntimeArn:
+                        readNonEmptyString(agentCoreConfig.agentRuntimeArn) ??
+                        "",
+                      memoryArn:
+                        readNonEmptyString(agentCoreConfig.memoryArn) ?? "",
+                      memoryId:
+                        readNonEmptyString(agentCoreConfig.memoryId) ?? "",
+                      invocationRoleArn:
+                        readNonEmptyString(agentCoreConfig.invocationRoleArn) ??
+                        "",
+                      contextBucket:
+                        readNonEmptyString(agentCoreConfig.contextBucket) ?? "",
+                      contextPrefix:
+                        readNonEmptyString(agentCoreConfig.contextPrefix) ?? "",
+                      contextKmsKeyArn:
+                        readNonEmptyString(agentCoreConfig.contextKmsKeyArn) ?? "",
+                      qualificationRevision:
+                        readNonEmptyString(
+                          agentCoreConfig.qualificationRevision,
+                        ) ?? "aws-agentcore-harness-v1",
+                      eventExpiryDays: 90 as const,
+                    },
+                    maxEstimatedSessionCostUsd: Number(
+                      parseObject(agent.adapterConfig)
+                        .maxEstimatedSessionCostUsd ??
+                        agentCoreConfig.defaultMaxEstimatedSessionCostUsd ??
+                        1,
+                    ),
+                    invocationLimits: {
+                      maxIterations: Math.min(
+                        8,
+                        Number(
+                          parseObject(agent.adapterConfig).maxIterations ?? 8,
+                        ),
+                      ),
+                      maxOutputTokens: Math.min(
+                        4096,
+                        Number(
+                          parseObject(agent.adapterConfig).maxOutputTokens ??
+                            4096,
+                        ),
+                      ),
+                      timeoutSeconds: Math.min(
+                        300,
+                        Number(
+                          parseObject(agent.adapterConfig).timeoutSeconds ??
+                            300,
+                        ),
+                      ),
+                    },
+                  }
+                : {}),
               lifecyclePolicy: effectiveLifecyclePolicy,
               interactionResponses,
               completionContract: {

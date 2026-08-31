@@ -1,24 +1,19 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::local_runner::{HarnessCommand, LocalRunnerError};
-use crate::process_supervisor::{read_bounded_line, BoundedLine};
 
 const HARNESS_COMMAND_SCHEMA: &str = "paperclip.fake_harness.command.v1";
 const HARNESS_MESSAGE_SCHEMA: &str = "paperclip.fake_harness.message.v1";
 const HARNESS_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const HARNESS_COMMAND_QUEUE_CAPACITY: usize = 256;
-const HARNESS_MAX_COMMAND_BYTES: usize = 64 * 1024;
-const HARNESS_MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
-const HARNESS_MAX_SCRIPT_STEPS: usize = 4096;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,26 +62,12 @@ pub enum FakeHarnessStep {
 }
 
 pub fn load_fake_harness_script(path: &Path) -> Result<FakeHarnessScript, LocalRunnerError> {
-    let file = std::fs::File::open(path).map_err(|error| {
+    let input = std::fs::read_to_string(path).map_err(|error| {
         LocalRunnerError::invalid(format!(
             "failed to read fake harness script {}: {error}",
             path.display()
         ))
     })?;
-    let mut input = String::new();
-    file.take(HARNESS_MAX_SCRIPT_BYTES + 1)
-        .read_to_string(&mut input)
-        .map_err(|error| {
-            LocalRunnerError::invalid(format!(
-                "failed to read fake harness script {}: {error}",
-                path.display()
-            ))
-        })?;
-    if input.len() as u64 > HARNESS_MAX_SCRIPT_BYTES {
-        return Err(LocalRunnerError::invalid(format!(
-            "fake harness script cannot exceed {HARNESS_MAX_SCRIPT_BYTES} bytes"
-        )));
-    }
     let script: FakeHarnessScript = serde_json::from_str(&input).map_err(|error| {
         LocalRunnerError::invalid(format!("fake harness script must be valid JSON: {error}"))
     })?;
@@ -95,15 +76,10 @@ pub fn load_fake_harness_script(path: &Path) -> Result<FakeHarnessScript, LocalR
             "fake harness script schema is unsupported",
         ));
     }
-    if script.name.trim().is_empty() || script.name.len() > 160 || script.steps.is_empty() {
+    if script.name.trim().is_empty() || script.steps.is_empty() {
         return Err(LocalRunnerError::invalid(
-            "fake harness script requires a name of at most 160 bytes and at least one step",
+            "fake harness script requires a name and at least one step",
         ));
-    }
-    if script.steps.len() > HARNESS_MAX_SCRIPT_STEPS {
-        return Err(LocalRunnerError::invalid(format!(
-            "fake harness script cannot exceed {HARNESS_MAX_SCRIPT_STEPS} steps"
-        )));
     }
     Ok(script)
 }
@@ -112,23 +88,19 @@ pub fn run_fake_harness(
     script: FakeHarnessScript,
     delay_override_ms: Option<u64>,
 ) -> Result<i32, LocalRunnerError> {
-    let (command_sender, command_receiver) =
-        mpsc::sync_channel::<HarnessCommand>(HARNESS_COMMAND_QUEUE_CAPACITY);
+    let (command_sender, command_receiver) = mpsc::channel::<HarnessCommand>();
     thread::spawn(move || {
         let stdin = std::io::stdin();
-        let mut reader = stdin.lock();
-        loop {
-            match read_bounded_line(&mut reader, HARNESS_MAX_COMMAND_BYTES) {
-                Ok(BoundedLine::Line(line)) if line.trim().is_empty() => {}
-                Ok(BoundedLine::Line(line)) => {
-                    if let Ok(command) = serde_json::from_str::<HarnessCommand>(&line) {
-                        if command_sender.send(command).is_err() {
-                            return;
-                        }
-                    }
-                }
-                Ok(BoundedLine::TooLong) => {}
-                Ok(BoundedLine::Eof) | Err(_) => return,
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let command = match serde_json::from_str::<HarnessCommand>(&line) {
+                Ok(command) => command,
+                Err(_) => continue,
+            };
+            if command_sender.send(command).is_err() {
+                return;
             }
         }
     });
@@ -255,15 +227,8 @@ fn receive_harness_command(
     } else {
         HARNESS_COMMAND_TIMEOUT
     };
-    let deadline = Instant::now() + timeout;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(LocalRunnerError::invalid(format!(
-                "timed out waiting for {command_type}"
-            )));
-        }
-        let command = receiver.recv_timeout(remaining).map_err(|_| {
+        let command = receiver.recv_timeout(timeout).map_err(|_| {
             LocalRunnerError::invalid(format!("timed out waiting for {command_type}"))
         })?;
         if command.schema != HARNESS_COMMAND_SCHEMA {

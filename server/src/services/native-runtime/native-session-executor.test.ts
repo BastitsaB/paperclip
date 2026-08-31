@@ -292,6 +292,18 @@ describe("native harness persistence profiles", () => {
       "acpx_runtime",
       ["runner", "acpx"],
     ],
+    [
+      "claude managed",
+      { kind: "claude_managed" },
+      "claude_managed_agents_api",
+      ["runner"],
+    ],
+    [
+      "aws agentcore",
+      { kind: "aws_agentcore" },
+      "aws_agentcore_harness_api",
+      ["runner"],
+    ],
   ])(
     "declares the complete %s recovery state",
     (_name, provider, driver, directories) => {

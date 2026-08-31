@@ -15,6 +15,7 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import {
   PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
+  isPaperclipRunnerProvider,
   type PaperclipRunnerPermissionMode,
   type PaperclipRunnerProvider,
 } from "@paperclipai/adapter-utils";
@@ -27,18 +28,46 @@ const instructionsFileHint =
 const acpxModelByAgent = {
   pi: "openrouter/deepseek/deepseek-v4-flash-0731",
   claude: "claude-sonnet-5",
+  codex: "gpt-5.6-sol",
 } as const;
 
-type QualifiedRunnerProvider = Extract<
-  PaperclipRunnerProvider,
-  "codex" | "opencode" | "acpx"
->;
+type RunnerManagedConfigField = {
+  key: string;
+  label: string;
+  type: "text" | "number" | "toggle";
+  defaultValue?: string | number | boolean;
+  hint?: string;
+};
 
-function isQualifiedRunnerProvider(
-  value: unknown,
-): value is QualifiedRunnerProvider {
-  return value === "codex" || value === "opencode" || value === "acpx";
-}
+const claudeManagedConfigFields: readonly RunnerManagedConfigField[] = [
+  { key: "managedProfileId", label: "Managed Agent profile", type: "text", hint: "Company-scoped qualified profile identifier." },
+  { key: "anthropicAgentId", label: "Anthropic Agent ID", type: "text" },
+  { key: "agentVersion", label: "Pinned Agent version", type: "text" },
+  { key: "anthropicEnvironmentId", label: "Anthropic Environment ID", type: "text" },
+  { key: "maxSessionListCostUsd", label: "Session spend ceiling (USD)", type: "number", defaultValue: 1, hint: "Required hard ceiling for a managed session." },
+  { key: "managedAgentsRetentionAcknowledged", label: "Acknowledge beta retention", type: "toggle", defaultValue: false, hint: "Managed Agents is stateful and is not eligible for ZDR or HIPAA modes." },
+];
+
+const awsAgentCoreConfigFields: readonly RunnerManagedConfigField[] = [
+  { key: "agentCoreProfileId", label: "AgentCore profile", type: "text", hint: "Company-scoped provisioned profile identifier." },
+  { key: "awsRegion", label: "AWS region", type: "text" },
+  { key: "awsAccountId", label: "AWS account ID", type: "text" },
+  { key: "harnessArn", label: "Harness ARN", type: "text" },
+  { key: "harnessId", label: "Harness ID", type: "text" },
+  { key: "harnessVersion", label: "Pinned Harness version", type: "text" },
+  { key: "endpointQualifier", label: "Harness endpoint", type: "text" },
+  { key: "endpointArn", label: "Harness endpoint ARN", type: "text" },
+  { key: "agentRuntimeArn", label: "Underlying Runtime ARN", type: "text" },
+  { key: "memoryId", label: "AgentCore Memory ID", type: "text" },
+  { key: "memoryArn", label: "AgentCore Memory ARN", type: "text" },
+  { key: "invocationRoleArn", label: "Invocation role ARN", type: "text" },
+  { key: "contextBucket", label: "Private context S3 bucket", type: "text" },
+  { key: "contextPrefix", label: "Context S3 prefix", type: "text" },
+  { key: "contextKmsKeyArn", label: "Context KMS key ARN", type: "text" },
+  { key: "maxEstimatedSessionCostUsd", label: "Estimated session ceiling (USD)", type: "number", defaultValue: 1, hint: "Paperclip estimate; AWS has no per-session currency hard stop." },
+  { key: "qualificationRevision", label: "Qualification revision", type: "text", defaultValue: "aws-agentcore-harness-v1" },
+  { key: "agentCoreRetentionAcknowledged", label: "Acknowledge 90-day Memory retention", type: "toggle", defaultValue: false, hint: "AgentCore short-term Memory retains events for 90 days." },
+];
 
 export function CodexLocalConfigFields({
   mode,
@@ -64,24 +93,23 @@ export function CodexLocalConfigFields({
       ? values!.paperclipRunnerProvider ?? "codex"
       : eff("adapterConfig", "provider", String(config.provider ?? "codex"))
     : "codex";
-  const qualifiedRunnerProvider = isQualifiedRunnerProvider(runnerProvider)
-    ? runnerProvider
-    : null;
-  const normalizedRunnerProvider: QualifiedRunnerProvider =
-    qualifiedRunnerProvider ?? "codex";
-  const codexRunner = runnerManaged && qualifiedRunnerProvider === "codex";
+  const normalizedRunnerProvider: PaperclipRunnerProvider =
+    isPaperclipRunnerProvider(runnerProvider) ? runnerProvider : "codex";
   const openCodeRunner = runnerManaged && runnerProvider === "opencode";
   const acpxRunner = runnerManaged && runnerProvider === "acpx";
-  const rawAcpxAgent = acpxRunner
+  const acpxAgent = acpxRunner
     ? isCreate
       ? values!.paperclipRunnerAcpxAgent ?? "pi"
       : eff("adapterConfig", "acpxAgent", String(config.acpxAgent ?? "pi"))
     : "pi";
-  const acpxAgent = rawAcpxAgent === "pi" || rawAcpxAgent === "claude"
-    ? rawAcpxAgent
-    : null;
   const permissionCapability =
     PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES[normalizedRunnerProvider];
+  const managedProviderConfigFields =
+    normalizedRunnerProvider === "claude_managed"
+      ? claudeManagedConfigFields
+      : normalizedRunnerProvider === "aws_agentcore"
+        ? awsAgentCoreConfigFields
+        : [];
   const permissionMode = permissionCapability.configurable
     ? isCreate
       ? String(
@@ -151,9 +179,9 @@ export function CodexLocalConfigFields({
         <Field label="Provider" hint="The runner persists this provider with each run so recovery cannot drift after configuration changes.">
           <select
             className={inputClass}
-            value={qualifiedRunnerProvider ?? "unavailable"}
+            value={runnerProvider}
             onChange={(event) => {
-              const provider = isQualifiedRunnerProvider(event.target.value)
+              const provider = isPaperclipRunnerProvider(event.target.value)
                 ? event.target.value
                 : "codex";
               if (isCreate) {
@@ -178,13 +206,10 @@ export function CodexLocalConfigFields({
               }
             }}
           >
-            {!qualifiedRunnerProvider && (
-              <option value="unavailable" disabled>
-                Saved provider unavailable in this release
-              </option>
-            )}
             <option value="codex">Codex</option>
             <option value="opencode">OpenCode 1.18.17</option>
+            <option value="claude_managed">Claude Agent</option>
+            <option value="aws_agentcore">AWS AgentCore</option>
             <option value="acpx">ACPX</option>
           </select>
         </Field>
@@ -193,11 +218,13 @@ export function CodexLocalConfigFields({
         <Field label="ACP agent" hint="Qualified ACP server profile. Changing the profile starts a fresh provider session.">
           <select
             className={inputClass}
-            value={acpxAgent ?? "unavailable"}
+            value={acpxAgent}
             onChange={(event) => {
               const agent = event.target.value === "claude"
                 ? "claude"
-                : "pi";
+                : event.target.value === "codex"
+                  ? "codex"
+                  : "pi";
               if (isCreate) {
                 set!({ paperclipRunnerAcpxAgent: agent, model: acpxModelByAgent[agent] });
               } else {
@@ -206,17 +233,13 @@ export function CodexLocalConfigFields({
               }
             }}
           >
-            {!acpxAgent && (
-              <option value="unavailable" disabled>
-                Saved ACP agent unavailable in this release
-              </option>
-            )}
             <option value="pi">Pi via ACPX</option>
             <option value="claude">Claude via ACPX</option>
+            <option value="codex">Codex via ACPX (control)</option>
           </select>
         </Field>
       )}
-      {runnerManaged && qualifiedRunnerProvider && permissionCapability.configurable && (
+      {runnerManaged && permissionCapability.configurable && (
         <Field
           label="Permission mode"
           hint={`${permissionCapability.description} Full auto does not widen Paperclip's workspace, network, credential, or planning boundaries.`}
@@ -239,11 +262,62 @@ export function CodexLocalConfigFields({
           </select>
         </Field>
       )}
-      {runnerManaged && qualifiedRunnerProvider && !permissionCapability.configurable && (
+      {runnerManaged && !permissionCapability.configurable && (
         <Field label="Permission mode" hint={permissionCapability.description}>
           <div className="text-sm text-muted-foreground">Provider-managed full auto</div>
         </Field>
       )}
+      {managedProviderConfigFields.map((field) => {
+        const value = isCreate
+          ? values!.adapterSchemaValues?.[field.key] ?? field.defaultValue
+          : eff(
+              "adapterConfig",
+              field.key,
+              config[field.key] ?? field.defaultValue,
+            );
+        const writeValue = (nextValue: unknown) => {
+          if (isCreate) {
+            set!({
+              adapterSchemaValues: {
+                ...values!.adapterSchemaValues,
+                [field.key]: nextValue,
+              },
+            });
+          } else {
+            mark("adapterConfig", field.key, nextValue);
+          }
+        };
+        if (field.type === "toggle") {
+          return (
+            <ToggleField
+              key={field.key}
+              label={field.label}
+              hint={field.hint}
+              checked={value === true}
+              onChange={writeValue}
+            />
+          );
+        }
+        return (
+          <Field key={field.key} label={field.label} hint={field.hint}>
+            {field.type === "number" ? (
+              <DraftNumberInput
+                value={Number(value ?? 0)}
+                onCommit={writeValue}
+                immediate
+                className={inputClass}
+              />
+            ) : (
+              <DraftInput
+                value={String(value ?? "")}
+                onCommit={(nextValue) => writeValue(nextValue || undefined)}
+                immediate
+                className={inputClass}
+              />
+            )}
+          </Field>
+        );
+      })}
       {runnerManaged && (
         <Field label="Runner lifecycle" hint="Turn by turn suspends after each run. Warm keeps the same provider process available between governed runs.">
           <select
@@ -460,7 +534,7 @@ export function CodexLocalConfigFields({
               : mark("adapterConfig", "dangerouslyBypassApprovalsAndSandbox", v)
           }
         />}
-      {(!runnerManaged || codexRunner) && <ToggleField
+      {!openCodeRunner && <ToggleField
           label="Enable search"
           hint={help.search}
           checked={
@@ -474,7 +548,7 @@ export function CodexLocalConfigFields({
               : mark("adapterConfig", "search", v)
           }
         />}
-      {(!runnerManaged || codexRunner) && <ToggleField
+      {!openCodeRunner && <ToggleField
           label="Fast mode"
           hint={help.fastMode}
           checked={fastModeEnabled}
@@ -484,7 +558,7 @@ export function CodexLocalConfigFields({
               : mark("adapterConfig", "fastMode", v)
           }
         />}
-      {(!runnerManaged || codexRunner) && fastModeEnabled && (
+      {!openCodeRunner && fastModeEnabled && (
         <div className="rounded-md border border-amber-300/70 bg-amber-50/80 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
           {fastModeMessage}
         </div>

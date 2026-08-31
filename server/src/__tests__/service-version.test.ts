@@ -7,16 +7,16 @@ import { describe, expect, it } from "vitest";
 import { readGitCommit, resolveServiceVersion } from "../instrumentation.js";
 
 describe("resolveServiceVersion", () => {
-  it("prefers the build stamp over every other source", () => {
-    expect(resolveServiceVersion("aaaaaaa", "bbbbbbb", "2026.5.0")).toBe("aaaaaaa");
+  it("prefers the explicit OpenTelemetry service version", () => {
+    expect(resolveServiceVersion("aaaaaaa", "bbbbbbb", "2026.5.0")).toBe("2026.5.0");
   });
 
-  it("uses the runtime git commit when no build stamp exists", () => {
-    expect(resolveServiceVersion(null, "bbbbbbb", "2026.5.0")).toBe("bbbbbbb");
+  it("uses the build stamp when no service version is configured", () => {
+    expect(resolveServiceVersion("aaaaaaa", "bbbbbbb", undefined)).toBe("aaaaaaa");
   });
 
-  it("uses OTEL_SERVICE_VERSION when no stamp and no git commit exist", () => {
-    expect(resolveServiceVersion(null, null, "2026.5.0")).toBe("2026.5.0");
+  it("uses the runtime git commit when no service version or stamp exists", () => {
+    expect(resolveServiceVersion(null, "bbbbbbb", undefined)).toBe("bbbbbbb");
   });
 
   it("falls back to 'unknown' when every source is absent", () => {

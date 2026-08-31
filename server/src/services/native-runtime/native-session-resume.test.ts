@@ -221,6 +221,44 @@ describe("buildNativeExecutionInput wake projection", () => {
       model: "claude-sonnet-5",
       acpxPermissionMode: "deny-all",
     });
+    const claudeManaged = buildNativeExecutionInput({
+      ...common,
+      provider: "claude_managed",
+      model: "claude-sonnet-5",
+      managedProfile: {
+        profileId: "managed-profile-1",
+        anthropicAgentId: "agent_01",
+        agentVersion: "3",
+        environmentId: "environment_01",
+        betaVersion: "managed-agents-2026-04-01",
+      },
+      maxSessionListCostUsd: 2.5,
+    });
+    const awsAgentCore = buildNativeExecutionInput({
+      ...common,
+      provider: "aws_agentcore",
+      model: "global.anthropic.claude-sonnet-4-6",
+      agentCoreProfile: {
+        profileId: "agentcore-development",
+        region: "us-east-1",
+        accountId: "123456789012",
+        harnessArn: "arn:aws:bedrock-agentcore:us-east-1:123456789012:harness/harness-1",
+        harnessVersion: "3",
+        endpointArn: "arn:aws:bedrock-agentcore:us-east-1:123456789012:harness-endpoint/harness-1/paperclip",
+        endpointQualifier: "paperclip",
+        agentRuntimeArn: "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/runtime-1",
+        memoryArn: "arn:aws:bedrock-agentcore:us-east-1:123456789012:memory/memory-1",
+        memoryId: "memory-1",
+        invocationRoleArn: "arn:aws:iam::123456789012:role/paperclip-agentcore-runner",
+        contextBucket: "paperclip-agentcore-context",
+        contextPrefix: "paperclip/runtime",
+        contextKmsKeyArn: "arn:aws:kms:us-east-1:123456789012:key/test",
+        qualificationRevision: "aws-agentcore-harness-v1",
+        eventExpiryDays: 90,
+      },
+      maxEstimatedSessionCostUsd: 3,
+      invocationLimits: { maxIterations: 8, maxOutputTokens: 4096, timeoutSeconds: 300 },
+    });
 
     expect(codex).toMatchObject({
       schema: "paperclip.native-execution-input.v4",
@@ -234,7 +272,32 @@ describe("buildNativeExecutionInput wake projection", () => {
       schema: "paperclip.native-execution-input.v4",
       provider: { kind: "acpx", permissionMode: "deny-all" },
     });
-    expect(JSON.stringify([codex, opencode, acpx]))
+    expect(claudeManaged).toMatchObject({
+      schema: "paperclip.native-execution-input.v4",
+      session: { driverKind: "claude_managed_agents_api" },
+      provider: {
+        kind: "claude_managed",
+        model: "claude-sonnet-5",
+        managedProfile: { profileId: "managed-profile-1", agentVersion: "3" },
+        maxSessionListCostUsd: 2.5,
+      },
+      runtimeContext: { aggregateDigest: common.runtimeContext.aggregateDigest },
+      credentialBindings: [],
+    });
+    expect(awsAgentCore).toMatchObject({
+      schema: "paperclip.native-execution-input.v4",
+      session: { driverKind: "aws_agentcore_harness_api" },
+      provider: {
+        kind: "aws_agentcore",
+        model: "global.anthropic.claude-sonnet-4-6",
+        agentCoreProfile: { profileId: "agentcore-development", eventExpiryDays: 90 },
+        maxEstimatedSessionCostUsd: 3,
+        invocationLimits: { maxIterations: 8, maxOutputTokens: 4096, timeoutSeconds: 300 },
+      },
+      runtimeContext: { aggregateDigest: common.runtimeContext.aggregateDigest },
+      credentialBindings: [],
+    });
+    expect(JSON.stringify([codex, opencode, acpx, claudeManaged, awsAgentCore]))
       .not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_SECRET_ACCESS_KEY|PAPERCLIP_API_KEY/);
   });
 

@@ -183,12 +183,52 @@ CI publishing is controlled by [`scripts/release-package-manifest.json`](../scri
 
 When you add a new public package:
 
-1. add it to the manifest and decide whether CI should publish it immediately
-2. if CI should publish it, reserve the name on npm with the placeholder bootstrap before merge
-3. if CI should not publish it yet, keep `"publishFromCi": false`
-4. only enable `"publishFromCi": true` after npm trusted publishing is configured for that package
+1. prepare its `package.json` as a public package and add it to the release manifest with `"publishFromCi": false`
+2. validate that its runtime workspace dependencies can be published on the same release train
+3. reserve the name on npm with the placeholder bootstrap before merge
+4. configure npm trusted publishing for the package
+5. only then enable `"publishFromCi": true` and run the release-registry checks
 
 PR CI now checks changed release-enabled package manifests against npm. That catches a missing first-publish bootstrap before the change reaches `master`. When a PR needs this bootstrap, commitperclip also posts an informational notice on the PR naming the exact command, so contributors know a maintainer action is pending rather than something they can fix.
+
+### Package readiness checklist
+
+Before bootstrapping a package name, make the package ready for the release graph:
+
+- `package.json` must not set `"private": true`.
+- Scoped packages must set `"publishConfig": { "access": "public" }` so the trusted-publishing workflow does not depend on a maintainer's local npm defaults.
+- Add the package to [`scripts/release-package-manifest.json`](../scripts/release-package-manifest.json) with `"publishFromCi": false` until the npm placeholder and trusted-publisher rule both exist.
+- Every `@paperclipai/*` `workspace:*` dependency in `dependencies`, `optionalDependencies`, or `peerDependencies` must also have `"publishFromCi": true`. Release builds rewrite those dependencies to the shared calver version; a disabled dependency would make the published package uninstallable.
+- Development-only workspace packages belong in `devDependencies` and must not be imported or re-exported by a public runtime entry point. A root `export *` can load a development-only module even when the consumer does not use that symbol.
+
+A minimal scoped package and its initial release-manifest entry look like:
+
+```json
+{
+  "name": "@paperclipai/new-package",
+  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}
+```
+
+```json
+{
+  "dir": "packages/new-package",
+  "name": "@paperclipai/new-package",
+  "publishFromCi": false
+}
+```
+
+Validate the package graph before the npm bootstrap:
+
+```bash
+node scripts/release-package-map.mjs check
+pnpm test:release-registry
+```
+
+If the package provides a clean-consumer or packed-install check, run that too. It catches entry points that work inside the monorepo only because an undeclared or development-only workspace package is available.
 
 ### One-time bootstrap sequence for a new package
 
@@ -241,6 +281,16 @@ After the placeholder publish succeeds:
 4. set workflow filename to `release.yml`
 5. optionally go to `Settings` → `Publishing access` and enable `Require two-factor authentication and disallow tokens`
 6. only then set `"publishFromCi": true` in [`scripts/release-package-manifest.json`](../scripts/release-package-manifest.json)
+
+After enabling CI publishing, verify both the registry bootstrap and the final release graph:
+
+```bash
+npm view @paperclipai/new-package version deprecated --json
+node scripts/release-package-map.mjs check
+pnpm test:release-registry
+```
+
+The npm query should show the deprecated `0.0.0` placeholder until the first real release. The release-package check must report no unpublished runtime workspace dependency edges. If the package has a clean-consumer check, rerun it with the package in its final public configuration.
 
 Once those steps are done, future canary and stable publishes for that package are automated through GitHub OIDC. The manual step only reserves the name on npm; every real version ships from CI.
 

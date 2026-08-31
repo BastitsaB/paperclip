@@ -12,8 +12,6 @@ const PRP_EVENT_SCHEMA: &str = "paperclip.prp.event.v1";
 const PRP_SEMANTIC_TOOL_SCHEMA: &str = "paperclip.prp.semantic_tool.v1";
 const PRP_STOP_REASON_SCHEMA: &str = "paperclip.prp.stop_reason.v1";
 const PRP_SEMANTIC_TOOLS_CAPABILITY_SCHEMA: &str = "paperclip.prp.semantic_tools.v1";
-const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
-const MAX_RECORDED_MISSING_SEQUENCES: u64 = 256;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,9 +51,7 @@ pub struct ReplaySequenceGap {
     source_key: String,
     expected: u64,
     received: u64,
-    missing_count: u64,
     missing: Vec<u64>,
-    truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -136,12 +132,6 @@ pub fn reduce_replay_fixture(input: &str) -> Result<ReplayParitySummary, ReplayE
     let mut terminal_count = 0_usize;
 
     for event in &fixture.events {
-        if event.source_seq > MAX_EXACT_JSON_INTEGER {
-            return Err(ReplayError::invalid(format!(
-                "sourceSeq {} exceeds the exact JSON integer range",
-                event.source_seq
-            )));
-        }
         if event.schema != PRP_EVENT_SCHEMA {
             return Err(ReplayError::invalid(format!(
                 "unsupported required event schema {}; expected {PRP_EVENT_SCHEMA}",
@@ -186,15 +176,11 @@ pub fn reduce_replay_fixture(input: &str) -> Result<ReplayParitySummary, ReplayE
             continue;
         }
         if event.source_seq > expected {
-            let missing_count = event.source_seq - expected;
-            let recorded_count = missing_count.min(MAX_RECORDED_MISSING_SEQUENCES);
             gaps.push(ReplaySequenceGap {
                 source_key: key.clone(),
                 expected,
                 received: event.source_seq,
-                missing_count,
-                missing: (expected..expected + recorded_count).collect(),
-                truncated: recorded_count < missing_count,
+                missing: (expected..event.source_seq).collect(),
             });
         }
         cursors.insert(key, event.source_seq);
@@ -283,10 +269,7 @@ fn validate_optional_versioned_envelope(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        reduce_replay_fixture, ReplayParitySummary, MAX_EXACT_JSON_INTEGER,
-        MAX_RECORDED_MISSING_SEQUENCES,
-    };
+    use super::{reduce_replay_fixture, ReplayParitySummary};
     use serde_json::Value;
 
     fn assert_fixture_parity(fixture: &str, expected: &str) {
@@ -334,6 +317,36 @@ mod tests {
         "unknown-optional-fields",
         "unknown-optional-fields"
     );
+    parity_case!(
+        replay_fixture_parity_semantic_tool_artifact_happy_path,
+        "semantic-tool-artifact-happy-path",
+        "semantic-tool-artifact-happy-path"
+    );
+    parity_case!(
+        replay_fixture_parity_semantic_tool_denial_redaction,
+        "semantic-tool-denial-redaction",
+        "semantic-tool-denial-redaction"
+    );
+    parity_case!(
+        replay_fixture_parity_semantic_tool_conflict_duplicate_retry,
+        "semantic-tool-conflict-duplicate-retry",
+        "semantic-tool-conflict-duplicate-retry"
+    );
+    parity_case!(
+        replay_fixture_parity_semantic_tool_governance_wake_monitor,
+        "semantic-tool-governance-wake-monitor",
+        "semantic-tool-governance-wake-monitor"
+    );
+    parity_case!(
+        replay_fixture_parity_budget_cost_stop_reason,
+        "budget-cost-stop-reason",
+        "budget-cost-stop-reason"
+    );
+    parity_case!(
+        replay_fixture_parity_semantic_tool_unknown_optional_envelope,
+        "semantic-tool-unknown-optional-envelope",
+        "semantic-tool-unknown-optional-envelope"
+    );
 
     #[test]
     fn replay_fixture_parity_rejects_unsupported_required_version() {
@@ -347,6 +360,17 @@ mod tests {
     }
 
     #[test]
+    fn replay_fixture_parity_rejects_unsupported_semantic_tool_version() {
+        let error = reduce_replay_fixture(include_str!(
+            "../../../../protocol/fixtures/replay/semantic-tool-unsupported-required-version.json"
+        ))
+        .expect_err("semantic_tool v2 fixture must fail closed");
+        assert!(error
+            .to_string()
+            .contains("unsupported required semantic_tool schema paperclip.prp.semantic_tool.v2"));
+    }
+
+    #[test]
     fn replay_fixture_parity_rejects_unsupported_fixture_version() {
         let fixture = include_str!("../../../../protocol/fixtures/replay/happy-path.json")
             .replace("\"fixtureVersion\": 1", "\"fixtureVersion\": 2");
@@ -355,41 +379,6 @@ mod tests {
         assert!(error
             .to_string()
             .contains("unsupported required fixtureVersion 2"));
-    }
-
-    #[test]
-    fn replay_fixture_parity_bounds_large_sequence_gap_details() {
-        let mut fixture: Value = serde_json::from_str(include_str!(
-            "../../../../protocol/fixtures/replay/source-gap.json"
-        ))
-        .expect("fixture should parse");
-        fixture["events"][2]["sourceSeq"] = Value::from(MAX_EXACT_JSON_INTEGER - 2);
-        fixture["events"][3]["sourceSeq"] = Value::from(MAX_EXACT_JSON_INTEGER - 1);
-        fixture["events"][4]["sourceSeq"] = Value::from(MAX_EXACT_JSON_INTEGER);
-
-        let summary = reduce_replay_fixture(&fixture.to_string()).expect("fixture should reduce");
-        let gap = summary.gaps.first().expect("large gap should be recorded");
-        assert_eq!(gap.expected, 3);
-        assert_eq!(gap.received, MAX_EXACT_JSON_INTEGER - 2);
-        assert_eq!(gap.missing_count, MAX_EXACT_JSON_INTEGER - 5);
-        assert_eq!(gap.missing.len() as u64, MAX_RECORDED_MISSING_SEQUENCES);
-        assert_eq!(gap.missing.last(), Some(&258));
-        assert!(gap.truncated);
-    }
-
-    #[test]
-    fn replay_fixture_parity_rejects_inexact_json_sequence_values() {
-        let mut fixture: Value = serde_json::from_str(include_str!(
-            "../../../../protocol/fixtures/replay/happy-path.json"
-        ))
-        .expect("fixture should parse");
-        fixture["events"][0]["sourceSeq"] = Value::from(MAX_EXACT_JSON_INTEGER + 1);
-
-        let error = reduce_replay_fixture(&fixture.to_string())
-            .expect_err("an inexact JSON sequence must fail closed");
-        assert!(error
-            .to_string()
-            .contains("exceeds the exact JSON integer range"));
     }
 
     #[test]

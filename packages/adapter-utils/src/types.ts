@@ -665,7 +665,7 @@ export interface CLIAdapterModule {
 
 export interface CreateConfigValues {
   adapterType: string;
-  paperclipRunnerProvider?: "codex" | "opencode" | "acpx";
+  paperclipRunnerProvider?: "codex" | "opencode" | "claude_managed" | "aws_agentcore" | "acpx";
   paperclipRunnerAcpxAgent?: "pi" | "claude" | "codex";
   codexPermissionMode?: "never" | "on-request" | "untrusted";
   opencodePermissionMode?: "allow" | "ask" | "deny";

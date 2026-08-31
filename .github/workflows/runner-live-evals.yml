@@ -1,0 +1,74 @@
+name: Runner Live Evals
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: runner-live-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live_matrix:
+    name: Balanced provider/model matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore compatible seven-day baseline
+        uses: actions/cache@v5
+        with:
+          path: packages/paperclip-runner/.paperclip-local/evals/workflows/history
+          key: runner-live-eval-history-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            runner-live-eval-history-${{ github.ref_name }}-
+
+      - name: Build provider-neutral eval kernel
+        run: pnpm --filter @paperclipai/paperclip-eval-kernel build
+
+      - name: Run trend-only live matrix
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PAPERCLIP_EVAL_BASELINE_READY: "true"
+          PAPERCLIP_EVAL_RUNNER_BUILD: ${{ github.sha }}
+          PAPERCLIP_EVAL_MAX_CAMPAIGN_COST_USD: "12"
+          PAPERCLIP_EVAL_SCHEDULE_SEED: runner-live-seven-day-v1
+        run: pnpm --filter @paperclipai/paperclip-runner report:runner-live-evals
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          summary=packages/paperclip-runner/.paperclip-local/evals/workflows/github-live-summary.md
+          if [ -f "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload safe live eval bundle
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runner-live-evals-${{ github.run_id }}
+          path: packages/paperclip-runner/.paperclip-local/evals/workflows/
+          retention-days: 30
+          if-no-files-found: error

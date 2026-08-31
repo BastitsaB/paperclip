@@ -887,11 +887,15 @@ function loadRunnerdDurableBinding(execution: NativeExecutionInput): {
 }
 
 function nativeSessionConfigDigest(execution: NativeExecutionInput): string {
-  const executionLocation = {
-    executionKind: "local_process",
-    workspaceId: execution.binding.executionWorkspaceId,
-    cwd: execution.workspace.cwd,
-  };
+  const executionLocation =
+    execution.provider.kind === "claude_managed" ||
+    execution.provider.kind === "aws_agentcore"
+      ? { executionKind: "remote_service", workspace: null }
+      : {
+          executionKind: "local_process",
+          workspaceId: execution.binding.executionWorkspaceId,
+          cwd: execution.workspace.cwd,
+        };
   return `sha256:${createHash("sha256")
     .update(
       JSON.stringify({
@@ -2940,15 +2944,20 @@ export async function executePaperclipNativeSession(input: {
     summary: native.result.summary,
     sessionId: native.normalizedSessionId,
     sessionDisplayId: native.providerSessionId ?? native.normalizedSessionId,
-    provider: input.execution.provider.kind === "opencode"
-      ? (input.execution.provider.model?.split("/", 1)[0] ?? "opencode")
-      : input.execution.provider.kind === "acpx"
-        ? input.execution.provider.agent === "pi"
-          ? "openrouter"
-          : input.execution.provider.agent === "claude"
-            ? "anthropic"
-            : "openai"
-        : "openai",
+    provider:
+      input.execution.provider.kind === "claude_managed"
+        ? "anthropic"
+        : input.execution.provider.kind === "aws_agentcore"
+          ? "amazon-bedrock"
+          : input.execution.provider.kind === "opencode"
+            ? (input.execution.provider.model?.split("/", 1)[0] ?? "opencode")
+            : input.execution.provider.kind === "acpx"
+              ? input.execution.provider.agent === "pi"
+                ? "openrouter"
+                : input.execution.provider.agent === "claude"
+                  ? "anthropic"
+                  : "openai"
+              : "openai",
     model: input.execution.provider.model,
     usage: normalizeNativeUsage(native.usage),
     costUsd: nativeUsageCostUsd(native.usage),
@@ -4992,9 +5001,13 @@ export function createRunnerdBackend(input: {
             ? "codex"
             : input.execution.provider.kind === "opencode"
               ? "opencode"
-              : input.execution.provider.kind === "acpx"
-                ? "acpx"
-                : undefined,
+              : input.execution.provider.kind === "claude_managed"
+                ? "claude_managed"
+                : input.execution.provider.kind === "aws_agentcore"
+                  ? "aws_agentcore"
+                  : input.execution.provider.kind === "acpx"
+                    ? "acpx"
+                    : undefined,
         ...(input.execution.provider.kind === "acpx"
           ? {
               acpxAgent: input.execution.provider.agent,
@@ -5010,6 +5023,32 @@ export function createRunnerdBackend(input: {
                     "paperclip-runner",
                     "acpx",
                   ),
+            }
+          : {}),
+        ...(input.execution.provider.kind === "claude_managed"
+          ? {
+              managedProfile: {
+                ...input.execution.provider.managedProfile,
+                maxSessionListCostUsd:
+                  input.execution.provider.maxSessionListCostUsd,
+                model: input.execution.provider.model,
+              },
+            }
+          : {}),
+        ...(input.execution.provider.kind === "aws_agentcore"
+          ? {
+              agentCoreProfile: {
+                ...input.execution.provider.agentCoreProfile,
+                maxEstimatedSessionCostUsd:
+                  input.execution.provider.maxEstimatedSessionCostUsd,
+                maxIterations:
+                  input.execution.provider.invocationLimits.maxIterations,
+                maxOutputTokens:
+                  input.execution.provider.invocationLimits.maxOutputTokens,
+                timeoutSeconds:
+                  input.execution.provider.invocationLimits.timeoutSeconds,
+                model: input.execution.provider.model,
+              },
             }
           : {}),
         ...(expectedProviderPackManifest && stagedRemoteProviderPackRoot

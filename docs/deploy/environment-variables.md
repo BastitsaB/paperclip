@@ -49,6 +49,9 @@ to `PAPERCLIP_RUNNER_REMOTE_BINARY_PATH` and
 OpenCode and ACPX instead fall back only to
 `PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH`; they never start a provider
 process on the Paperclip host for a remote target.
+The repository includes a fleet-compatible reference image at
+[`docker/daytona-runner/Dockerfile`](../../docker/daytona-runner/Dockerfile).
+
 The Daytona environment editor's **Configure image** action can create this
 image without a separate container registry: install the executables in its
 setup sandbox, finish setup, and Paperclip captures and promotes the resulting

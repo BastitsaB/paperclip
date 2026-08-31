@@ -427,22 +427,21 @@ export function readGitCommit(): string | null {
 }
 
 /**
- * Resolve the `service.version` span attribute. The order is:
- *   1. The build stamp — the commit the running server was built from.
- *   2. A runtime git lookup — covers `tsx src/index.ts` dev mode.
- *   3. The `OTEL_SERVICE_VERSION` environment variable.
+ * Resolve the operator-facing `service.version` span attribute. The order is:
+ *   1. The standard `OTEL_SERVICE_VERSION` environment variable.
+ *   2. The build stamp — the commit the running server was built from.
+ *   3. A runtime git lookup — covers `tsx src/index.ts` dev mode.
  *   4. "unknown".
- * The build stamp wins over the environment variable, so a stale
- * `OTEL_SERVICE_VERSION` cannot mask the true built commit. `OTEL_SERVICE_VERSION`
- * is a Paperclip-specific variable, not an OpenTelemetry SDK variable, so
- * Paperclip controls this precedence.
+ * The immutable build commit is exported separately as
+ * `paperclip.build.commit`, so an operator-provided release version never
+ * hides which checkout produced the process.
  */
 export function resolveServiceVersion(
   buildStamp: string | null,
   gitCommit: string | null,
   envVersion: string | undefined,
 ): string {
-  return buildStamp || gitCommit || envVersion || "unknown";
+  return envVersion || buildStamp || gitCommit || "unknown";
 }
 
 async function bootstrapOtel(endpoint: string): Promise<void> {
@@ -481,11 +480,14 @@ async function bootstrapOtel(endpoint: string): Promise<void> {
     const { resourceFromAttributes } = resources;
     const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = semconv;
 
+    const buildStamp = readBuildStamp();
+    const gitCommit = readGitCommit();
     const serviceVersion = resolveServiceVersion(
-      readBuildStamp(),
-      readGitCommit(),
+      buildStamp,
+      gitCommit,
       process.env.OTEL_SERVICE_VERSION,
     );
+    const buildCommit = buildStamp || gitCommit;
     // Log the resolved value once so an operator can confirm the built commit.
     // eslint-disable-next-line no-console
     console.log(`[paperclip] OpenTelemetry service.version=${serviceVersion}`);
@@ -494,6 +496,7 @@ async function bootstrapOtel(endpoint: string): Promise<void> {
       resource: resourceFromAttributes({
         [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME || "paperclip",
         [ATTR_SERVICE_VERSION]: serviceVersion,
+        ...(buildCommit ? { "paperclip.build.commit": buildCommit } : {}),
       }),
       // For the HTTP protocols OTEL_EXPORTER_OTLP_ENDPOINT is a *base* URL
       // and the exporter appends /v1/traces only when it reads the env var

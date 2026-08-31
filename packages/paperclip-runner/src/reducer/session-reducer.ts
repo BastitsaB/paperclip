@@ -36,12 +36,8 @@ export interface SequenceGap {
   sourceKey: string;
   expected: number;
   received: number;
-  missingCount: number;
   missing: number[];
-  truncated: boolean;
 }
-
-export const MAX_RECORDED_MISSING_SEQUENCES = 256;
 
 export interface SessionSnapshot {
   schema: "paperclip.prp.session-snapshot.v1";
@@ -90,9 +86,7 @@ function humanizeProtocolValue(value: string): string {
 }
 
 function sentenceCase(value: string): string {
-  return value.length === 0
-    ? value
-    : `${value[0]?.toUpperCase()}${value.slice(1)}`;
+  return value.length === 0 ? value : `${value[0]?.toUpperCase()}${value.slice(1)}`;
 }
 
 function requestSummary(type: string, prompt: string, action?: string): string {
@@ -149,9 +143,7 @@ function timelineSummary(snapshot: SessionSnapshot, event: PrpEvent): string {
     event.eventType === "runtime_request.cancelled"
   ) {
     const requestId = stringValue(payload.requestId);
-    const request = snapshot.requests.find(
-      (candidate) => candidate.requestId === requestId,
-    );
+    const request = snapshot.requests.find((candidate) => candidate.requestId === requestId);
     const action = sentenceCase(
       humanizeProtocolValue(event.eventType.split(".").at(-1) ?? "updated"),
     );
@@ -242,9 +234,7 @@ function applyProjection(snapshot: SessionSnapshot, event: PrpEvent): void {
       const requestId = stringValue(request.requestId);
       if (
         requestId.length > 0 &&
-        !snapshot.requests.some(
-          (candidate) => candidate.requestId === requestId,
-        )
+        !snapshot.requests.some((candidate) => candidate.requestId === requestId)
       ) {
         snapshot.requests.push({
           requestId,
@@ -260,9 +250,7 @@ function applyProjection(snapshot: SessionSnapshot, event: PrpEvent): void {
     case "runtime_request.expired":
     case "runtime_request.cancelled": {
       const requestId = stringValue(payload.requestId);
-      const request = snapshot.requests.find(
-        (candidate) => candidate.requestId === requestId,
-      );
+      const request = snapshot.requests.find((candidate) => candidate.requestId === requestId);
       if (request !== undefined) {
         request.status = event.eventType.split(".").at(-1) ?? request.status;
       }
@@ -280,34 +268,23 @@ function applyProjection(snapshot: SessionSnapshot, event: PrpEvent): void {
   }
 }
 
-function addGap(
-  snapshot: SessionSnapshot,
-  event: PrpEvent,
-  expected: number,
-): void {
+function addGap(snapshot: SessionSnapshot, event: PrpEvent, expected: number): void {
   const key = sourceKey(event);
   if (
     snapshot.gaps.some(
-      (gap) =>
-        gap.sourceKey === key &&
-        gap.expected === expected &&
-        gap.received === event.sourceSeq,
+      (gap) => gap.sourceKey === key && gap.expected === expected && gap.received === event.sourceSeq,
     )
   ) {
     return;
   }
-  const missingCount = event.sourceSeq - expected;
-  const recordedCount = Math.min(missingCount, MAX_RECORDED_MISSING_SEQUENCES);
   snapshot.gaps.push({
     sourceKey: key,
     expected,
     received: event.sourceSeq,
-    missingCount,
     missing: Array.from(
-      { length: recordedCount },
+      { length: event.sourceSeq - expected },
       (_, index) => expected + index,
     ),
-    truncated: recordedCount < missingCount,
   });
 }
 
@@ -425,9 +402,7 @@ export interface ReplayParitySummary {
   runTerminalState: string | null;
 }
 
-export function replayParitySummary(
-  snapshot: SessionSnapshot,
-): ReplayParitySummary {
+export function replayParitySummary(snapshot: SessionSnapshot): ReplayParitySummary {
   return {
     runId: snapshot.identity.runId,
     integrity: snapshot.integrity,

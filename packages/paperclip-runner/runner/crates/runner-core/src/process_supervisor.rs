@@ -15,6 +15,44 @@ use crate::local_runner::LocalRunnerError;
 
 const PROCESS_OUTPUT_QUEUE_CAPACITY: usize = 256;
 
+const SUPERVISED_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "WINDIR",
+    "HOME",
+    "USERPROFILE",
+    "CODEX_HOME",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "SSL_CERT_DIR",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET",
+    "PAPERCLIP_OPENCODE_COMMAND",
+    "PAPERCLIP_OPENCODE_RUNTIME_DIR",
+    "PAPERCLIP_RUNNER_INSTANCE_ID",
+    "PAPERCLIP_RUN_ID",
+    "PAPERCLIP_NORMALIZED_SESSION_ID",
+    "PAPERCLIP_NATIVE_MCP_NAME",
+    "PAPERCLIP_NATIVE_MCP_URL",
+    "PAPERCLIP_NATIVE_MCP_TOKEN",
+    "PAPERCLIP_NATIVE_RUNTIME_CONTEXT_PATH",
+];
+
 pub(crate) enum ProcessOutput {
     Stdout(String),
     Stderr(String),
@@ -209,20 +247,7 @@ impl SupervisedProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for key in [
-            "PATH",
-            "PATHEXT",
-            "SystemRoot",
-            "WINDIR",
-            "HOME",
-            "USERPROFILE",
-            "LANG",
-            "LC_ALL",
-            "TMPDIR",
-            "TEMP",
-            "TMP",
-            "TZ",
-        ] {
+        for &key in SUPERVISED_ENV_KEYS {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }
@@ -409,6 +434,34 @@ fn exit_fact(status: ExitStatus) -> ProcessExitFact {
             exit_code: status.code(),
             success: status.success(),
             signal: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SUPERVISED_ENV_KEYS;
+
+    #[test]
+    fn supervised_environment_allows_every_qualified_provider_credential() {
+        for credential in [
+            "OPENROUTER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+            "PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET",
+        ] {
+            assert!(
+                SUPERVISED_ENV_KEYS.contains(&credential),
+                "provider credential {credential} must reach the supervised adapter"
+            );
+        }
+        for forbidden in ["PAPERCLIP_API_KEY", "DATABASE_URL", "AWS_SECRET_ACCESS_KEY"] {
+            assert!(
+                !SUPERVISED_ENV_KEYS.contains(&forbidden),
+                "control-plane credential {forbidden} must not reach the supervised adapter"
+            );
         }
     }
 }

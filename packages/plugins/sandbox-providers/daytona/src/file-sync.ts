@@ -552,7 +552,7 @@ async function removeSandboxScratch(
  * The promote script's own cleanup (`rm -f ... || true`) already  tried once.
  * It never fails the sync when that cleanup fails, because a completed and
  * safely promoted target must never read back as a failure.
- * 
+ *
  * This function does not touch the promote script or its fail-closed guards.
  * It runs one separate, later sandbox command that retries the removal, then
  * reports how many names are still present. This makes a leftover that

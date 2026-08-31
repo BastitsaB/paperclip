@@ -183,4 +183,29 @@ describe("buildPaperclipRunnerConfig", () => {
       acpxPermissionMode: "approve-reads",
     });
   });
+
+  it("persists managed-provider defaults that are displayed by the custom form", () => {
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      paperclipRunnerProvider: "claude_managed",
+      adapterSchemaValues: { managedProfileId: "profile-1" },
+    }))).toMatchObject({
+      provider: "claude_managed",
+      managedProfileId: "profile-1",
+      maxSessionListCostUsd: 1,
+      managedAgentsRetentionAcknowledged: false,
+    });
+
+    expect(buildPaperclipRunnerConfig(makeValues({
+      adapterType: "paperclip_runner",
+      paperclipRunnerProvider: "aws_agentcore",
+      adapterSchemaValues: { agentCoreProfileId: "profile-2" },
+    }))).toMatchObject({
+      provider: "aws_agentcore",
+      agentCoreProfileId: "profile-2",
+      maxEstimatedSessionCostUsd: 1,
+      qualificationRevision: "aws-agentcore-harness-v1",
+      agentCoreRetentionAcknowledged: false,
+    });
+  });
 });

@@ -13,8 +13,14 @@ packages:
   - ui
   - cli
 
-# Keep in sync with package.json#pnpm.patchedDependencies. Newer pnpm
-# versions read patch configuration only from the workspace manifest.
+# Keep in sync with package.json#pnpm.overrides while packageManager pins pnpm 9.
+# Newer pnpm versions read override and patch configuration only from the
+# workspace manifest.
+overrides:
+  rollup: ">=4.59.0"
+  react: ^19.2.8
+  react-dom: ^19.2.8
+
 patchedDependencies:
   embedded-postgres@18.1.0-beta.16: patches/embedded-postgres@18.1.0-beta.16.patch
   acpx@0.12.0: patches/acpx@0.12.0.patch

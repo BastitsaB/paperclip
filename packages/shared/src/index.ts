@@ -1,4 +1,7 @@
-export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
+export {
+  agentAdapterTypeSchema,
+  optionalAgentAdapterTypeSchema,
+} from "./adapter-type.js";
 export { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./adapter-auth-check-code.js";
 export {
   CONNECTION_INTENT_AGENT_GUIDANCE,
@@ -320,7 +323,11 @@ export {
   SELF_SERVE_MCP_RESEARCH,
 } from "./self-serve-mcp-research.js";
 export * from "./validators/status-card.js";
-export { appDefinitionSchema, appDefinitionsSchema, connectionMethodDefSchema } from "./validators/app-definition.js";
+export {
+  appDefinitionSchema,
+  appDefinitionsSchema,
+  connectionMethodDefSchema,
+} from "./validators/app-definition.js";
 export {
   humanizeConnectionDisplayName,
   connectionDisplaySecondaryHint,
@@ -1749,8 +1756,11 @@ export {
   SMOKE_RUN_TRIGGERS,
 } from "./types/smoke-lab.js";
 
-export type { ServerGitInfo, ServerGitLocalChanges, ServerInfoSnapshot } from "./types/server-info.js";
-
+export type {
+  ServerGitInfo,
+  ServerGitLocalChanges,
+  ServerInfoSnapshot,
+} from "./types/server-info.js";
 export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
@@ -2470,8 +2480,16 @@ export {
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";
-export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
-export { deriveProjectUrlKey, normalizeProjectUrlKey, hasNonAsciiContent } from "./project-url-key.js";
+export {
+  normalizeAgentUrlKey,
+  deriveAgentUrlKey,
+  isUuidLike,
+} from "./agent-url-key.js";
+export {
+  deriveProjectUrlKey,
+  normalizeProjectUrlKey,
+  hasNonAsciiContent,
+} from "./project-url-key.js";
 export {
   AGENT_MENTION_SCHEME,
   PROJECT_MENTION_SCHEME,

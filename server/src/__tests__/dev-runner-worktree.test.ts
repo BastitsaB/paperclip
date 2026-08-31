@@ -25,6 +25,24 @@ function createTempRoot(prefix: string): string {
 }
 
 describe("dev-runner worktree env bootstrap", () => {
+  it("loads the repository .env before spawning a non-worktree dev server", () => {
+    const root = createTempRoot("paperclip-dev-runner-root-env-");
+    fs.writeFileSync(
+      path.join(root, ".env"),
+      "OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test\n",
+      "utf8",
+    );
+    const env: NodeJS.ProcessEnv = {};
+
+    expect(bootstrapDevRunnerWorktreeEnv(root, env)).toEqual({
+      envPath: null,
+      missingEnv: false,
+    });
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe(
+      "https://collector.example.test",
+    );
+  });
+
   it("guards seed-pending worktrees until a seed-complete marker exists", () => {
     const root = createTempRoot("paperclip-dev-runner-seed-pending-");
     fs.mkdirSync(path.join(root, ".paperclip"), { recursive: true });
@@ -103,6 +121,31 @@ describe("dev-runner worktree env bootstrap", () => {
     expect(env.PAPERCLIP_INSTANCE_ID).toBe("already-set");
     expect(env.PAPERCLIP_IN_WORKTREE).toBe("true");
     expect(env.PAPERCLIP_OPTIONAL).toBe("");
+  });
+
+  it("loads repository observability settings after worktree identity settings", () => {
+    const root = createTempRoot("paperclip-dev-runner-combined-env-");
+    fs.mkdirSync(path.join(root, ".paperclip"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git"), "gitdir: /tmp/paperclip/.git/worktrees/feature\n", "utf8");
+    fs.writeFileSync(
+      resolveWorktreeEnvFilePath(root),
+      "PAPERCLIP_INSTANCE_ID=feature-worktree\nOTEL_SERVICE_NAME=worktree-paperclip\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".env"),
+      "OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test\nOTEL_SERVICE_NAME=root-paperclip\n",
+      "utf8",
+    );
+    const env: NodeJS.ProcessEnv = {};
+
+    bootstrapDevRunnerWorktreeEnv(root, env);
+
+    expect(env.PAPERCLIP_INSTANCE_ID).toBe("feature-worktree");
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe(
+      "https://collector.example.test",
+    );
+    expect(env.OTEL_SERVICE_NAME).toBe("worktree-paperclip");
   });
 
   it("repairs stale migrated config paths before loading worktree env", () => {

@@ -130,6 +130,22 @@ export function buildPaperclipRunnerConfig(v: CreateConfigValues): Record<string
     opencodePermissionMode,
     acpxPermissionMode,
     ...(provider === "acpx" ? { acpxAgent, model: v.model || acpxModel } : {}),
+    ...(provider === "claude_managed"
+      ? {
+          maxSessionListCostUsd: schemaValues.maxSessionListCostUsd ?? 1,
+          managedAgentsRetentionAcknowledged:
+            schemaValues.managedAgentsRetentionAcknowledged ?? false,
+        }
+      : {}),
+    ...(provider === "aws_agentcore"
+      ? {
+          maxEstimatedSessionCostUsd: schemaValues.maxEstimatedSessionCostUsd ?? 1,
+          qualificationRevision:
+            schemaValues.qualificationRevision ?? "aws-agentcore-harness-v1",
+          agentCoreRetentionAcknowledged:
+            schemaValues.agentCoreRetentionAcknowledged ?? false,
+        }
+      : {}),
     lifecycleMode,
     ...(lifecycleMode === "warm" ? { idleTimeoutMs } : {}),
     ...(provider === "opencode" && !v.model

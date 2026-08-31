@@ -44,12 +44,40 @@ export function buildNativeExecutionInput(input: {
     branchName: string | null;
   };
   normalizedSessionId: string | null;
-  provider?: "codex" | "opencode" | "acpx";
+  provider?: "codex" | "opencode" | "claude_managed" | "aws_agentcore" | "acpx";
   acpxAgent?: NativeAcpxAgent;
   codexApprovalPolicy?: NativeCodexApprovalPolicy;
   opencodePermissionMode?: NativeOpenCodePermissionMode;
   acpxPermissionMode?: NativeAcpxPermissionMode;
   model?: string | null;
+  managedProfile?: {
+    profileId: string;
+    anthropicAgentId: string;
+    agentVersion: string;
+    environmentId: string;
+    betaVersion: "managed-agents-2026-04-01";
+  };
+  maxSessionListCostUsd?: number;
+  agentCoreProfile?: {
+    profileId: string;
+    region: string;
+    accountId: string;
+    harnessArn: string;
+    harnessVersion: string;
+    endpointArn: string;
+    endpointQualifier: string;
+    agentRuntimeArn: string;
+    memoryArn: string;
+    memoryId: string;
+    invocationRoleArn: string;
+    contextBucket: string;
+    contextPrefix: string;
+    contextKmsKeyArn: string;
+    qualificationRevision: string;
+    eventExpiryDays: 90;
+  };
+  maxEstimatedSessionCostUsd?: number;
+  invocationLimits?: { maxIterations: number; maxOutputTokens: number; timeoutSeconds: number };
   lifecyclePolicy?: NativeExecutionInputV4["session"]["lifecyclePolicy"];
   executionMode?: "default" | "plan";
   planningContext?: NativePlanningContext | null;
@@ -108,42 +136,61 @@ export function buildNativeExecutionInput(input: {
       normalizedSessionId: input.normalizedSessionId,
       driverKind: input.provider === "opencode"
         ? "opencode_server"
-        : input.provider === "acpx"
-          ? "acpx_runtime"
+        : input.provider === "claude_managed"
+          ? "claude_managed_agents_api"
+          : input.provider === "aws_agentcore"
+            ? "aws_agentcore_harness_api"
+          : input.provider === "acpx"
+            ? "acpx_runtime"
           : "codex_app_server",
       protocolVersion: 1,
       lifecyclePolicy: input.lifecyclePolicy ?? { mode: "per_turn", idleTimeoutMs: null },
     },
-    provider: input.provider === "acpx"
+    provider: input.provider === "claude_managed"
       ? {
-          kind: "acpx",
-          agent: acpxProfile!.agent,
+          kind: "claude_managed",
           model: input.model,
-          permissionMode: input.acpxPermissionMode ?? "approve-all",
-          profile: {
-            driverKind: acpxProfile!.driverKind,
-            protocolVersion: acpxProfile!.protocolVersion,
-            acpxVersion: acpxProfile!.acpxVersion,
-            agent: acpxProfile!.agent,
-            agentProfileVersion: acpxProfile!.agentProfileVersion,
-            agentServerPackage: acpxProfile!.agentServerPackage,
-            agentServerVersion: acpxProfile!.agentServerVersion,
-            agentRuntimePackage: acpxProfile!.agentRuntimePackage,
-            agentRuntimeVersion: acpxProfile!.agentRuntimeVersion,
-            commandDigest: acpxProfile!.commandDigest,
-          },
+          managedProfile: input.managedProfile,
+          maxSessionListCostUsd: input.maxSessionListCostUsd,
         }
-      : input.provider === "opencode"
+      : input.provider === "aws_agentcore"
         ? {
-            kind: "opencode",
+            kind: "aws_agentcore",
             model: input.model,
-            permissionMode: input.opencodePermissionMode ?? "allow",
+            agentCoreProfile: input.agentCoreProfile,
+            maxEstimatedSessionCostUsd: input.maxEstimatedSessionCostUsd,
+            invocationLimits: input.invocationLimits,
           }
-        : {
-            kind: "codex",
-            model: input.model ?? null,
-            approvalPolicy: input.codexApprovalPolicy ?? "never",
-          },
+      : input.provider === "acpx"
+        ? {
+            kind: "acpx",
+            agent: acpxProfile!.agent,
+            model: input.model,
+            permissionMode: input.acpxPermissionMode ?? "approve-all",
+            profile: {
+              driverKind: acpxProfile!.driverKind,
+              protocolVersion: acpxProfile!.protocolVersion,
+              acpxVersion: acpxProfile!.acpxVersion,
+              agent: acpxProfile!.agent,
+              agentProfileVersion: acpxProfile!.agentProfileVersion,
+              agentServerPackage: acpxProfile!.agentServerPackage,
+              agentServerVersion: acpxProfile!.agentServerVersion,
+              agentRuntimePackage: acpxProfile!.agentRuntimePackage,
+              agentRuntimeVersion: acpxProfile!.agentRuntimeVersion,
+              commandDigest: acpxProfile!.commandDigest,
+            },
+          }
+        : input.provider === "opencode"
+          ? {
+              kind: "opencode",
+              model: input.model,
+              permissionMode: input.opencodePermissionMode ?? "allow",
+            }
+          : {
+              kind: "codex",
+              model: input.model ?? null,
+              approvalPolicy: input.codexApprovalPolicy ?? "never",
+            },
     completionContract: input.completionContract,
     interactionResponses: input.interactionResponses ?? [],
     credentialBindings: [],

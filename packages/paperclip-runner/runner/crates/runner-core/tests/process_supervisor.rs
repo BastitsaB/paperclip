@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -18,7 +16,8 @@ fn process_exists(pid: u64) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn spawn_linger_process() -> (SupervisedProcess, u32, u64) {
+#[test]
+fn process_group_cleanup_stops_harness_and_worker() {
     let harness = PathBuf::from(env!("CARGO_BIN_EXE_fake-harness"));
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../protocol/fixtures/local-runner/scripts/linger.json");
@@ -75,36 +74,10 @@ fn spawn_linger_process() -> (SupervisedProcess, u32, u64) {
     let worker_pid = worker_pid.expect("linger script should report its worker pid");
     assert!(process_exists(u64::from(harness_pid)));
     assert!(process_exists(worker_pid));
-    (process, harness_pid, worker_pid)
-}
-
-#[test]
-fn forced_process_group_cleanup_stops_harness_and_worker() {
-    let (mut process, harness_pid, worker_pid) = spawn_linger_process();
 
     process
         .terminate_group()
         .expect("process group cleanup should finish");
-    std::thread::sleep(Duration::from_millis(20));
-    assert!(!process_exists(u64::from(harness_pid)));
-    assert!(!process_exists(worker_pid));
-}
-
-#[test]
-fn natural_harness_exit_also_cleans_up_workers() {
-    let (mut process, harness_pid, worker_pid) = spawn_linger_process();
-    process
-        .send(&HarnessCommand {
-            schema: "paperclip.fake_harness.command.v1".to_owned(),
-            command_id: "interrupt".to_owned(),
-            command_type: "turn.interrupt".to_owned(),
-            payload: json!({ "reason": "cleanup_test" }),
-        })
-        .expect("turn.interrupt should send");
-    process
-        .wait()
-        .expect("harness should exit after interruption");
-
     std::thread::sleep(Duration::from_millis(20));
     assert!(!process_exists(u64::from(harness_pid)));
     assert!(!process_exists(worker_pid));

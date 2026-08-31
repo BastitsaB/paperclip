@@ -2,9 +2,7 @@ export { decisionEffectTargetIssueIds } from "./decision.js";
 export {
   NATIVE_FINALIZATION_SCHEMA,
   type NativeFinalizationResult,
-  type NativeFinalizationResultV1,
   type NativeReportedWorkDisposition,
-  type NativeRuntimeMode,
   type NativeRunTerminalState,
 } from "./native-finalization.js";
 export type {
@@ -355,7 +353,15 @@ export type {
   DocumentTextRange,
   UpdateDocumentAnnotationThreadRequest,
 } from "./document-annotation.js";
-export type { Project, ProjectBudgetSummary, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectManagedByPlugin, ProjectWorkspace } from "./project.js";
+export type {
+  Project,
+  ProjectBudgetSummary,
+  ProjectCodebase,
+  ProjectCodebaseOrigin,
+  ProjectGoalRef,
+  ProjectManagedByPlugin,
+  ProjectWorkspace,
+} from "./project.js";
 export type {
   CompanySearchCountType,
   CompanySearchExtractIssueResult,
@@ -874,8 +880,23 @@ export type {
   RoutineExecutionIssueOrigin,
   RoutineListItem,
 } from "./routine.js";
-export type { CostEvent, CostSummary, IssueCostSummary, CostByAgent, CostByProviderModel, CostByBiller, CostByAgentModel, CostWindowSpendRow, CostByProject } from "./cost.js";
-export type { FinanceEvent, FinanceSummary, FinanceByBiller, FinanceByKind } from "./finance.js";
+export type {
+  CostEvent,
+  CostSummary,
+  IssueCostSummary,
+  CostByAgent,
+  CostByProviderModel,
+  CostByBiller,
+  CostByAgentModel,
+  CostWindowSpendRow,
+  CostByProject,
+} from "./cost.js";
+export type {
+  FinanceEvent,
+  FinanceSummary,
+  FinanceByBiller,
+  FinanceByKind,
+} from "./finance.js";
 export type {
   AgentWakeupResponse,
   AgentWakeupSkipped,

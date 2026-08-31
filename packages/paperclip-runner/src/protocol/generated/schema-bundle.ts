@@ -3231,8 +3231,7 @@ export const eventSchema = {
     },
     "sourceSeq": {
       "type": "integer",
-      "minimum": 1,
-      "maximum": 9007199254740991
+      "minimum": 1
     },
     "sourceInstanceId": {
       "type": "string",

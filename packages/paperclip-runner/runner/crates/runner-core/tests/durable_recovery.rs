@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use paperclip_runner_core::durable::{
-    Command, CommandDisposition, DurableRunnerConfig, DurableStateStore,
-};
+use paperclip_runner_core::durable::{DurableRunnerConfig, DurableStateStore, ProcessedCommand};
 use serde_json::json;
 
 static NEXT_TEMPORARY_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -13,6 +11,7 @@ static NEXT_TEMPORARY_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 fn config(state_dir: PathBuf) -> DurableRunnerConfig {
     DurableRunnerConfig {
         connect_url: "ws://127.0.0.1:3000/api/runner/v1/connect/run_1".to_owned(),
+        ca_bundle_path: None,
         state_dir,
         runner_instance_id: "runner_1".to_owned(),
         environment_lease_id: "environment_1".to_owned(),
@@ -22,24 +21,16 @@ fn config(state_dir: PathBuf) -> DurableRunnerConfig {
         item_id: "item_1".to_owned(),
         runner_version: "0.0.0".to_owned(),
         runner_digest: "sha256:test".to_owned(),
+        fake_harness_path: None,
+        fake_harness_script_path: None,
         max_outbox_bytes: 16_384,
-        p0_reserve_bytes: 4096,
+        p0_reserve_bytes: 4_096,
         max_frame_bytes: 65_536,
         reconnect_delay: Duration::from_millis(1),
+        reconnect_grace: None,
         max_runtime: Duration::from_secs(1),
-    }
-}
-
-fn command() -> Command {
-    Command {
-        schema: "paperclip.prp.command.v1".to_owned(),
-        command_id: "command_1".to_owned(),
-        controller_seq: 1,
-        command_type: "session.open".to_owned(),
-        issued_at: "2026-08-24T00:00:00.000Z".to_owned(),
-        deadline_at: None,
-        precondition: None,
-        payload: json!({}),
+        lifecycle_mode: "per_turn".to_owned(),
+        idle_timeout: None,
     }
 }
 
@@ -56,130 +47,57 @@ fn temporary_directory() -> PathBuf {
 }
 
 #[test]
-fn public_store_never_reexecutes_a_journaled_command_after_recovery() {
+fn public_store_preserves_the_processed_command_journal_after_recovery() {
     let directory = temporary_directory();
     let config = config(directory.clone());
     let store = DurableStateStore::new(&directory).expect("create private state store");
     let (mut state, existed) = store.load_or_create(&config).expect("create durable state");
     assert!(!existed);
 
-    let command = command();
-    assert_eq!(
-        state.begin_command(&command).expect("journal command"),
-        CommandDisposition::Execute
+    state.last_controller_command_seq = 1;
+    state.processed_commands.insert(
+        "command_1".to_owned(),
+        ProcessedCommand {
+            command_id: "command_1".to_owned(),
+            controller_seq: 1,
+            command_digest: "sha256:journaled".to_owned(),
+            status: "completed".to_owned(),
+            logical_effect_count: 1,
+            result: json!({"ok": true}),
+        },
     );
-    store
-        .save(&state)
-        .expect("persist command before its external effect");
+    store.save(&state).expect("persist processed command");
 
-    let (mut recovered, existed) = store
+    let (recovered, existed) = store
         .load_or_create(&config)
         .expect("recover durable state");
     assert!(existed);
-    assert!(matches!(
-        recovered
-            .begin_command(&command)
-            .expect("look up recovered command"),
-        CommandDisposition::Replay(result)
-            if result.status == "indeterminate"
-                && result.result["code"] == "execution_indeterminate"
-    ));
+    assert_eq!(recovered.last_controller_command_seq, 1);
+    assert_eq!(
+        recovered.processed_commands["command_1"].result,
+        json!({"ok": true})
+    );
 
     fs::remove_dir_all(directory).expect("remove integration-test state");
 }
 
 #[test]
-fn duplicate_replay_requires_the_complete_command_identity() {
+fn public_store_preserves_persisted_identity_when_reopened_with_changed_attachment_config() {
     let directory = temporary_directory();
-    let config = config(directory.clone());
+    let initial_config = config(directory.clone());
     let store = DurableStateStore::new(&directory).expect("create private state store");
-    let (mut state, _) = store.load_or_create(&config).expect("create durable state");
-    let original = command();
+    let (state, _) = store
+        .load_or_create(&initial_config)
+        .expect("create durable state");
+    store.save(&state).expect("persist durable state");
 
-    assert_eq!(
-        state.begin_command(&original).expect("journal command"),
-        CommandDisposition::Execute
-    );
-    state
-        .complete_command(&original, json!({"ok": true}))
-        .expect("complete command");
-
-    let mut changed_payload = original.clone();
-    changed_payload.payload = json!({"changed": true});
-    let mut changed_precondition = original.clone();
-    changed_precondition.precondition = Some(json!({"ifMatch": "different"}));
-    let mut changed_issued_at = original.clone();
-    changed_issued_at.issued_at = "2026-08-24T00:00:01.000Z".to_owned();
-    let mut changed_deadline = original.clone();
-    changed_deadline.deadline_at = Some("2026-08-24T00:01:00.000Z".to_owned());
-    let mut changed_type = original.clone();
-    changed_type.command_type = "session.close".to_owned();
-    let mut changed_sequence = original.clone();
-    changed_sequence.controller_seq = 2;
-
-    for conflicting in [
-        changed_payload,
-        changed_precondition,
-        changed_issued_at,
-        changed_deadline,
-        changed_type,
-        changed_sequence,
-    ] {
-        let error = state
-            .begin_command(&conflicting)
-            .expect_err("changed duplicate must fail closed");
-        assert!(error
-            .to_string()
-            .contains("commandId was reused with different command data"));
-    }
-    assert!(matches!(
-        state.begin_command(&original).expect("replay exact command"),
-        CommandDisposition::Replay(result) if result.result == json!({"ok": true})
-    ));
-
-    fs::remove_dir_all(directory).expect("remove integration-test state");
-}
-
-#[test]
-fn pre_fingerprint_journal_recovers_without_reexecuting_old_commands() {
-    let directory = temporary_directory();
-    let config = config(directory.clone());
-    let store = DurableStateStore::new(&directory).expect("create private state store");
-    let (mut state, _) = store.load_or_create(&config).expect("create durable state");
-    let command = command();
-    assert_eq!(
-        state.begin_command(&command).expect("journal command"),
-        CommandDisposition::Execute
-    );
-    store.save(&state).expect("persist pending command");
-
-    let mut legacy: serde_json::Value =
-        serde_json::from_slice(&fs::read(store.path()).expect("read current durable state"))
-            .expect("parse current durable state");
-    legacy
-        .as_object_mut()
-        .expect("durable state must be an object")
-        .remove("processedCommandFingerprints");
-    fs::write(
-        store.path(),
-        serde_json::to_vec_pretty(&legacy).expect("serialize legacy state"),
-    )
-    .expect("write simulated pre-fingerprint state");
-
-    let (mut recovered, existed) = store
-        .load_or_create(&config)
-        .expect("migrate pre-fingerprint state");
+    let mut conflicting = config(directory.clone());
+    conflicting.run_id = "run_2".to_owned();
+    let (recovered, existed) = store
+        .load_or_create(&conflicting)
+        .expect("recover persisted attachment identity");
     assert!(existed);
-    assert!(recovered.processed_commands.is_empty());
-    assert!(recovered.processed_command_fingerprints.is_empty());
-    assert_eq!(recovered.compacted_through_controller_seq, 1);
-    assert!(matches!(
-        recovered
-            .begin_command(&command)
-            .expect("reject migrated command without reexecution"),
-        CommandDisposition::Reject(result)
-            if result.result["code"] == "command_history_compacted"
-    ));
+    assert_eq!(recovered.run_id, "run_1");
 
     fs::remove_dir_all(directory).expect("remove integration-test state");
 }

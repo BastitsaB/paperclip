@@ -30,13 +30,17 @@ For the **mechanics** of recording a plan (issue document with key `plan`, comme
 - **Write review tasks for the reviewer's boundary.** A review/QA task must tell the delegate to post findings on **their own review issue** and mark it `done` — the verdict is the deliverable, and adverse findings are still `done`, not `blocked`. Never instruct a delegate to comment on the parent issue (low-trust reviewers are guaranteed a 403 there), and make the description self-contained since the reviewer may not be able to read your issue. Wire the dependent issue's `blockedByIssueIds` to the review issue so the verdict wakes the right owner.
 - **Enough is enough.** Plans exist to unblock execution, not replace it. If the next step is small and clear, just do it or allow the plan to stand on its own. Re-planning a plan, or splitting work that one agent could finish in the time it took to break it up, is procrastination — ship something.
 
-## When converting an accepted plan into tasks
+## When executing an accepted plan
 
-Start from one end-to-end task and add issues only for the qualifying boundaries above. Before creating tasks, write a compact task matrix with each proposed task, owner, initial status, blockers, and the specific qualifying reason it must be separate. Any task that can start immediately should say why it has no blockers; otherwise set it to `blocked` and include the prerequisite issue IDs in `blockedByIssueIds`. Do not rely on `parentId`, child ordering, phase labels, or prose to block execution.
+Acceptance authorizes the exact accepted revision; it does not require a new issue. Continue implementation on the current issue by default. Add child issues only for the qualifying boundaries above, and create the minimum graph that makes those boundaries explicit.
+
+Before creating any child issues, write a compact task matrix with each proposed task, owner, initial status, blockers, and the specific qualifying reason it must be separate. Create prerequisite children first so their IDs can be passed in `blockedByIssueIds` when dependent children are created. Any task that can start immediately should say why it has no blockers; otherwise set it to `blocked` and include the prerequisite issue IDs. Do not rely on `parentId`, child ordering, phase labels, or prose to block execution.
 
 Run a merge-back pass before publishing or creating the graph. Require every proposed subtask to name at least one qualifying reason from this skill. If it cannot, merge it into its parent or an adjacent task and preserve the work as an internal step, checklist item, or acceptance criterion. Repeat until every remaining issue has a real ownership, scheduling, lifecycle, or governance reason to exist.
 
-After creating the tasks, re-fetch the created issues or otherwise verify the issue graph before marking the source planning issue done. Confirm that every separate issue still has its qualifying reason, each dependent task has the expected `blockedByIssueIds`, each independent task has an explicit "can start now" reason, review tasks respect the reviewer's write boundary, and the parent/child hierarchy is only being used for traceability. If the graph contains an unjustified split or expected blockers are missing, correct it or report the mismatch and leave the planning issue in `in_review` or `blocked` until the graph is fixed.
+After creating tasks, re-fetch them or otherwise verify the issue graph. Confirm that every separate issue still has its qualifying reason, each dependent task has the expected `blockedByIssueIds`, each independent task has an explicit "can start now" reason, review tasks respect the reviewer's write boundary, and the parent/child hierarchy is only being used for traceability. Never block the source merely because children exist; add child blockers to the source only when it genuinely waits for their results.
+
+If the source retains implementation, integration, or verification responsibility, keep it open and resume it after required children finish. If the original issue's sole deliverable was planning and all remaining work is fully delegated, verify the graph and then finish the source. If no qualifying split exists, implement and finish on the source issue.
 
 ## Quick checklist before you publish a plan
 
@@ -49,7 +53,7 @@ After creating the tasks, re-fetch the created issues or otherwise verify the is
 - [ ] Independently owned review, QA, and governed approval tasks respect the reviewer's boundary.
 - [ ] A compact task matrix names planned task, owner, initial status, blockers, and qualifying reason.
 - [ ] Tasks without blockers have an explicit reason they can start immediately.
-- [ ] Created issues were re-fetched or otherwise verified before closing the source planning issue.
+- [ ] Created issues were re-fetched or otherwise verified before changing the source issue's lifecycle.
 - [ ] Qualifying independent branches can start in parallel.
 - [ ] Gaps (missing skills, hires, decisions, external inputs) are surfaced, not hidden.
 

@@ -2,7 +2,8 @@
 // Kicks off the OTel bootstrap as early as possible (no-op unless
 // OTEL_EXPORTER_OTLP_ENDPOINT is set). startServer() awaits
 // instrumentationReady before opening DB connections or constructing the
-// HTTP server, so trace coverage does not depend on incidental timing.
+// HTTP server, so provider and application trace coverage does not depend on
+// incidental bootstrap timing.
 import { instrumentationReady, shutdownInstrumentation } from "./instrumentation.js";
 import { sentryReady, shutdownSentry, captureException } from "./sentry.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -884,7 +885,6 @@ export async function startServer(): Promise<StartedServer> {
       return { userId: actor.userId, companyIds: actor.companyIds };
     },
   });
-
   try {
     const result = await workspaceOperationService(db as any)
       .reconcileStaleRuntimeControlOperations();

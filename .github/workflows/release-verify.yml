@@ -9,6 +9,12 @@ on:
         type: string
 
 jobs:
+  runner_chaos_evals:
+    name: Pre-release Runner chaos evals
+    uses: ./.github/workflows/runner-chaos-evals.yml
+    with:
+      ref: ${{ inputs.ref }}
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
@@ -154,6 +160,47 @@ jobs:
 
       - name: Run serialized server test shard
         run: pnpm test:run:serialized -- --shard-index ${{ matrix.shard_index }} --shard-count ${{ matrix.shard_count }}
+
+  runner_workflow_evals:
+    name: Runner workflow evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Run deterministic Runner workflow gate
+        run: |
+          pnpm test:runner-workflow-evals
+          pnpm report:runner-workflow-evals
+
+      - name: Upload Runner workflow report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runner-workflow-evals-${{ github.run_id }}
+          path: packages/paperclip-runner/.paperclip-local/evals/workflows/
+          retention-days: 30
+          if-no-files-found: error
 
   build:
     name: Build

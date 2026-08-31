@@ -36,26 +36,21 @@ describe("Paperclip Runner permission configuration", () => {
   });
 
   it.each(["claude_managed", "aws_agentcore"] as const)(
-    "keeps a saved deferred %s provider readable without exposing its configuration",
+    "shows the provider-managed full-auto notice for %s",
     (provider) => {
       const html = renderRunner({ provider });
-      expect(html).toContain("Saved provider unavailable in this release");
-      expect(html).not.toContain('value="claude_managed"');
-      expect(html).not.toContain('value="aws_agentcore"');
+      expect(html).toContain("Provider-managed full auto");
       expect(html).not.toContain("Ask for mutations");
       expect(html).not.toContain("Bypass sandbox");
-      expect(html).not.toContain("Managed Agent profile");
-      expect(html).not.toContain("AgentCore profile");
+      if (provider === "claude_managed") {
+        expect(html).toContain("Managed Agent profile");
+        expect(html).not.toContain("AgentCore profile");
+      } else {
+        expect(html).toContain("AgentCore profile");
+        expect(html).not.toContain("Managed Agent profile");
+      }
     },
   );
-
-  it("offers only qualified Pi and Claude ACPX agents", () => {
-    const html = renderRunner({ provider: "acpx", acpxAgent: "codex" });
-    expect(html).toContain("Saved ACP agent unavailable in this release");
-    expect(html).toContain("Pi via ACPX");
-    expect(html).toContain("Claude via ACPX");
-    expect(html).not.toContain("Codex via ACPX");
-  });
 
   it("renders a previously stored lower mode after switching back to a provider", () => {
     const html = renderRunner({

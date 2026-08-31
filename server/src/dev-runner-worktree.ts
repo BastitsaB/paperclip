@@ -38,6 +38,22 @@ function parseEnvFile(contents: string): Record<string, string> {
   return entries;
 }
 
+function applyMissingEnvEntries(
+  env: NodeJS.ProcessEnv,
+  entries: Record<string, string>,
+): void {
+  for (const [key, value] of Object.entries(entries)) {
+    if (typeof env[key] === "string" && env[key]!.trim().length > 0) continue;
+    env[key] = value;
+  }
+}
+
+function loadRepoEnv(rootDir: string, env: NodeJS.ProcessEnv): void {
+  const envPath = path.resolve(rootDir, ".env");
+  if (!existsSync(envPath)) return;
+  applyMissingEnvEntries(env, parseEnvFile(readFileSync(envPath, "utf8")));
+}
+
 type WorktreeEnvBootstrapResult =
   | { envPath: null; missingEnv: false }
   | { envPath: string; missingEnv: true }
@@ -111,6 +127,7 @@ export function bootstrapDevRunnerWorktreeEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): WorktreeEnvBootstrapResult {
   if (!isLinkedGitWorktreeCheckout(rootDir)) {
+    loadRepoEnv(rootDir, env);
     return {
       envPath: null,
       missingEnv: false,
@@ -119,6 +136,7 @@ export function bootstrapDevRunnerWorktreeEnv(
 
   const envPath = resolveWorktreeEnvFilePath(rootDir);
   if (!existsSync(envPath)) {
+    loadRepoEnv(rootDir, env);
     return {
       envPath,
       missingEnv: true,
@@ -130,10 +148,10 @@ export function bootstrapDevRunnerWorktreeEnv(
     parseEnvFile(readFileSync(envPath, "utf8")),
     env,
   );
-  for (const [key, value] of Object.entries(entries)) {
-    if (typeof env[key] === "string" && env[key]!.trim().length > 0) continue;
-    env[key] = value;
-  }
+  // Worktree identity/config wins over the repository convenience file. Both
+  // remain below an explicitly exported process environment value.
+  applyMissingEnvEntries(env, entries);
+  loadRepoEnv(rootDir, env);
 
   return {
     envPath,

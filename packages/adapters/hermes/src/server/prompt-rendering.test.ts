@@ -158,7 +158,7 @@ test("renders comment wake batch guidance without defaulting to a full-thread re
   expect(prompt).toContain("- fallback fetch needed: no");
 });
 
-test("renders accepted-plan continuation without authorizing implementation on the planning issue", () => {
+test("renders accepted-plan execution with optional justified decomposition", () => {
   const prompt = buildPrompt(baseContext({
     paperclipWake: {
       reason: "issue_commented",
@@ -178,9 +178,10 @@ test("renders accepted-plan continuation without authorizing implementation on t
     },
   }), {});
 
-  expect(prompt).toContain("- planning directive: Create child issues from the approved plan only. Do not write code or perform implementation work on the planning issue.");
-  expect(prompt).toContain("- accepted-plan continuation: you may create child implementation issues from the approved plan");
-  expect(prompt).toContain("must not start implementation work on the planning issue itself");
+  expect(prompt).toContain("- accepted-plan directive: implement the accepted plan on this issue when the work is small and cohesive");
+  expect(prompt).toContain("paperclip-converting-plans-to-tasks skill");
+  expect(prompt).toContain("do not create a child merely because a plan was accepted");
+  expect(prompt).not.toContain("must not start implementation work on the planning issue itself");
   expect(prompt).not.toContain("- planning directive: Make the plan only.");
   expect(prompt).not.toContain("Update the plan only");
 });
