@@ -938,6 +938,17 @@ function OnboardingWizardInner({
   const authSignalStatus = authSignalQuery.data?.status ?? null;
   const showAdapterLoginPanel =
     canShowAdapterLogin && (authSignalStatus === "absent" || authSignalStatus === "unknown");
+  /**
+   * The signal is being fetched and has not answered yet.
+   *
+   * Worth its own state rather than folding into "no panel to show". Until it
+   * answers, `authSignalStatus` is null and every not-signed-in customer looks
+   * momentarily identical to a signed-in one — so the card would assert that
+   * they are already signed in, for exactly as long as the request takes, and
+   * then replace it with a sign-in prompt. A reassurance that is wrong and then
+   * withdrawn is worse than saying nothing for a beat.
+   */
+  const authSignalUndecided = canShowAdapterLogin && authSignalStatus === null;
 
   const isLocalAdapterCaps =
     adapterCaps.supportsInstructionsBundle ||
@@ -2458,9 +2469,11 @@ function OnboardingWizardInner({
                          false, and it hides the one thing actually blocking
                          them. */
                       <p className="text-xs text-muted-foreground">
-                        {canShowAdapterLogin
-                          ? "This source is already signed in on the managed sandbox."
-                          : "No managed sandbox is available to sign in against yet."}
+                        {authSignalUndecided
+                          ? "Checking this source's credentials…"
+                          : canShowAdapterLogin
+                            ? "This source is already signed in on the managed sandbox."
+                            : "No managed sandbox is available to sign in against yet."}
                       </p>
                     )}
                   </ConnectInputCanvas>
