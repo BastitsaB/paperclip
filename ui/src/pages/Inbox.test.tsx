@@ -63,7 +63,7 @@ vi.mock("../api/dashboard", () => ({
   dashboardApi: { summary: apiMocks.dashboardSummary },
 }));
 
-vi.mock("../api/execution-workspaces", () => ({
+vi.mock("../api/execution-worktrees", () => ({
   executionWorktreesApi: { listSummaries: apiMocks.executionWorkspaceSummaries },
 }));
 

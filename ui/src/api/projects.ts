@@ -5,7 +5,7 @@ import type {
   WorktreeRuntimeControlTarget,
 } from "@paperclipai/shared";
 import { api } from "./client";
-import { sanitizeWorktreeRuntimeControlTarget } from "./workspace-runtime-control";
+import { sanitizeWorktreeRuntimeControlTarget } from "./worktree-runtime-control";
 
 function withCompanyScope(path: string, companyId?: string) {
   if (!companyId) return path;

@@ -112,7 +112,7 @@ import {
   responsibleUserLabel,
 } from "@paperclipai/shared";
 import { ResponsibleUserDenialNotice } from "../components/ResponsibleUserDenialNotice";
-import { RunWorktreeRecoverySurface } from "../components/RunWorkspaceRecoverySurface";
+import { RunWorktreeRecoverySurface } from "../components/RunWorktreeRecoverySurface";
 import { buildPermissionsForTrustPreset, getTrustPreset } from "../lib/trust-policy-ui";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";

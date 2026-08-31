@@ -4,7 +4,7 @@ import type { AgentEnvConfig, EnvBinding, IssueWorkMode } from "@paperclipai/sha
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
-import { executionWorktreesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-worktrees";
 import { issuesApi } from "../api/issues";
 import { MissingUserSecretsBanner } from "../pages/secrets/MissingUserSecretsBanner";
 import { instanceSettingsApi } from "../api/instanceSettings";
@@ -15,12 +15,12 @@ import { authApi } from "../api/auth";
 import { assetsApi } from "../api/assets";
 import { buildCompanyUserInlineOptions, buildMarkdownMentionOptions, isAgentTaskTarget } from "../lib/company-members";
 import { queryKeys } from "../lib/queryKeys";
-import { orderReusableExecutionWorktrees } from "../lib/reusable-execution-workspaces";
+import { orderReusableExecutionWorktrees } from "../lib/reusable-execution-worktrees";
 import {
   defaultExecutionWorktreeModeForProject,
   defaultProjectWorktreeIdForProject,
   issueExecutionWorktreeModeForExistingWorktree,
-} from "../lib/project-workspace-defaults";
+} from "../lib/project-worktree-defaults";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
 import { getRecentProjectIds, trackRecentProject } from "../lib/recent-projects";
@@ -79,7 +79,7 @@ import { AgentIcon } from "./AgentIconPicker";
 import { InlineBanner } from "./InlineBanner";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
 import { getTrustPreset } from "../lib/trust-policy-ui";
-import { ReusableExecutionWorktreeSelect } from "./ReusableExecutionWorkspaceSelect";
+import { ReusableExecutionWorktreeSelect } from "./ReusableExecutionWorktreeSelect";
 
 const DRAFT_KEY = "paperclip:issue-draft";
 const DEBOUNCE_MS = 800;

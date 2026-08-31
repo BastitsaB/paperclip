@@ -27,10 +27,10 @@ import {
   parseWorktreeFileHref,
   WORKSPACE_FILE_HREF_PREFIX,
   type WorktreeFileRefResolver,
-} from "../lib/remark-workspace-file-refs";
+} from "../lib/remark-worktree-file-refs";
 import { remarkSoftBreaks } from "../lib/remark-soft-breaks";
 import { StatusIcon } from "./StatusIcon";
-import { WorktreeFileLink } from "./WorkspaceFileLink";
+import { WorktreeFileLink } from "./WorktreeFileLink";
 import { ExternalObjectStatusIcon } from "./ExternalObjectStatusIcon";
 import {
   externalObjectCategoryLabel,

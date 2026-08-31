@@ -1,11 +1,11 @@
 import { createContext, useContext, useCallback, useMemo, type ReactNode } from "react";
 import { useLocation, useNavigate, type NavigateOptions } from "@/lib/router";
 import type { WorktreeFileSelector } from "@paperclipai/shared";
-import type { ParsedWorktreeFileRef } from "@/lib/workspace-file-parser";
+import type { ParsedWorktreeFileRef } from "@/lib/worktree-file-parser";
 import {
   useWorktreeFileAvailability,
   type WorktreeFileAvailabilityRegistry,
-} from "@/hooks/useWorkspaceFileAvailability";
+} from "@/hooks/useWorktreeFileAvailability";
 
 export interface FileViewerUrlState {
   path: string;

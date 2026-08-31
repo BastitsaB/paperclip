@@ -591,7 +591,7 @@ export {
   type ReconcileExecutionWorktreeBranch,
   type UpdateExecutionWorktree,
   type WorktreeOverviewQuery,
-} from "./execution-workspace.js";
+} from "./execution-worktree.js";
 
 export {
   normalizedWorktreeFileAvailabilityQuerySchema,
@@ -611,7 +611,7 @@ export {
   type WorktreeFileAvailabilityRequestInput,
   type WorktreeFileListQuery,
   type WorktreeFileResourceQuery,
-} from "./workspace-file-resource.js";
+} from "./worktree-file-resource.js";
 
 export {
   createGoalSchema,

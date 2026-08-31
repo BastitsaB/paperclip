@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { setExpensiveWorkspaceGitExecutor } from "@paperclipai/adapter-utils/git-workspace-sync";
+import { setExpensiveWorkspaceGitExecutor } from "@paperclipai/adapter-utils/git-worktree-sync";
 import { HttpError } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 

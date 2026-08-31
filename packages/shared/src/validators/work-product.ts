@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { worktreeFileRefSchema } from "./workspace-file-resource.js";
+import { worktreeFileRefSchema } from "./worktree-file-resource.js";
 import { objectWithoutDefaults } from "./partial.js";
 
 function attachmentContentPath(attachmentId: string): string {

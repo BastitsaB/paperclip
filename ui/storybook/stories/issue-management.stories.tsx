@@ -25,7 +25,7 @@ import { IssueProperties } from "@/components/IssueProperties";
 import { IssueRunLedgerContent } from "@/components/IssueRunLedger";
 import { IssuesList } from "@/components/IssuesList";
 import { IssuesQuicklook } from "@/components/IssuesQuicklook";
-import { IssueWorktreeCard } from "@/components/IssueWorkspaceCard";
+import { IssueWorktreeCard } from "@/components/IssueWorktreeCard";
 import { Identity } from "@/components/Identity";
 import { PriorityIcon } from "@/components/PriorityIcon";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -895,7 +895,7 @@ function IssueManagementStories() {
             <ModelProfileBadgeLedger />
           </Section>
 
-          <Section eyebrow="IssueWorkspaceCard" title="Workspace info card with branch, path, and runtime status">
+          <Section eyebrow="IssueWorktreeCard" title="Workspace info card with branch, path, and runtime status">
             <WorkspaceCardWithRuntime />
           </Section>
 

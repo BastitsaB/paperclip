@@ -1751,8 +1751,8 @@ export {
   type ResourceMembershipUpdateResult,
 } from "./types/resource-memberships.js";
 
-export { worktreeRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
-export { worktreeRuntimeControlTargetSchema as workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
+export { worktreeRuntimeControlTargetSchema } from "./validators/execution-worktree.js";
+export { worktreeRuntimeControlTargetSchema as workspaceRuntimeControlTargetSchema } from "./validators/execution-worktree.js";
 export {
   findWorktreeCommandDefinition,
   findWorktreeCommandDefinition as findWorkspaceCommandDefinition,
@@ -1764,7 +1764,7 @@ export {
   matchWorktreeRuntimeServiceToCommand as matchWorkspaceRuntimeServiceToCommand,
   scoreWorktreeRuntimeServiceMatch,
   scoreWorktreeRuntimeServiceMatch as scoreWorkspaceRuntimeServiceMatch,
-} from "./workspace-commands.js";
+} from "./worktree-commands.js";
 
 export {
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
@@ -1810,7 +1810,7 @@ export {
   getClosedIsolatedExecutionWorktreeMessage as getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorktree,
   isClosedIsolatedExecutionWorktree as isClosedIsolatedExecutionWorkspace,
-} from "./execution-workspace-guards.js";
+} from "./execution-worktree-guards.js";
 
 export {
   MAX_TASK_DRAIN_TTL_MS,

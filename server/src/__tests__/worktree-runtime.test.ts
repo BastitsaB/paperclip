@@ -4823,7 +4823,7 @@ describe("ensureRuntimeServicesForRun", () => {
     };
 
     const primaryRunId = "run-project-workspace";
-    const executionRunId = "run-execution-workspace";
+    const executionRunId = "run-execution-worktree";
     leasedRunIds.add(primaryRunId);
     leasedRunIds.add(executionRunId);
 

@@ -3,14 +3,14 @@ import { Link, Navigate } from "@/lib/router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { WorktreeOverviewItem } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
-import { executionWorktreesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-worktrees";
 import { instanceSettingsApi } from "../api/instanceSettings";
-import { ProjectWorktreesContent } from "../components/ProjectWorkspacesContent";
+import { ProjectWorktreesContent } from "../components/ProjectWorktreesContent";
 import { SummarySlotCard } from "../components/SummarySlotCard";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
-import type { ProjectWorktreeSummary } from "../lib/project-workspaces-tab";
+import type { ProjectWorktreeSummary } from "../lib/project-worktrees-tab";
 import { queryKeys } from "../lib/queryKeys";
 import { projectRouteRef } from "../lib/utils";
 

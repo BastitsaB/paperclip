@@ -6,7 +6,7 @@ import {
   reusableWorktreeOptionMatches,
   type ReusableExecutionWorktreeLike,
   type ReusableWorktreeOption,
-} from "@/lib/reusable-execution-workspaces";
+} from "@/lib/reusable-execution-worktrees";
 
 const NOW = new Date("2026-06-24T12:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
