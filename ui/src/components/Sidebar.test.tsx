@@ -531,7 +531,7 @@ describe("Sidebar", () => {
     const root = await renderSidebar();
 
     const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Worktrees");
-    expect(link?.getAttribute("href")).toBe("/workspaces");
+    expect(link?.getAttribute("href")).toBe("/worktrees");
 
     flushSync(() => {
       root.unmount();
