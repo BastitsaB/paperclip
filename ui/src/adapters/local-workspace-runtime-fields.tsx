@@ -1,5 +1,5 @@
 import type { AdapterConfigFieldsProps } from "./types";
 
-export function LocalWorkspaceRuntimeFields(_props: AdapterConfigFieldsProps) {
+export function LocalWorktreeRuntimeFields(_props: AdapterConfigFieldsProps) {
   return null;
 }

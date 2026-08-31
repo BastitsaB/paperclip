@@ -25,7 +25,7 @@ import { IssueProperties } from "@/components/IssueProperties";
 import { IssueRunLedgerContent } from "@/components/IssueRunLedger";
 import { IssuesList } from "@/components/IssuesList";
 import { IssuesQuicklook } from "@/components/IssuesQuicklook";
-import { IssueWorkspaceCard } from "@/components/IssueWorkspaceCard";
+import { IssueWorktreeCard } from "@/components/IssueWorkspaceCard";
 import { Identity } from "@/components/Identity";
 import { PriorityIcon } from "@/components/PriorityIcon";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -230,7 +230,7 @@ function hydrateStorybookQueries(queryClient: ReturnType<typeof useQueryClient>)
     { orderedIds: storybookProjects.map((project) => project.id), updatedAt: null },
   );
   queryClient.setQueryData(
-    queryKeys.executionWorkspaces.summaryList(companyId),
+    queryKeys.executionWorktrees.summaryList(companyId),
     storybookExecutionWorkspaces.map((workspace) => ({
       id: workspace.id,
       name: workspace.name,
@@ -239,7 +239,7 @@ function hydrateStorybookQueries(queryClient: ReturnType<typeof useQueryClient>)
     })),
   );
   queryClient.setQueryData(
-    queryKeys.executionWorkspaces.list(companyId, {
+    queryKeys.executionWorktrees.list(companyId, {
       projectId: primaryIssue.projectId ?? undefined,
       projectWorkspaceId: primaryIssue.projectWorkspaceId ?? undefined,
       reuseEligible: true,
@@ -537,7 +537,7 @@ function OpenFiltersPopover() {
           currentUserId="user-board"
           enableRoutineVisibilityFilter
           buttonVariant="outline"
-          workspaces={storybookExecutionWorkspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }))}
+          worktrees={storybookExecutionWorkspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }))}
           creators={[
             { id: "user:user-board", label: "Riley Board", kind: "user", searchText: "board user human" },
             ...storybookAgents.map((agent) => ({
@@ -705,7 +705,7 @@ function WorkspaceCardWithRuntime() {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-      <IssueWorkspaceCard
+      <IssueWorktreeCard
         issue={primaryIssue}
         project={storybookProjects[0]!}
         onUpdate={() => undefined}

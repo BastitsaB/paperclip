@@ -1,6 +1,6 @@
 import { scoreFuzzyTextFields } from "./searchable-select";
 
-export interface ReusableExecutionWorkspaceLike {
+export interface ReusableExecutionWorktreeLike {
   id: string;
   name: string;
   cwd: string | null;
@@ -11,31 +11,31 @@ export interface ReusableExecutionWorkspaceLike {
 
 const RECENT_WORKSPACE_CUTOFF_DAYS = 3;
 
-export type ReusableWorkspaceOptionGroupId = "recent" | "all";
+export type ReusableWorktreeOptionGroupId = "recent" | "all";
 
-export interface ReusableWorkspaceOption<TWorkspace extends ReusableExecutionWorkspaceLike = ReusableExecutionWorkspaceLike> {
+export interface ReusableWorktreeOption<TWorktree extends ReusableExecutionWorktreeLike = ReusableExecutionWorktreeLike> {
   key: string;
   value: string;
   workspaceId: string;
-  groupId: ReusableWorkspaceOptionGroupId;
+  groupId: ReusableWorktreeOptionGroupId;
   label: string;
   description: string;
   searchText: string;
-  workspace: TWorkspace;
+  workspace: TWorktree;
 }
 
-export interface ReusableWorkspaceOptionGroup<TWorkspace extends ReusableExecutionWorkspaceLike = ReusableExecutionWorkspaceLike> {
-  id: ReusableWorkspaceOptionGroupId;
+export interface ReusableWorktreeOptionGroup<TWorktree extends ReusableExecutionWorktreeLike = ReusableExecutionWorktreeLike> {
+  id: ReusableWorktreeOptionGroupId;
   label: string;
-  options: ReusableWorkspaceOption<TWorkspace>[];
+  options: ReusableWorktreeOption<TWorktree>[];
 }
 
-function workspaceLastUsedTime(workspace: Pick<ReusableExecutionWorkspaceLike, "lastUsedAt">) {
+function worktreeLastUsedTime(workspace: Pick<ReusableExecutionWorktreeLike, "lastUsedAt">) {
   const time = new Date(workspace.lastUsedAt).getTime();
   return Number.isFinite(time) ? time : 0;
 }
 
-function compareWorkspaceNames(a: ReusableExecutionWorkspaceLike, b: ReusableExecutionWorkspaceLike) {
+function compareWorktreeNames(a: ReusableExecutionWorktreeLike, b: ReusableExecutionWorktreeLike) {
   const nameCompare = a.name.localeCompare(b.name, undefined, {
     numeric: true,
     sensitivity: "base",
@@ -44,10 +44,10 @@ function compareWorkspaceNames(a: ReusableExecutionWorkspaceLike, b: ReusableExe
   return a.id.localeCompare(b.id);
 }
 
-function compareWorkspaceLastUsedDesc(a: ReusableExecutionWorkspaceLike, b: ReusableExecutionWorkspaceLike) {
-  const timeCompare = workspaceLastUsedTime(b) - workspaceLastUsedTime(a);
+function compareWorktreeLastUsedDesc(a: ReusableExecutionWorktreeLike, b: ReusableExecutionWorktreeLike) {
+  const timeCompare = worktreeLastUsedTime(b) - worktreeLastUsedTime(a);
   if (timeCompare !== 0) return timeCompare;
-  return compareWorkspaceNames(a, b);
+  return compareWorktreeNames(a, b);
 }
 
 /**
@@ -57,11 +57,11 @@ function compareWorkspaceLastUsedDesc(a: ReusableExecutionWorkspaceLike, b: Reus
  * so the picker never renders a host path. `workspaceSearchText` still indexes
  * the working directory, so a user who already knows a path can search by it.
  */
-function workspaceDescription(workspace: ReusableExecutionWorkspaceLike) {
+function worktreeDescription(workspace: ReusableExecutionWorktreeLike) {
   return workspace.branchName ?? workspace.id.slice(0, 8);
 }
 
-function workspaceSearchText(workspace: ReusableExecutionWorkspaceLike) {
+function worktreeSearchText(workspace: ReusableExecutionWorktreeLike) {
   return [
     workspace.name,
     workspace.status,
@@ -71,72 +71,72 @@ function workspaceSearchText(workspace: ReusableExecutionWorkspaceLike) {
   ].filter(Boolean).join(" ");
 }
 
-export function dedupeReusableExecutionWorkspaces<T extends ReusableExecutionWorkspaceLike>(
-  workspaces: readonly T[],
+export function dedupeReusableExecutionWorktrees<T extends ReusableExecutionWorktreeLike>(
+  worktrees: readonly T[],
 ): T[] {
   const deduplicatedByPath = new Map<string, T>();
 
-  for (const workspace of workspaces) {
-    const key = workspace.cwd ?? workspace.id;
+  for (const worktree of worktrees) {
+    const key = worktree.cwd ?? worktree.id;
     const existing = deduplicatedByPath.get(key);
-    if (!existing || workspaceLastUsedTime(workspace) > workspaceLastUsedTime(existing)) {
-      deduplicatedByPath.set(key, workspace);
+    if (!existing || worktreeLastUsedTime(worktree) > worktreeLastUsedTime(existing)) {
+      deduplicatedByPath.set(key, worktree);
     }
   }
 
   return Array.from(deduplicatedByPath.values());
 }
 
-export function orderReusableExecutionWorkspaces<T extends ReusableExecutionWorkspaceLike>(
-  workspaces: readonly T[],
+export function orderReusableExecutionWorktrees<T extends ReusableExecutionWorktreeLike>(
+  worktrees: readonly T[],
 ): T[] {
-  const alphabetized = dedupeReusableExecutionWorkspaces(workspaces).sort(compareWorkspaceNames);
+  const alphabetized = dedupeReusableExecutionWorktrees(worktrees).sort(compareWorktreeNames);
   if (alphabetized.length <= 1) return alphabetized;
 
   let mostRecentlyUsed = alphabetized[0]!;
-  for (const workspace of alphabetized.slice(1)) {
-    if (workspaceLastUsedTime(workspace) > workspaceLastUsedTime(mostRecentlyUsed)) {
-      mostRecentlyUsed = workspace;
+  for (const worktree of alphabetized.slice(1)) {
+    if (worktreeLastUsedTime(worktree) > worktreeLastUsedTime(mostRecentlyUsed)) {
+      mostRecentlyUsed = worktree;
     }
   }
 
   return [
     mostRecentlyUsed,
-    ...alphabetized.filter((workspace) => workspace.id !== mostRecentlyUsed.id),
+    ...alphabetized.filter((worktree) => worktree.id !== mostRecentlyUsed.id),
   ];
 }
 
-export function buildReusableExecutionWorkspaceOptionGroups<T extends ReusableExecutionWorkspaceLike>(
-  workspaces: readonly T[],
+export function buildReusableExecutionWorktreeOptionGroups<T extends ReusableExecutionWorktreeLike>(
+  worktrees: readonly T[],
   options: { now?: Date | string; recentCutoffDays?: number } = {},
-): ReusableWorkspaceOptionGroup<T>[] {
+): ReusableWorktreeOptionGroup<T>[] {
   const nowTime = options.now ? new Date(options.now).getTime() : Date.now();
   const cutoffDays = options.recentCutoffDays ?? RECENT_WORKSPACE_CUTOFF_DAYS;
   const cutoffTime = nowTime - cutoffDays * 24 * 60 * 60 * 1000;
-  const deduplicated = dedupeReusableExecutionWorkspaces(workspaces);
+  const deduplicated = dedupeReusableExecutionWorktrees(worktrees);
 
   const toOption = (
     workspace: T,
-    groupId: ReusableWorkspaceOptionGroupId,
-  ): ReusableWorkspaceOption<T> => ({
+    groupId: ReusableWorktreeOptionGroupId,
+  ): ReusableWorktreeOption<T> => ({
     key: `${groupId}:${workspace.id}`,
     value: workspace.id,
     workspaceId: workspace.id,
     groupId,
     label: workspace.name,
-    description: workspaceDescription(workspace),
-    searchText: workspaceSearchText(workspace),
+    description: worktreeDescription(workspace),
+    searchText: worktreeSearchText(workspace),
     workspace,
   });
 
   const recent = deduplicated
-    .filter((workspace) => workspaceLastUsedTime(workspace) >= cutoffTime)
-    .sort(compareWorkspaceLastUsedDesc)
-    .map((workspace) => toOption(workspace, "recent"));
+    .filter((worktree) => worktreeLastUsedTime(worktree) >= cutoffTime)
+    .sort(compareWorktreeLastUsedDesc)
+    .map((worktree) => toOption(worktree, "recent"));
 
   const all = [...deduplicated]
-    .sort(compareWorkspaceNames)
-    .map((workspace) => toOption(workspace, "all"));
+    .sort(compareWorktreeNames)
+    .map((worktree) => toOption(worktree, "all"));
 
   return [
     ...(recent.length > 0 ? [{ id: "recent" as const, label: "Recent", options: recent }] : []),
@@ -144,15 +144,15 @@ export function buildReusableExecutionWorkspaceOptionGroups<T extends ReusableEx
   ];
 }
 
-export function reusableWorkspaceOptionMatches(
-  option: Pick<ReusableWorkspaceOption, "label" | "description" | "searchText">,
+export function reusableWorktreeOptionMatches(
+  option: Pick<ReusableWorktreeOption, "label" | "description" | "searchText">,
   query: string,
 ) {
-  return scoreReusableWorkspaceOptionMatch(option, query) !== null;
+  return scoreReusableWorktreeOptionMatch(option, query) !== null;
 }
 
-export function scoreReusableWorkspaceOptionMatch(
-  option: Pick<ReusableWorkspaceOption, "label" | "description" | "searchText">,
+export function scoreReusableWorktreeOptionMatch(
+  option: Pick<ReusableWorktreeOption, "label" | "description" | "searchText">,
   query: string,
 ) {
   return scoreFuzzyTextFields([

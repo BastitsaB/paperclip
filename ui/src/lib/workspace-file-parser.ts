@@ -1,6 +1,6 @@
-import type { WorkspaceFileSelector } from "@paperclipai/shared";
+import type { WorktreeFileSelector } from "@paperclipai/shared";
 
-export interface ParsedWorkspaceFileRef {
+export interface ParsedWorktreeFileRef {
   path: string;
   resourceKind?: "file" | "directory";
   line: number | null;
@@ -12,7 +12,7 @@ export interface ParsedWorkspaceFileRef {
    * Workspace selector the reference is bound to. Set once availability has
    * confirmed which workspace serves the path; defaults to `auto` otherwise.
    */
-  workspace?: WorkspaceFileSelector;
+  workspace?: WorktreeFileSelector;
   /** The original matched text (useful for rendering) */
   raw: string;
 }
@@ -45,7 +45,7 @@ function toPositiveInt(value: string | undefined): number | null {
   return n;
 }
 
-function looksLikeWorkspacePath(input: string, opts: { allowTrailingSlash: boolean }): boolean {
+function looksLikeWorktreePath(input: string, opts: { allowTrailingSlash: boolean }): boolean {
   if (!input || input.length > 512) return false;
   if (input.includes("\\") || input.includes("\0")) return false;
   if (input.startsWith("/") || input.startsWith("~") || /^[A-Za-z]:/.test(input)) return false;
@@ -64,7 +64,7 @@ function looksLikeWorkspacePath(input: string, opts: { allowTrailingSlash: boole
  * Attempt to parse the given text as a workspace file reference.
  * Returns null if the text does not look like one.
  */
-export function parseWorkspaceFileRef(input: string): ParsedWorkspaceFileRef | null {
+export function parseWorktreeFileRef(input: string): ParsedWorktreeFileRef | null {
   if (typeof input !== "string") return null;
   const trimmed = input.trim();
   if (!trimmed) return null;
@@ -72,7 +72,7 @@ export function parseWorkspaceFileRef(input: string): ParsedWorkspaceFileRef | n
   const directoryMatch = trimmed.match(WORKSPACE_DIRECTORY_REF_RE);
   if (directoryMatch) {
     const [, rawPath] = directoryMatch;
-    if (!rawPath || !looksLikeWorkspacePath(rawPath, { allowTrailingSlash: true })) return null;
+    if (!rawPath || !looksLikeWorktreePath(rawPath, { allowTrailingSlash: true })) return null;
     if (!rawPath.slice(0, -1).includes("/")) return null;
     return {
       path: rawPath,
@@ -87,7 +87,7 @@ export function parseWorkspaceFileRef(input: string): ParsedWorkspaceFileRef | n
   if (!match) return null;
   const [, rawPath, colonLine, colonCol, hashLine, hashCol] = match;
   if (!rawPath) return null;
-  if (!looksLikeWorkspacePath(rawPath, { allowTrailingSlash: false })) return null;
+  if (!looksLikeWorktreePath(rawPath, { allowTrailingSlash: false })) return null;
 
   const line = toPositiveInt(colonLine) ?? toPositiveInt(hashLine);
   const column = toPositiveInt(colonCol) ?? toPositiveInt(hashCol);
@@ -105,7 +105,7 @@ export function parseWorkspaceFileRef(input: string): ParsedWorkspaceFileRef | n
   };
 }
 
-export function formatWorkspaceFileRefDisplay(ref: ParsedWorkspaceFileRef): string {
+export function formatWorktreeFileRefDisplay(ref: ParsedWorktreeFileRef): string {
   const path = ref.line && ref.column
     ? `${ref.path}:${ref.line}:${ref.column}`
     : ref.line

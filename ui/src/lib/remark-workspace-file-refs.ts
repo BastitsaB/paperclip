@@ -1,6 +1,6 @@
-import type { WorkspaceFileSelector } from "@paperclipai/shared";
-import { parseWorkspaceFileRef, type ParsedWorkspaceFileRef } from "./workspace-file-parser";
-import type { WorkspaceFileAvailabilityTarget } from "./workspace-file-availability";
+import type { WorktreeFileSelector } from "@paperclipai/shared";
+import { parseWorktreeFileRef, type ParsedWorktreeFileRef } from "./workspace-file-parser";
+import type { WorktreeFileAvailabilityTarget } from "./workspace-file-availability";
 
 const WORKSPACE_FILE_HREF_SCHEME = "workspace-file:";
 
@@ -9,9 +9,9 @@ const WORKSPACE_FILE_HREF_SCHEME = "workspace-file:";
  * workspace-file link. Returning null keeps the original markdown node, which
  * is the fail-closed default for pending, unavailable, and errored references.
  */
-export type WorkspaceFileRefResolver = (
-  ref: ParsedWorkspaceFileRef,
-) => WorkspaceFileAvailabilityTarget | null;
+export type WorktreeFileRefResolver = (
+  ref: ParsedWorktreeFileRef,
+) => WorktreeFileAvailabilityTarget | null;
 
 type MarkdownNode = {
   type: string;
@@ -20,7 +20,7 @@ type MarkdownNode = {
   children?: MarkdownNode[];
 };
 
-export function buildWorkspaceFileHref(ref: ParsedWorkspaceFileRef): string {
+export function buildWorktreeFileHref(ref: ParsedWorktreeFileRef): string {
   const params = new URLSearchParams();
   if (ref.projectId) params.set("projectId", ref.projectId);
   if (ref.workspaceId) params.set("workspaceId", ref.workspaceId);
@@ -33,7 +33,7 @@ export function buildWorkspaceFileHref(ref: ParsedWorkspaceFileRef): string {
   return `${WORKSPACE_FILE_HREF_SCHEME}?${params.toString()}`;
 }
 
-export function parseWorkspaceFileHref(href: string | null | undefined): ParsedWorkspaceFileRef | null {
+export function parseWorktreeFileHref(href: string | null | undefined): ParsedWorktreeFileRef | null {
   if (!href || typeof href !== "string") return null;
   if (!href.startsWith(WORKSPACE_FILE_HREF_SCHEME)) return null;
   const rest = href.slice(WORKSPACE_FILE_HREF_SCHEME.length);
@@ -42,12 +42,12 @@ export function parseWorkspaceFileHref(href: string | null | undefined): ParsedW
   const path = params.get("path");
   if (!path) return null;
   const projectIdRaw = params.get("projectId");
-  const workspaceIdRaw = params.get("workspaceId");
-  const hasExplicitTarget = Boolean(projectIdRaw && workspaceIdRaw);
+  const worktreeIdRaw = params.get("workspaceId");
+  const hasExplicitTarget = Boolean(projectIdRaw && worktreeIdRaw);
   const projectName = params.get("projectName");
-  const workspaceRaw = params.get("workspace");
-  const workspace: WorkspaceFileSelector = workspaceRaw === "execution" || workspaceRaw === "project"
-    ? workspaceRaw
+  const worktreeRaw = params.get("workspace");
+  const worktree: WorktreeFileSelector = worktreeRaw === "execution" || worktreeRaw === "project"
+    ? worktreeRaw
     : "auto";
   const kindRaw = params.get("kind");
   const lineRaw = params.get("line");
@@ -60,26 +60,26 @@ export function parseWorkspaceFileHref(href: string | null | undefined): ParsedW
     line: Number.isFinite(line) && line > 0 ? line : null,
     column: Number.isFinite(column) && column > 0 ? column : null,
     projectId: hasExplicitTarget ? projectIdRaw : null,
-    workspaceId: hasExplicitTarget ? workspaceIdRaw : null,
+    workspaceId: hasExplicitTarget ? worktreeIdRaw : null,
     projectName: projectName || null,
-    workspace,
+    workspace: worktree,
     raw: path,
   };
 }
 
-function createWorkspaceFileLinkNode(ref: ParsedWorkspaceFileRef): MarkdownNode {
+function createWorktreeFileLinkNode(ref: ParsedWorktreeFileRef): MarkdownNode {
   return {
     type: "link",
-    url: buildWorkspaceFileHref(ref),
+    url: buildWorktreeFileHref(ref),
     children: [{ type: "inlineCode", value: ref.raw }],
   };
 }
 
-function parseSingleInlineCodeFileRef(node: MarkdownNode): ParsedWorkspaceFileRef | null {
+function parseSingleInlineCodeFileRef(node: MarkdownNode): ParsedWorktreeFileRef | null {
   if (!Array.isArray(node.children) || node.children.length !== 1) return null;
   const [child] = node.children;
   if (child?.type !== "inlineCode" || typeof child.value !== "string") return null;
-  return parseWorkspaceFileRef(child.value);
+  return parseWorktreeFileRef(child.value);
 }
 
 /**
@@ -87,9 +87,9 @@ function parseSingleInlineCodeFileRef(node: MarkdownNode): ParsedWorkspaceFileRe
  * reuses that exact target instead of re-running auto discovery.
  */
 function applyResolvedTarget(
-  ref: ParsedWorkspaceFileRef,
-  target: WorkspaceFileAvailabilityTarget,
-): ParsedWorkspaceFileRef {
+  ref: ParsedWorktreeFileRef,
+  target: WorktreeFileAvailabilityTarget,
+): ParsedWorktreeFileRef {
   return {
     ...ref,
     workspace: target.workspace,
@@ -101,14 +101,14 @@ function applyResolvedTarget(
 
 /** Returns the target-bound ref when the resolver confirms it is openable. */
 function openableRef(
-  ref: ParsedWorkspaceFileRef,
-  resolve: WorkspaceFileRefResolver,
-): ParsedWorkspaceFileRef | null {
+  ref: ParsedWorktreeFileRef,
+  resolve: WorktreeFileRefResolver,
+): ParsedWorktreeFileRef | null {
   const target = resolve(ref);
   return target ? applyResolvedTarget(ref, target) : null;
 }
 
-function rewriteMarkdownTree(node: MarkdownNode, resolve: WorkspaceFileRefResolver) {
+function rewriteMarkdownTree(node: MarkdownNode, resolve: WorktreeFileRefResolver) {
   if (!Array.isArray(node.children) || node.children.length === 0) return;
   // Existing links whose whole label is a workspace-file code span become
   // file-viewer links instead of issue/external links — but only when the
@@ -117,7 +117,7 @@ function rewriteMarkdownTree(node: MarkdownNode, resolve: WorkspaceFileRefResolv
     const ref = parseSingleInlineCodeFileRef(node);
     const resolved = ref ? openableRef(ref, resolve) : null;
     if (resolved) {
-      node.url = buildWorkspaceFileHref(resolved);
+      node.url = buildWorktreeFileHref(resolved);
     }
     return;
   }
@@ -129,10 +129,10 @@ function rewriteMarkdownTree(node: MarkdownNode, resolve: WorkspaceFileRefResolv
   const nextChildren: MarkdownNode[] = [];
   for (const child of node.children) {
     if (child.type === "inlineCode" && typeof child.value === "string") {
-      const ref = parseWorkspaceFileRef(child.value);
+      const ref = parseWorktreeFileRef(child.value);
       const resolved = ref ? openableRef(ref, resolve) : null;
       if (resolved) {
-        nextChildren.push(createWorkspaceFileLinkNode(resolved));
+        nextChildren.push(createWorktreeFileLinkNode(resolved));
         continue;
       }
     }
@@ -149,8 +149,8 @@ function rewriteMarkdownTree(node: MarkdownNode, resolve: WorkspaceFileRefResolv
  * candidate reference per parse, which is the set the availability registry
  * needs to check.
  */
-export function createRemarkWorkspaceFileRefs(resolve: WorkspaceFileRefResolver) {
-  return function remarkWorkspaceFileRefs() {
+export function createRemarkWorktreeFileRefs(resolve: WorktreeFileRefResolver) {
+  return function remarkWorktreeFileRefs() {
     return (tree: MarkdownNode) => {
       rewriteMarkdownTree(tree, resolve);
     };

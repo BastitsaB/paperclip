@@ -726,7 +726,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
                           ? "Waiting to start..."
                           : // Before the first transcript token, surface the run's
                             // live runtime status (sandbox preparation phases like
-                            // "Syncing workspace to environment" emitted via
+                            // "Syncing worktree to environment" emitted via
                             // onRuntimeProgress) instead of an opaque wait message.
                             (liveRun && liveRun.id === tailRunId
                               ? liveRun.currentStatusMessage

@@ -1,7 +1,7 @@
 import type {
   HeartbeatRun,
   HeartbeatRunEvent,
-  WorkspaceOperation,
+  WorktreeOperation,
 } from "@paperclipai/shared";
 import { api } from "./client";
 
@@ -103,8 +103,8 @@ export const heartbeatsApi = {
     api.get<{ runId: string; store: string; logRef: string; content: string; nextOffset?: number }>(
       `/heartbeat-runs/${runId}/log?offset=${encodeURIComponent(String(offset))}&limitBytes=${encodeURIComponent(String(limitBytes))}`,
     ),
-  workspaceOperations: (runId: string) =>
-    api.get<WorkspaceOperation[]>(`/heartbeat-runs/${runId}/workspace-operations`),
+  worktreeOperations: (runId: string) =>
+    api.get<WorktreeOperation[]>(`/heartbeat-runs/${runId}/workspace-operations`),
   workspaceOperationLog: (operationId: string, offset = 0, limitBytes = 256000) =>
     api.get<{ operationId: string; store: string; logRef: string; content: string; nextOffset?: number }>(
       `/workspace-operations/${operationId}/log?offset=${encodeURIComponent(String(offset))}&limitBytes=${encodeURIComponent(String(limitBytes))}`,

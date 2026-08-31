@@ -1,9 +1,9 @@
 import type { RoutineListItem } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
 import {
-  getWorkspaceSpecificRoutineVariableNames,
-  routineHasWorkspaceSpecificVariables,
-  sortWorkspaceRoutinesByName,
+  getWorktreeSpecificRoutineVariableNames,
+  routineHasWorktreeSpecificVariables,
+  sortWorktreeRoutinesByName,
 } from "./workspace-routines";
 
 function createRoutine(overrides: Partial<RoutineListItem> = {}): RoutineListItem {
@@ -49,8 +49,8 @@ describe("workspace routine helpers", () => {
       ],
     });
 
-    expect(routineHasWorkspaceSpecificVariables(routine)).toBe(true);
-    expect(getWorkspaceSpecificRoutineVariableNames(routine)).toEqual(["workspaceBranch"]);
+    expect(routineHasWorktreeSpecificVariables(routine)).toBe(true);
+    expect(getWorktreeSpecificRoutineVariableNames(routine)).toEqual(["workspaceBranch"]);
   });
 
   it("matches routines that reference workspace variables in templates", () => {
@@ -59,7 +59,7 @@ describe("workspace routine helpers", () => {
       description: "Check branch {{workspaceBranch}}",
     });
 
-    expect(getWorkspaceSpecificRoutineVariableNames(routine)).toEqual(["workspaceBranch"]);
+    expect(getWorktreeSpecificRoutineVariableNames(routine)).toEqual(["workspaceBranch"]);
   });
 
   it("ignores routines with only non-workspace variables", () => {
@@ -70,7 +70,7 @@ describe("workspace routine helpers", () => {
       ],
     });
 
-    expect(routineHasWorkspaceSpecificVariables(routine)).toBe(false);
+    expect(routineHasWorktreeSpecificVariables(routine)).toBe(false);
   });
 
   it("sorts workspace routines by name regardless of update order", () => {
@@ -92,7 +92,7 @@ describe("workspace routine helpers", () => {
       }),
     ];
 
-    expect(sortWorkspaceRoutinesByName(routines).map((routine) => routine.id)).toEqual([
+    expect(sortWorktreeRoutinesByName(routines).map((routine) => routine.id)).toEqual([
       "routine-1",
       "routine-3",
       "routine-2",

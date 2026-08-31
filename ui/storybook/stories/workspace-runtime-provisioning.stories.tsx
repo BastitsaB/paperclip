@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { RuntimeProvisionStatusValue, type RuntimeProvisionStatus } from "@/pages/ExecutionWorkspaceDetail";
+import { RuntimeProvisionStatusValue, type RuntimeProvisionStatus } from "@/pages/ExecutionWorktreeDetail";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const noop = () => {};

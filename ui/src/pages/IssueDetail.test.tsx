@@ -12,7 +12,7 @@ import {
   canBoardManageRuntime,
   canBoardResolveRecoveryAction,
   IssueDetail,
-  readRecoveryReconcileWorkspaceId,
+  readRecoveryReconcileWorktreeId,
   shouldScrollIssueDetailToTopOnNavigation,
 } from "./IssueDetail";
 import { queryKeys } from "../lib/queryKeys";
@@ -100,7 +100,7 @@ const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
 const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
 const mockImageGalleryRender = vi.hoisted(() => vi.fn());
-const mockIssueWorkspaceCardRender = vi.hoisted(() => vi.fn());
+const mockIssueWorktreeCardRender = vi.hoisted(() => vi.fn());
 
 class ResizeObserverStub {
   observe() {}
@@ -379,8 +379,8 @@ vi.mock("../components/IssueRunLedger", () => ({
 
 vi.mock("../components/IssueWorkspaceCard", () => ({
   IssueWorkspaceCard: (props: { onBrowseFiles?: () => void; onOpenFileByPath?: () => void }) => {
-    mockIssueWorkspaceCardRender(props);
-    return <div>Workspace</div>;
+    mockIssueWorktreeCardRender(props);
+    return <div>Worktree</div>;
   },
 }));
 
@@ -1090,7 +1090,7 @@ describe("IssueDetail", () => {
     mockIssuesListRender.mockClear();
     mockIssueChatThreadRender.mockClear();
     mockImageGalleryRender.mockClear();
-    mockIssueWorkspaceCardRender.mockClear();
+    mockIssueWorktreeCardRender.mockClear();
     mockNavigate.mockClear();
     mockOpenNewIssue.mockClear();
     mockOpenNewProject.mockClear();
@@ -3216,18 +3216,18 @@ describe("canBoardManageRuntime", () => {
   });
 });
 
-describe("readRecoveryReconcileWorkspaceId", () => {
+describe("readRecoveryReconcileWorktreeId", () => {
   const makeAction = (evidence: Record<string, unknown>, kind = "workspace_validation") =>
-    ({ kind, evidence } as unknown as Parameters<typeof readRecoveryReconcileWorkspaceId>[0]);
+    ({ kind, evidence } as unknown as Parameters<typeof readRecoveryReconcileWorktreeId>[0]);
 
   it("returns null when the action is missing", () => {
-    expect(readRecoveryReconcileWorkspaceId(null)).toBeNull();
-    expect(readRecoveryReconcileWorkspaceId(undefined)).toBeNull();
+    expect(readRecoveryReconcileWorktreeId(null)).toBeNull();
+    expect(readRecoveryReconcileWorktreeId(undefined)).toBeNull();
   });
 
   it("returns null for non-workspace_validation actions even with a workspace id in evidence", () => {
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction(
           { workspaceValidation: { persistedExecutionWorkspaceId: "ws-1" } },
           "stranded_assigned_issue",
@@ -3236,9 +3236,9 @@ describe("readRecoveryReconcileWorkspaceId", () => {
     ).toBeNull();
   });
 
-  it("prefers persistedExecutionWorkspaceId (git_worktree_branch_incoherence shape)", () => {
+  it("prefers persistedExecutionWorktreeId (git_worktree_branch_incoherence shape)", () => {
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction({
           workspaceValidation: {
             reason: "git_worktree_branch_incoherence",
@@ -3252,7 +3252,7 @@ describe("readRecoveryReconcileWorkspaceId", () => {
 
   it("falls back to executionWorkspaceId (git_worktree_not_reusable shape)", () => {
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction({
           workspaceValidation: {
             reason: "git_worktree_not_reusable",
@@ -3263,23 +3263,23 @@ describe("readRecoveryReconcileWorkspaceId", () => {
     ).toBe("ws-not-reusable");
   });
 
-  it("returns null when the evidence carries no workspace reference (so the caller falls back to the page-level id)", () => {
-    expect(readRecoveryReconcileWorkspaceId(makeAction({}))).toBeNull();
+  it("returns null when the evidence carries no worktree reference (so the caller falls back to the page-level id)", () => {
+    expect(readRecoveryReconcileWorktreeId(makeAction({}))).toBeNull();
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction({ workspaceValidation: { reason: "git_worktree_branch_incoherence" } }),
       ),
     ).toBeNull();
   });
 
-  it("ignores non-string / empty workspace ids", () => {
+  it("ignores non-string / empty worktree ids", () => {
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction({ workspaceValidation: { persistedExecutionWorkspaceId: "" } }),
       ),
     ).toBeNull();
     expect(
-      readRecoveryReconcileWorkspaceId(
+      readRecoveryReconcileWorktreeId(
         makeAction({ workspaceValidation: { persistedExecutionWorkspaceId: 42 } }),
       ),
     ).toBeNull();

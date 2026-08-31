@@ -1,5 +1,5 @@
-import type { ResolvedWorkspaceResource, WorkspaceFileSelector } from "@paperclipai/shared";
-import type { ParsedWorkspaceFileRef } from "./workspace-file-parser";
+import type { ResolvedWorktreeResource, WorktreeFileSelector } from "@paperclipai/shared";
+import type { ParsedWorktreeFileRef } from "./workspace-file-parser";
 
 /** Server cap on `POST /file-resources/availability` (`queries` max length). */
 export const WORKSPACE_FILE_AVAILABILITY_MAX_BATCH = 100;
@@ -8,9 +8,9 @@ export const WORKSPACE_FILE_AVAILABILITY_MAX_BATCH = 100;
 export const WORKSPACE_FILE_AVAILABILITY_STALE_MS = 30_000;
 
 /** The subset of a parsed ref that identifies an availability lookup. */
-export interface WorkspaceFileAvailabilityRef {
+export interface WorktreeFileAvailabilityRef {
   path: string;
-  workspace: WorkspaceFileSelector;
+  workspace: WorktreeFileSelector;
   projectId: string | null;
   workspaceId: string | null;
 }
@@ -20,22 +20,22 @@ export interface WorkspaceFileAvailabilityRef {
  * their viewer URL so the click reuses the target that passed preflight instead
  * of repeating an unconstrained auto-discovery pass.
  */
-export interface WorkspaceFileAvailabilityTarget {
-  workspace: WorkspaceFileSelector;
+export interface WorktreeFileAvailabilityTarget {
+  workspace: WorktreeFileSelector;
   projectId: string | null;
   workspaceId: string | null;
   projectName: string | null;
 }
 
-export type WorkspaceFileAvailability =
+export type WorktreeFileAvailability =
   /** Not yet requested, in flight, or the batch failed — render as plain code. */
   | { state: "pending" }
   | { state: "unavailable"; reason: string | null }
-  | { state: "openable"; target: WorkspaceFileAvailabilityTarget };
+  | { state: "openable"; target: WorktreeFileAvailabilityTarget };
 
-export const WORKSPACE_FILE_AVAILABILITY_PENDING: WorkspaceFileAvailability = { state: "pending" };
+export const WORKSPACE_FILE_AVAILABILITY_PENDING: WorktreeFileAvailability = { state: "pending" };
 
-export function workspaceFileAvailabilityRef(ref: ParsedWorkspaceFileRef): WorkspaceFileAvailabilityRef {
+export function worktreeFileAvailabilityRef(ref: ParsedWorktreeFileRef): WorktreeFileAvailabilityRef {
   return {
     path: ref.path,
     workspace: ref.workspace ?? "auto",
@@ -49,12 +49,12 @@ export function workspaceFileAvailabilityRef(ref: ParsedWorkspaceFileRef): Works
  * (`[workspace, projectId, workspaceId, path]`) so responses can be matched back
  * to the requests that produced them without relying on array order.
  */
-export function workspaceFileAvailabilityKey(ref: WorkspaceFileAvailabilityRef): string {
+export function worktreeFileAvailabilityKey(ref: WorktreeFileAvailabilityRef): string {
   return JSON.stringify([ref.workspace, ref.projectId, ref.workspaceId, ref.path]);
 }
 
 /** Split a deduplicated ref list into request-sized chunks. */
-export function chunkWorkspaceFileAvailabilityRefs<T>(
+export function chunkWorktreeFileAvailabilityRefs<T>(
   refs: T[],
   size: number = WORKSPACE_FILE_AVAILABILITY_MAX_BATCH,
 ): T[][] {
@@ -71,9 +71,9 @@ export function chunkWorkspaceFileAvailabilityRefs<T>(
  * explicit ids; execution workspaces are addressed by selector because they are
  * scoped to the issue already.
  */
-export function workspaceFileAvailabilityTarget(
-  resource: ResolvedWorkspaceResource,
-): WorkspaceFileAvailabilityTarget {
+export function worktreeFileAvailabilityTarget(
+  resource: ResolvedWorktreeResource,
+): WorktreeFileAvailabilityTarget {
   if (resource.workspaceKind === "project_workspace" && resource.projectId && resource.workspaceId) {
     return {
       workspace: "project",
@@ -95,13 +95,13 @@ export function workspaceFileAvailabilityTarget(
  * resolved resource becomes a chip. Denied, missing, ambiguous, remote,
  * unsupported, and unmatched refs stay ordinary inline code.
  */
-export function workspaceFileAvailabilityFromResult(result: {
+export function worktreeFileAvailabilityFromResult(result: {
   openable: boolean;
   unavailableReason?: string | null;
-  resource: ResolvedWorkspaceResource | null;
-}): WorkspaceFileAvailability {
+  resource: ResolvedWorktreeResource | null;
+}): WorktreeFileAvailability {
   if (!result.openable || !result.resource) {
     return { state: "unavailable", reason: result.unavailableReason ?? null };
   }
-  return { state: "openable", target: workspaceFileAvailabilityTarget(result.resource) };
+  return { state: "openable", target: worktreeFileAvailabilityTarget(result.resource) };
 }

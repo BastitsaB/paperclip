@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ExecutionWorkspace } from "@paperclipai/shared";
-import { executionWorkspacesApi } from "../api/execution-workspaces";
+import type { ExecutionWorktree } from "@paperclipai/shared";
+import { executionWorktreesApi } from "../api/execution-workspaces";
 import { projectsApi } from "../api/projects";
 import { queryKeys } from "../lib/queryKeys";
-import type { ProjectWorkspaceSummary } from "../lib/project-workspaces-tab";
-import { ExecutionWorkspaceCloseDialog } from "./ExecutionWorkspaceCloseDialog";
-import { ProjectWorkspaceSummaryCard } from "./ProjectWorkspaceSummaryCard";
+import type { ProjectWorktreeSummary } from "../lib/project-workspaces-tab";
+import { ExecutionWorktreeCloseDialog } from "./ExecutionWorkspaceCloseDialog";
+import { ProjectWorktreeSummaryCard } from "./ProjectWorkspaceSummaryCard";
 
-export function ProjectWorkspacesContent({
+export function ProjectWorktreesContent({
   companyId,
   projectId,
   projectRef,
@@ -17,16 +17,16 @@ export function ProjectWorkspacesContent({
   companyId: string;
   projectId: string;
   projectRef: string;
-  summaries: ProjectWorkspaceSummary[];
+  summaries: ProjectWorktreeSummary[];
 }) {
   const queryClient = useQueryClient();
   const [runtimeActionKey, setRuntimeActionKey] = useState<string | null>(null);
-  const [closingWorkspace, setClosingWorkspace] = useState<{
+  const [closingWorktree, setClosingWorktree] = useState<{
     id: string;
     name: string;
-    status: ExecutionWorkspace["status"];
+    status: ExecutionWorktree["status"];
   } | null>(null);
-  const controlWorkspaceRuntime = useMutation({
+  const controlWorktreeRuntime = useMutation({
     mutationFn: async (input: {
       key: string;
       kind: "project_workspace" | "execution_workspace";
@@ -37,13 +37,13 @@ export function ProjectWorkspacesContent({
       if (input.kind === "project_workspace") {
         return await projectsApi.controlWorkspaceRuntimeServices(projectId, input.workspaceId, input.action, companyId);
       }
-      return await executionWorkspacesApi.controlRuntimeServices(input.workspaceId, input.action);
+      return await executionWorktreesApi.controlRuntimeServices(input.workspaceId, input.action);
     },
     onSettled: () => {
       setRuntimeActionKey(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.overview(companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.list(companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.list(companyId, { projectId }) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.overview(companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.list(companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.list(companyId, { projectId }) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.all(companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
@@ -52,7 +52,7 @@ export function ProjectWorkspacesContent({
   });
 
   if (summaries.length === 0) {
-    return <p className="text-sm text-muted-foreground">No non-default workspace activity yet.</p>;
+    return <p className="text-sm text-muted-foreground">No non-default worktree activity yet.</p>;
   }
 
   const activeSummaries = summaries.filter((summary) => summary.executionWorkspaceStatus !== "cleanup_failed");
@@ -63,14 +63,14 @@ export function ProjectWorkspacesContent({
       <div className="space-y-4">
         <div className="space-y-3">
           {activeSummaries.map((summary) => (
-            <ProjectWorkspaceSummaryCard
+            <ProjectWorktreeSummaryCard
               key={summary.key}
               projectRef={projectRef}
               summary={summary}
               runtimeActionKey={runtimeActionKey}
-              runtimeActionPending={controlWorkspaceRuntime.isPending}
-              onRuntimeAction={(input) => controlWorkspaceRuntime.mutate(input)}
-              onCloseWorkspace={(input) => setClosingWorkspace(input)}
+              runtimeActionPending={controlWorktreeRuntime.isPending}
+              onRuntimeAction={(input) => controlWorktreeRuntime.mutate(input)}
+              onCloseWorkspace={(input) => setClosingWorktree(input)}
             />
           ))}
         </div>
@@ -81,38 +81,38 @@ export function ProjectWorkspacesContent({
             </div>
             <div className="space-y-3">
               {cleanupFailedSummaries.map((summary) => (
-                <ProjectWorkspaceSummaryCard
+                <ProjectWorktreeSummaryCard
                   key={summary.key}
                   projectRef={projectRef}
                   summary={summary}
                   runtimeActionKey={runtimeActionKey}
-                  runtimeActionPending={controlWorkspaceRuntime.isPending}
-                  onRuntimeAction={(input) => controlWorkspaceRuntime.mutate(input)}
-                  onCloseWorkspace={(input) => setClosingWorkspace(input)}
+                  runtimeActionPending={controlWorktreeRuntime.isPending}
+                  onRuntimeAction={(input) => controlWorktreeRuntime.mutate(input)}
+                  onCloseWorkspace={(input) => setClosingWorktree(input)}
                 />
               ))}
             </div>
           </div>
         ) : null}
       </div>
-      {closingWorkspace ? (
-        <ExecutionWorkspaceCloseDialog
-          workspaceId={closingWorkspace.id}
-          workspaceName={closingWorkspace.name}
-          currentStatus={closingWorkspace.status}
+      {closingWorktree ? (
+        <ExecutionWorktreeCloseDialog
+          workspaceId={closingWorktree.id}
+          workspaceName={closingWorktree.name}
+          currentStatus={closingWorktree.status}
           open
           onOpenChange={(open) => {
-            if (!open) setClosingWorkspace(null);
+            if (!open) setClosingWorktree(null);
           }}
           onClosed={() => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.overview(companyId) });
-            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.list(companyId) });
-            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.list(companyId, { projectId }) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.overview(companyId) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.list(companyId) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.executionWorktrees.list(companyId, { projectId }) });
             queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) });
             queryClient.invalidateQueries({ queryKey: queryKeys.projects.all(companyId) });
             queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
             queryClient.invalidateQueries({ queryKey: queryKeys.issues.listByProject(companyId, projectId) });
-            setClosingWorkspace(null);
+            setClosingWorktree(null);
           }}
         />
       ) : null}

@@ -1,19 +1,19 @@
 import type { TrustAuthorizationPolicy } from "../trust-policy.js";
 import type { RuntimeExposureStatus } from "./runtime-exposure.js";
 
-export type ExecutionWorkspaceStrategyType =
+export type ExecutionWorktreeStrategyType =
   | "project_primary"
   | "git_worktree"
   | "adapter_managed"
   | "cloud_sandbox";
 
-export type ProjectExecutionWorkspaceDefaultMode =
+export type ProjectExecutionWorktreeDefaultMode =
   | "shared_workspace"
   | "isolated_workspace"
   | "operator_branch"
   | "adapter_default";
 
-export type ExecutionWorkspaceMode =
+export type ExecutionWorktreeMode =
   | "inherit"
   | "shared_workspace"
   | "isolated_workspace"
@@ -21,33 +21,33 @@ export type ExecutionWorkspaceMode =
   | "reuse_existing"
   | "agent_default";
 
-export type SharedWorkspaceConcurrency = "auto" | "serialize" | "allow";
+export type SharedWorktreeConcurrency = "auto" | "serialize" | "allow";
 
-export type ExecutionWorkspaceProviderType =
+export type ExecutionWorktreeProviderType =
   | "local_fs"
   | "git_worktree"
   | "adapter_managed"
   | "cloud_sandbox";
 
-export type ExecutionWorkspaceStatus =
+export type ExecutionWorktreeStatus =
   | "active"
   | "idle"
   | "in_review"
   | "archived"
   | "cleanup_failed";
 
-export type ExecutionWorkspaceDeliveryState =
+export type ExecutionWorktreeDeliveryState =
   | "merged_via_pr"
   | "merged_by_ancestry"
   | "unmerged"
   | "unknown";
 
-export type ExecutionWorkspaceCloseReadinessState =
+export type ExecutionWorktreeCloseReadinessState =
   | "ready"
   | "ready_with_warnings"
   | "blocked";
 
-export type ExecutionWorkspaceCloseActionKind =
+export type ExecutionWorktreeCloseActionKind =
   | "archive_record"
   | "stop_runtime_services"
   | "cleanup_command"
@@ -56,20 +56,20 @@ export type ExecutionWorkspaceCloseActionKind =
   | "git_branch_delete"
   | "remove_local_directory";
 
-export type WorkspaceRuntimeDesiredState = "running" | "stopped" | "manual";
-export type WorkspaceRuntimeServiceStateMap = Record<string, WorkspaceRuntimeDesiredState>;
-export type WorkspaceCommandKind = "service" | "job";
+export type WorktreeRuntimeDesiredState = "running" | "stopped" | "manual";
+export type WorktreeRuntimeServiceStateMap = Record<string, WorktreeRuntimeDesiredState>;
+export type WorktreeCommandKind = "service" | "job";
 
-export interface WorkspaceCommandSource {
+export interface WorktreeCommandSource {
   type: "paperclip";
   key: "commands" | "services" | "jobs";
   index: number;
 }
 
-export interface WorkspaceCommandDefinition {
+export interface WorktreeCommandDefinition {
   id: string;
   name: string;
-  kind: WorkspaceCommandKind;
+  kind: WorktreeCommandKind;
   command: string | null;
   cwd: string | null;
   port: number | null;
@@ -77,11 +77,11 @@ export interface WorkspaceCommandDefinition {
   serviceIndex: number | null;
   disabledReason: string | null;
   rawConfig: Record<string, unknown>;
-  source: WorkspaceCommandSource;
+  source: WorktreeCommandSource;
 }
 
-export interface ExecutionWorkspaceStrategy {
-  type: ExecutionWorkspaceStrategyType;
+export interface ExecutionWorktreeStrategy {
+  type: ExecutionWorktreeStrategyType;
   baseRef?: string | null;
   branchTemplate?: string | null;
   /**
@@ -96,37 +96,37 @@ export interface ExecutionWorkspaceStrategy {
   teardownCommand?: string | null;
 }
 
-export interface ExecutionWorkspaceConfig {
+export interface ExecutionWorktreeConfig {
   environmentId?: string | null;
   provisionCommand: string | null;
   runtimeProvisionCommand?: string | null;
   teardownCommand: string | null;
   cleanupCommand: string | null;
   workspaceRuntime: Record<string, unknown> | null;
-  desiredState: WorkspaceRuntimeDesiredState | null;
-  serviceStates?: WorkspaceRuntimeServiceStateMap | null;
+  desiredState: WorktreeRuntimeDesiredState | null;
+  serviceStates?: WorktreeRuntimeServiceStateMap | null;
 }
 
-export interface ProjectWorkspaceRuntimeConfig {
+export interface ProjectWorktreeRuntimeConfig {
   workspaceRuntime: Record<string, unknown> | null;
-  desiredState: WorkspaceRuntimeDesiredState | null;
-  serviceStates?: WorkspaceRuntimeServiceStateMap | null;
+  desiredState: WorktreeRuntimeDesiredState | null;
+  serviceStates?: WorktreeRuntimeServiceStateMap | null;
 }
 
-export interface WorkspaceRuntimeControlTarget {
+export interface WorktreeRuntimeControlTarget {
   workspaceCommandId?: string | null;
   runtimeServiceId?: string | null;
   serviceIndex?: number | null;
 }
 
-export interface ExecutionWorkspaceCloseAction {
-  kind: ExecutionWorkspaceCloseActionKind;
+export interface ExecutionWorktreeCloseAction {
+  kind: ExecutionWorktreeCloseActionKind;
   label: string;
   description: string;
   command: string | null;
 }
 
-export interface ExecutionWorkspaceCloseLinkedIssue {
+export interface ExecutionWorktreeCloseLinkedIssue {
   id: string;
   identifier: string | null;
   title: string;
@@ -134,7 +134,7 @@ export interface ExecutionWorkspaceCloseLinkedIssue {
   isTerminal: boolean;
 }
 
-export interface ExecutionWorkspaceCloseGitReadiness {
+export interface ExecutionWorktreeCloseGitReadiness {
   repoRoot: string | null;
   workspacePath: string | null;
   branchName: string | null;
@@ -149,29 +149,29 @@ export interface ExecutionWorkspaceCloseGitReadiness {
   createdByRuntime: boolean;
 }
 
-export interface ExecutionWorkspaceCloseReadiness {
+export interface ExecutionWorktreeCloseReadiness {
   workspaceId: string;
-  deliveryState: ExecutionWorkspaceDeliveryState;
-  state: ExecutionWorkspaceCloseReadinessState;
+  deliveryState: ExecutionWorktreeDeliveryState;
+  state: ExecutionWorktreeCloseReadinessState;
   blockingReasons: string[];
   warnings: string[];
-  linkedIssues: ExecutionWorkspaceCloseLinkedIssue[];
-  plannedActions: ExecutionWorkspaceCloseAction[];
+  linkedIssues: ExecutionWorktreeCloseLinkedIssue[];
+  plannedActions: ExecutionWorktreeCloseAction[];
   isDestructiveCloseAllowed: boolean;
   isSharedWorkspace: boolean;
   isProjectPrimaryWorkspace: boolean;
-  git: ExecutionWorkspaceCloseGitReadiness | null;
-  runtimeServices: WorkspaceRuntimeService[];
+  git: ExecutionWorktreeCloseGitReadiness | null;
+  runtimeServices: WorktreeRuntimeService[];
 }
 
-export interface ProjectExecutionWorkspacePolicy {
+export interface ProjectExecutionWorktreePolicy {
   enabled: boolean;
-  sharedWorkspaceConcurrency?: SharedWorkspaceConcurrency;
-  defaultMode?: ProjectExecutionWorkspaceDefaultMode;
+  sharedWorkspaceConcurrency?: SharedWorktreeConcurrency;
+  defaultMode?: ProjectExecutionWorktreeDefaultMode;
   allowIssueOverride?: boolean;
   defaultProjectWorkspaceId?: string | null;
   environmentId?: string | null;
-  workspaceStrategy?: ExecutionWorkspaceStrategy | null;
+  workspaceStrategy?: ExecutionWorktreeStrategy | null;
   workspaceRuntime?: Record<string, unknown> | null;
   branchPolicy?: Record<string, unknown> | null;
   pullRequestPolicy?: Record<string, unknown> | null;
@@ -180,11 +180,11 @@ export interface ProjectExecutionWorkspacePolicy {
   authorizationPolicy?: TrustAuthorizationPolicy | null;
 }
 
-export interface IssueExecutionWorkspaceSettings {
-  mode?: ExecutionWorkspaceMode;
-  sharedWorkspaceConcurrency?: SharedWorkspaceConcurrency;
+export interface IssueExecutionWorktreeSettings {
+  mode?: ExecutionWorktreeMode;
+  sharedWorkspaceConcurrency?: SharedWorktreeConcurrency;
   environmentId?: string | null;
-  workspaceStrategy?: ExecutionWorkspaceStrategy | null;
+  workspaceStrategy?: ExecutionWorktreeStrategy | null;
   workspaceRuntime?: Record<string, unknown> | null;
   networkEgress?: {
     allowFqdns?: string[];
@@ -192,18 +192,18 @@ export interface IssueExecutionWorkspaceSettings {
   } | null;
 }
 
-export interface ExecutionWorkspaceSummary {
+export interface ExecutionWorktreeSummary {
   id: string;
   name: string;
-  mode: Exclude<ExecutionWorkspaceMode, "inherit" | "reuse_existing" | "agent_default"> | "adapter_managed" | "cloud_sandbox";
-  status: ExecutionWorkspaceStatus;
+  mode: Exclude<ExecutionWorktreeMode, "inherit" | "reuse_existing" | "agent_default"> | "adapter_managed" | "cloud_sandbox";
+  status: ExecutionWorktreeStatus;
   cwd: string | null;
   branchName: string | null;
   projectWorkspaceId: string | null;
   lastUsedAt: Date;
 }
 
-export interface WorkspaceOverviewLinkedIssue {
+export interface WorktreeOverviewLinkedIssue {
   id: string;
   identifier: string | null;
   title: string;
@@ -212,19 +212,19 @@ export interface WorkspaceOverviewLinkedIssue {
   updatedAt: Date;
 }
 
-export interface WorkspaceOverviewPrimaryService {
+export interface WorktreeOverviewPrimaryService {
   id: string;
   serviceName: string;
-  status: WorkspaceRuntimeService["status"];
+  status: WorktreeRuntimeService["status"];
   url: string | null;
   port: number | null;
-  healthStatus: WorkspaceRuntimeService["healthStatus"];
+  healthStatus: WorktreeRuntimeService["healthStatus"];
   /** HTTPS exposure state, surfaced separately from process `healthStatus`. */
   exposure?: RuntimeExposureStatus | null;
   updatedAt: Date;
 }
 
-export interface WorkspaceOverviewItem {
+export interface WorktreeOverviewItem {
   key: string;
   kind: "execution_workspace";
   workspaceId: string;
@@ -232,26 +232,26 @@ export interface WorkspaceOverviewItem {
   projectId: string;
   projectUrlKey: string;
   projectName: string;
-  mode: ExecutionWorkspaceSummary["mode"];
-  strategyType: ExecutionWorkspaceStrategyType;
+  mode: ExecutionWorktreeSummary["mode"];
+  strategyType: ExecutionWorktreeStrategyType;
   cwd: string | null;
   branchName: string | null;
   lastUpdatedAt: Date;
   projectWorkspaceId: string | null;
   executionWorkspaceId: string;
-  executionWorkspaceStatus: ExecutionWorkspaceStatus;
+  executionWorkspaceStatus: ExecutionWorktreeStatus;
   serviceCount: number;
   runningServiceCount: number;
   primaryServiceUrl: string | null;
   primaryServiceUrlRunning: boolean;
-  primaryService: WorkspaceOverviewPrimaryService | null;
+  primaryService: WorktreeOverviewPrimaryService | null;
   hasRuntimeConfig: boolean;
   linkedIssueCount: number;
-  linkedIssues: WorkspaceOverviewLinkedIssue[];
+  linkedIssues: WorktreeOverviewLinkedIssue[];
 }
 
-export interface WorkspaceOverviewResponse {
-  items: WorkspaceOverviewItem[];
+export interface WorktreeOverviewResponse {
+  items: WorktreeOverviewItem[];
   total: number;
   limit: number;
   offset: number;
@@ -259,22 +259,22 @@ export interface WorkspaceOverviewResponse {
   nextOffset: number | null;
 }
 
-export interface ExecutionWorkspace {
+export interface ExecutionWorktree {
   id: string;
   companyId: string;
   projectId: string;
   projectWorkspaceId: string | null;
   sourceIssueId: string | null;
-  mode: Exclude<ExecutionWorkspaceMode, "inherit" | "reuse_existing" | "agent_default"> | "adapter_managed" | "cloud_sandbox";
-  strategyType: ExecutionWorkspaceStrategyType;
+  mode: Exclude<ExecutionWorktreeMode, "inherit" | "reuse_existing" | "agent_default"> | "adapter_managed" | "cloud_sandbox";
+  strategyType: ExecutionWorktreeStrategyType;
   name: string;
-  status: ExecutionWorkspaceStatus;
-  deliveryState: ExecutionWorkspaceDeliveryState;
+  status: ExecutionWorktreeStatus;
+  deliveryState: ExecutionWorktreeDeliveryState;
   cwd: string | null;
   repoUrl: string | null;
   baseRef: string | null;
   branchName: string | null;
-  providerType: ExecutionWorkspaceProviderType;
+  providerType: ExecutionWorktreeProviderType;
   providerRef: string | null;
   derivedFromExecutionWorkspaceId: string | null;
   lastUsedAt: Date;
@@ -282,14 +282,14 @@ export interface ExecutionWorkspace {
   closedAt: Date | null;
   cleanupEligibleAt: Date | null;
   cleanupReason: string | null;
-  config: ExecutionWorkspaceConfig | null;
+  config: ExecutionWorktreeConfig | null;
   metadata: Record<string, unknown> | null;
-  runtimeServices?: WorkspaceRuntimeService[];
+  runtimeServices?: WorktreeRuntimeService[];
   createdAt: Date;
   updatedAt: Date;
 }
 
-export interface WorkspaceRuntimeService {
+export interface WorktreeRuntimeService {
   id: string;
   companyId: string;
   projectId: string | null;
@@ -326,14 +326,14 @@ export interface WorkspaceRuntimeService {
   updatedAt: Date;
 }
 
-export type WorkspaceRealizationMode = "copy" | "in_place";
+export type WorktreeRealizationMode = "copy" | "in_place";
 
-export interface WorkspaceRealizationPathAlias {
+export interface WorktreeRealizationPathAlias {
   path: string;
   target: string;
 }
 
-export interface WorkspaceRealizationRequest {
+export interface WorktreeRealizationRequest {
   version: 1;
   adapterType: string;
   companyId: string;
@@ -375,11 +375,11 @@ export interface WorkspaceRealizationRequest {
   };
 }
 
-export interface WorkspaceRealizationRecord {
+export interface WorktreeRealizationRecord {
   version: 1;
-  mode: WorkspaceRealizationMode;
+  mode: WorktreeRealizationMode;
   authoritativeRoot: string;
-  pathAliases: WorkspaceRealizationPathAlias[];
+  pathAliases: WorktreeRealizationPathAlias[];
   outboundRestorePaths: string[];
   provider: string | null;
   environmentId: string;
@@ -387,8 +387,8 @@ export interface WorkspaceRealizationRecord {
   providerLeaseId: string | null;
   local: {
     path: string;
-    source: WorkspaceRealizationRequest["source"]["kind"];
-    strategy: WorkspaceRealizationRequest["source"]["strategy"];
+    source: WorktreeRealizationRequest["source"]["kind"];
+    strategy: WorktreeRealizationRequest["source"]["strategy"];
     projectId: string | null;
     projectWorkspaceId: string | null;
     repoUrl: string | null;

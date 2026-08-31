@@ -3,8 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { linkWorkspaceFileInlineCode } from "./WorkspaceFileMarkdownBody";
 
-describe("linkWorkspaceFileInlineCode", () => {
-  it("links workspace file refs in inline code to the current issue file viewer", () => {
+describe("linkWorktreeFileInlineCode", () => {
+  it("links worktree file refs in inline code to the current issue file viewer", () => {
     const markdown = linkWorkspaceFileInlineCode(
       "Check `ui/src/pages/IssueDetail.tsx:42` please.",
       "/issues/PAP-1",
@@ -20,7 +20,7 @@ describe("linkWorkspaceFileInlineCode", () => {
     expect(linkWorkspaceFileInlineCode("Run `pnpm test`.", "/issues/PAP-1", "", "")).toBe("Run `pnpm test`.");
   });
 
-  it("links trailing-slash folder refs to the workspace browser", () => {
+  it("links trailing-slash folder refs to the worktree browser", () => {
     const markdown = linkWorkspaceFileInlineCode(
       "Open `content-os/cases/active/2026-06-06-pap-10199-bundled-skills/`.",
       "/issues/PAP-1",

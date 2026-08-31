@@ -3,9 +3,9 @@ import {
   getConfiguredRuntimeServicePortWarnings,
   readConfiguredRuntimeServicePorts,
   updateConfiguredRuntimeServicePort,
-} from "./ExecutionWorkspaceDetail";
+} from "./ExecutionWorktreeDetail";
 
-describe("execution workspace service port configuration", () => {
+describe("execution worktree service port configuration", () => {
   it("reads commands and legacy services, then saves a fixed port without mutating the source config", () => {
     const runtimeConfig = {
       commands: [
@@ -35,7 +35,7 @@ describe("execution workspace service port configuration", () => {
     expect(runtimeConfig.commands[0]?.port).toEqual({ type: "auto" });
   });
 
-  it("warns when fixed ports collide in the same workspace configuration", () => {
+  it("warns when fixed ports collide in the same worktree configuration", () => {
     expect(getConfiguredRuntimeServicePortWarnings([
       { collection: "commands", index: 0, name: "Web", port: 3100, invalidPort: false },
       { collection: "commands", index: 1, name: "Admin", port: 3100, invalidPort: false },

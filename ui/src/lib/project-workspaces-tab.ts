@@ -1,8 +1,8 @@
-import type { ExecutionWorkspace, Issue, Project } from "@paperclipai/shared";
+import type { ExecutionWorktree, Issue, Project } from "@paperclipai/shared";
 
-type ProjectWorkspaceLike = Pick<Project, "workspaces" | "primaryWorkspace">;
+type ProjectWorktreeLike = Pick<Project, "workspaces" | "primaryWorkspace">;
 
-export type ProjectWorkspaceLinkedIssue = Pick<Issue, "id" | "identifier" | "title" | "updatedAt"> & {
+export type ProjectWorktreeLinkedIssue = Pick<Issue, "id" | "identifier" | "title" | "updatedAt"> & {
   status: string;
   priority: string;
   description?: string | null;
@@ -13,7 +13,7 @@ export type ProjectWorkspaceLinkedIssue = Pick<Issue, "id" | "identifier" | "tit
   originId?: string | null;
 };
 
-export interface ProjectWorkspaceSummary {
+export interface ProjectWorktreeSummary {
   key: string;
   kind: "execution_workspace" | "project_workspace";
   workspaceId: string;
@@ -23,14 +23,14 @@ export interface ProjectWorkspaceSummary {
   lastUpdatedAt: Date;
   projectWorkspaceId: string | null;
   executionWorkspaceId: string | null;
-  executionWorkspaceStatus: ExecutionWorkspace["status"] | null;
+  executionWorkspaceStatus: ExecutionWorktree["status"] | null;
   serviceCount: number;
   runningServiceCount: number;
   primaryServiceUrl: string | null;
   primaryServiceUrlRunning: boolean;
   hasRuntimeConfig: boolean;
   linkedIssueCount: number;
-  issues: ProjectWorkspaceLinkedIssue[];
+  issues: ProjectWorktreeLinkedIssue[];
 }
 
 function toDate(value: Date | string | null | undefined): Date | null {
@@ -48,25 +48,25 @@ function maxDate(...values: Array<Date | string | null | undefined>): Date {
   return latest;
 }
 
-function primaryWorkspaceId(project: ProjectWorkspaceLike): string | null {
+function primaryWorktreeId(project: ProjectWorktreeLike): string | null {
   return project.primaryWorkspace?.id
-    ?? project.workspaces.find((workspace) => workspace.isPrimary)?.id
+    ?? project.workspaces.find((worktree) => worktree.isPrimary)?.id
     ?? project.workspaces[0]?.id
     ?? null;
 }
 
-function isDefaultSharedExecutionWorkspace(input: {
-  executionWorkspace: ExecutionWorkspace;
+function isDefaultSharedExecutionWorktree(input: {
+  executionWorkspace: ExecutionWorktree;
   issue: Issue;
   primaryWorkspaceId: string | null;
 }) {
-  const linkedProjectWorkspaceId =
+  const linkedProjectWorktreeId =
     input.executionWorkspace.projectWorkspaceId ?? input.issue.projectWorkspaceId ?? null;
-  return input.executionWorkspace.mode === "shared_workspace" && linkedProjectWorkspaceId === input.primaryWorkspaceId;
+  return input.executionWorkspace.mode === "shared_workspace" && linkedProjectWorktreeId === input.primaryWorkspaceId;
 }
 
 function runtimeServiceSummary(
-  services: NonNullable<ExecutionWorkspace["runtimeServices"]> | undefined,
+  services: NonNullable<ExecutionWorktree["runtimeServices"]> | undefined,
 ) {
   const serviceCount = services?.length ?? 0;
   const runningServiceCount = services?.filter((service) => service.status === "running").length ?? 0;
@@ -83,57 +83,57 @@ function runtimeServiceSummary(
   };
 }
 
-export function buildProjectWorkspaceSummaries(input: {
-  project: ProjectWorkspaceLike;
+export function buildProjectWorktreeSummaries(input: {
+  project: ProjectWorktreeLike;
   issues: Issue[];
-  executionWorkspaces: ExecutionWorkspace[];
-}): ProjectWorkspaceSummary[] {
-  const primaryId = primaryWorkspaceId(input.project);
-  const executionWorkspacesById = new Map(
-    input.executionWorkspaces.map((workspace) => [workspace.id, workspace] as const),
+  executionWorktrees: ExecutionWorktree[];
+}): ProjectWorktreeSummary[] {
+  const primaryId = primaryWorktreeId(input.project);
+  const executionWorktreesById = new Map(
+    input.executionWorktrees.map((worktree) => [worktree.id, worktree] as const),
   );
-  const projectWorkspacesById = new Map(
-    input.project.workspaces.map((workspace) => [workspace.id, workspace] as const),
+  const projectWorktreesById = new Map(
+    input.project.workspaces.map((worktree) => [worktree.id, worktree] as const),
   );
-  const summaries = new Map<string, ProjectWorkspaceSummary>();
+  const summaries = new Map<string, ProjectWorktreeSummary>();
 
   for (const issue of input.issues) {
     if (issue.executionWorkspaceId) {
-      const executionWorkspace = executionWorkspacesById.get(issue.executionWorkspaceId);
-      if (!executionWorkspace) continue;
-      if (executionWorkspace.status === "archived") continue;
-      if (isDefaultSharedExecutionWorkspace({
-        executionWorkspace,
+      const executionWorktree = executionWorktreesById.get(issue.executionWorkspaceId);
+      if (!executionWorktree) continue;
+      if (executionWorktree.status === "archived") continue;
+      if (isDefaultSharedExecutionWorktree({
+        executionWorkspace: executionWorktree,
         issue,
         primaryWorkspaceId: primaryId,
       })) continue;
 
-      const existing = summaries.get(`execution:${executionWorkspace.id}`);
+      const existing = summaries.get(`execution:${executionWorktree.id}`);
       const nextIssues = [...(existing?.issues ?? []), issue].sort(
         (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
-      const runtimeSummary = runtimeServiceSummary(executionWorkspace.runtimeServices);
+      const runtimeSummary = runtimeServiceSummary(executionWorktree.runtimeServices);
 
-      summaries.set(`execution:${executionWorkspace.id}`, {
-        key: `execution:${executionWorkspace.id}`,
+      summaries.set(`execution:${executionWorktree.id}`, {
+        key: `execution:${executionWorktree.id}`,
         kind: "execution_workspace",
-        workspaceId: executionWorkspace.id,
-        workspaceName: executionWorkspace.name,
-        cwd: executionWorkspace.cwd ?? null,
-        branchName: executionWorkspace.branchName ?? executionWorkspace.baseRef ?? null,
+        workspaceId: executionWorktree.id,
+        workspaceName: executionWorktree.name,
+        cwd: executionWorktree.cwd ?? null,
+        branchName: executionWorktree.branchName ?? executionWorktree.baseRef ?? null,
         lastUpdatedAt: maxDate(
           existing?.lastUpdatedAt,
-          executionWorkspace.lastUsedAt,
-          executionWorkspace.updatedAt,
+          executionWorktree.lastUsedAt,
+          executionWorktree.updatedAt,
           issue.updatedAt,
         ),
-        projectWorkspaceId: executionWorkspace.projectWorkspaceId ?? issue.projectWorkspaceId ?? null,
-        executionWorkspaceId: executionWorkspace.id,
-        executionWorkspaceStatus: executionWorkspace.status,
+        projectWorkspaceId: executionWorktree.projectWorkspaceId ?? issue.projectWorkspaceId ?? null,
+        executionWorkspaceId: executionWorktree.id,
+        executionWorkspaceStatus: executionWorktree.status,
         ...runtimeSummary,
         hasRuntimeConfig: Boolean(
-          executionWorkspace.config?.workspaceRuntime
-          ?? projectWorkspacesById.get(executionWorkspace.projectWorkspaceId ?? issue.projectWorkspaceId ?? "")?.runtimeConfig?.workspaceRuntime,
+          executionWorktree.config?.workspaceRuntime
+          ?? projectWorktreesById.get(executionWorktree.projectWorkspaceId ?? issue.projectWorkspaceId ?? "")?.runtimeConfig?.workspaceRuntime,
         ),
         linkedIssueCount: nextIssues.length,
         issues: nextIssues,
@@ -142,55 +142,55 @@ export function buildProjectWorkspaceSummaries(input: {
     }
 
     if (!issue.projectWorkspaceId || issue.projectWorkspaceId === primaryId) continue;
-    const projectWorkspace = projectWorkspacesById.get(issue.projectWorkspaceId);
-    if (!projectWorkspace) continue;
+    const projectWorktree = projectWorktreesById.get(issue.projectWorkspaceId);
+    if (!projectWorktree) continue;
 
-    const existing = summaries.get(`project:${projectWorkspace.id}`);
+    const existing = summaries.get(`project:${projectWorktree.id}`);
     const nextIssues = [...(existing?.issues ?? []), issue].sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
-    const runtimeSummary = runtimeServiceSummary(projectWorkspace.runtimeServices);
+    const runtimeSummary = runtimeServiceSummary(projectWorktree.runtimeServices);
 
-    summaries.set(`project:${projectWorkspace.id}`, {
-      key: `project:${projectWorkspace.id}`,
+    summaries.set(`project:${projectWorktree.id}`, {
+      key: `project:${projectWorktree.id}`,
       kind: "project_workspace",
-      workspaceId: projectWorkspace.id,
-      workspaceName: projectWorkspace.name,
-      cwd: projectWorkspace.cwd ?? null,
-      branchName: projectWorkspace.repoRef ?? projectWorkspace.defaultRef ?? null,
-      lastUpdatedAt: maxDate(existing?.lastUpdatedAt, projectWorkspace.updatedAt, issue.updatedAt),
-      projectWorkspaceId: projectWorkspace.id,
+      workspaceId: projectWorktree.id,
+      workspaceName: projectWorktree.name,
+      cwd: projectWorktree.cwd ?? null,
+      branchName: projectWorktree.repoRef ?? projectWorktree.defaultRef ?? null,
+      lastUpdatedAt: maxDate(existing?.lastUpdatedAt, projectWorktree.updatedAt, issue.updatedAt),
+      projectWorkspaceId: projectWorktree.id,
       executionWorkspaceId: null,
       executionWorkspaceStatus: null,
       ...runtimeSummary,
-      hasRuntimeConfig: Boolean(projectWorkspace.runtimeConfig?.workspaceRuntime),
+      hasRuntimeConfig: Boolean(projectWorktree.runtimeConfig?.workspaceRuntime),
       linkedIssueCount: nextIssues.length,
       issues: nextIssues,
     });
   }
 
-  for (const projectWorkspace of input.project.workspaces) {
-    const key = `project:${projectWorkspace.id}`;
+  for (const projectWorktree of input.project.workspaces) {
+    const key = `project:${projectWorktree.id}`;
     if (summaries.has(key)) continue;
-    const shouldSurfaceWorkspace =
-      projectWorkspace.isPrimary
-      || Boolean(projectWorkspace.runtimeConfig?.workspaceRuntime)
-      || (projectWorkspace.runtimeServices?.length ?? 0) > 0;
-    if (!shouldSurfaceWorkspace) continue;
-    const runtimeSummary = runtimeServiceSummary(projectWorkspace.runtimeServices);
+    const shouldSurfaceWorktree =
+      projectWorktree.isPrimary
+      || Boolean(projectWorktree.runtimeConfig?.workspaceRuntime)
+      || (projectWorktree.runtimeServices?.length ?? 0) > 0;
+    if (!shouldSurfaceWorktree) continue;
+    const runtimeSummary = runtimeServiceSummary(projectWorktree.runtimeServices);
     summaries.set(key, {
       key,
       kind: "project_workspace",
-      workspaceId: projectWorkspace.id,
-      workspaceName: projectWorkspace.name,
-      cwd: projectWorkspace.cwd ?? null,
-      branchName: projectWorkspace.repoRef ?? projectWorkspace.defaultRef ?? null,
-      lastUpdatedAt: maxDate(projectWorkspace.updatedAt),
-      projectWorkspaceId: projectWorkspace.id,
+      workspaceId: projectWorktree.id,
+      workspaceName: projectWorktree.name,
+      cwd: projectWorktree.cwd ?? null,
+      branchName: projectWorktree.repoRef ?? projectWorktree.defaultRef ?? null,
+      lastUpdatedAt: maxDate(projectWorktree.updatedAt),
+      projectWorkspaceId: projectWorktree.id,
       executionWorkspaceId: null,
       executionWorkspaceStatus: null,
       ...runtimeSummary,
-      hasRuntimeConfig: Boolean(projectWorkspace.runtimeConfig?.workspaceRuntime),
+      hasRuntimeConfig: Boolean(projectWorktree.runtimeConfig?.workspaceRuntime),
       linkedIssueCount: 0,
       issues: [],
     });

@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ExecutionWorkspace, Project } from "@paperclipai/shared";
+import type { ExecutionWorktree, Project } from "@paperclipai/shared";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ExecutionWorkspaceDetail } from "./ExecutionWorkspaceDetail";
+import { ExecutionWorktreeDetail } from "./ExecutionWorktreeDetail";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const mockExecutionWorkspacesApi = vi.hoisted(() => ({
+const mockExecutionWorktreesApi = vi.hoisted(() => ({
   get: vi.fn(),
   update: vi.fn(),
   listWorkspaceOperations: vi.fn(),
@@ -32,11 +32,11 @@ const mockPluginSlotState = vi.hoisted(() => ({
   errorMessage: null as string | null,
 }));
 const mockRouteLocation = vi.hoisted(() => ({
-  pathname: "/execution-workspaces/workspace-1/issues",
+  pathname: "/execution-worktrees/workspace-1/issues",
   search: "",
 }));
 
-vi.mock("../api/execution-workspaces", () => ({ executionWorkspacesApi: mockExecutionWorkspacesApi }));
+vi.mock("../api/execution-workspaces", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -50,7 +50,7 @@ vi.mock("@/lib/router", () => ({
   Navigate: ({ to }: { to: string }) => <div data-testid="navigate">{to}</div>,
   useLocation: () => ({ ...mockRouteLocation, hash: "", state: null }),
   useNavigate: () => mockNavigate,
-  useParams: () => ({ workspaceId: "workspace-1" }),
+  useParams: () => ({ worktreeId: "workspace-1" }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -118,7 +118,7 @@ vi.mock("../components/PageTabBar", () => ({
 }));
 vi.mock("../components/CopyText", () => ({ CopyText: () => null }));
 
-function workspace(overrides: Partial<ExecutionWorkspace> = {}): ExecutionWorkspace {
+function worktree(overrides: Partial<ExecutionWorktree> = {}): ExecutionWorktree {
   const now = new Date("2026-05-01T00:00:00Z");
   return {
     id: "workspace-1",
@@ -148,7 +148,7 @@ function workspace(overrides: Partial<ExecutionWorkspace> = {}): ExecutionWorksp
     createdAt: now,
     updatedAt: now,
     ...overrides,
-  } as ExecutionWorkspace;
+  } as ExecutionWorktree;
 }
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -197,11 +197,11 @@ function pluginSlot(overrides: Record<string, unknown> = {}) {
     id: "changes-tab",
     type: "detailTab",
     displayName: "Changes",
-    exportName: "ExecutionWorkspaceChangesTab",
+    exportName: "ExecutionWorktreeChangesTab",
     entityTypes: ["execution_workspace"],
     pluginId: "plugin-1",
     pluginKey: "paperclip.workspace-diff",
-    pluginDisplayName: "Workspace Changes",
+    pluginDisplayName: "Worktree Changes",
     pluginVersion: "0.1.0",
     ...overrides,
   };
@@ -212,15 +212,15 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe("ExecutionWorkspaceDetail plugin slots", () => {
+describe("ExecutionWorktreeDetail plugin slots", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
-    mockExecutionWorkspacesApi.get.mockResolvedValue(workspace());
-    mockExecutionWorkspacesApi.listWorkspaceOperations.mockResolvedValue([]);
+    mockExecutionWorktreesApi.get.mockResolvedValue(worktree());
+    mockExecutionWorktreesApi.listWorkspaceOperations.mockResolvedValue([]);
     mockProjectsApi.get.mockResolvedValue(project());
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
@@ -236,7 +236,7 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     root = null;
     container.remove();
     vi.clearAllMocks();
-    mockRouteLocation.pathname = "/execution-workspaces/workspace-1/issues";
+    mockRouteLocation.pathname = "/execution-worktrees/workspace-1/issues";
     mockRouteLocation.search = "";
   });
 
@@ -246,7 +246,7 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
       root = createRoot(container);
       root.render(
         <QueryClientProvider client={queryClient}>
-          <ExecutionWorkspaceDetail />
+          <ExecutionWorktreeDetail />
         </QueryClientProvider>,
       );
     });
@@ -288,8 +288,8 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     });
   });
 
-  it("shows a summary scoped to the execution workspace above tasks", async () => {
-    mockExecutionWorkspacesApi.get.mockResolvedValue(workspace({ projectWorkspaceId: "project-workspace-1" }));
+  it("shows a summary scoped to the execution worktree above tasks", async () => {
+    mockExecutionWorktreesApi.get.mockResolvedValue(worktree({ projectWorkspaceId: "project-workspace-1" }));
 
     await render();
 
@@ -297,7 +297,7 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
       companyId: "company-1",
       scopeKind: "execution_workspace",
       scopeId: "workspace-1",
-      title: "Workspace summary",
+      title: "Worktree summary",
     }));
     const summary = container.querySelector('[data-testid="summary-slot-card"]');
     const issues = container.querySelector('[data-testid="issues-list"]');
@@ -307,7 +307,7 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     expect(summary.compareDocumentPosition(issues) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 
-  it("shows an isolated summary for standalone execution workspaces", async () => {
+  it("shows an isolated summary for standalone execution worktrees", async () => {
     await render();
 
     expect(mockSummarySlotCard).toHaveBeenCalledWith(expect.objectContaining({
@@ -328,18 +328,18 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
   });
 
   it("shows a missing plugin placeholder instead of routines for stale plugin tab URLs", async () => {
-    mockRouteLocation.pathname = "/execution-workspaces/workspace-1";
+    mockRouteLocation.pathname = "/execution-worktrees/workspace-1";
     mockRouteLocation.search = "?tab=plugin%3Amissing%3Aslot";
 
     await render();
 
-    expect(container.textContent).toContain("Workspace plugin tab is not available.");
-    expect(container.querySelector('a[href="/execution-workspaces/workspace-1/issues"]')?.textContent).toBe("Back to tasks");
-    expect(container.textContent).not.toContain("Workspace routines");
+    expect(container.textContent).toContain("Worktree plugin tab is not available.");
+    expect(container.querySelector('a[href="/execution-worktrees/workspace-1/issues"]')?.textContent).toBe("Back to tasks");
+    expect(container.textContent).not.toContain("Worktree routines");
     expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
   });
 
-  it("orders execution workspace plugin tabs against built-in tabs by slot order", async () => {
+  it("orders execution worktree plugin tabs against built-in tabs by slot order", async () => {
     mockPluginSlotState.slots = [
       pluginSlot({ id: "default-tab", displayName: "Default" }),
       pluginSlot({ id: "changes-tab", displayName: "Changes", order: 25 }),

@@ -27,10 +27,10 @@ export const WORKSPACE_READINESS_STATES = [
   "failed",
 ] as const;
 
-export type WorkspaceReadinessState = (typeof WORKSPACE_READINESS_STATES)[number];
+export type WorktreeReadinessState = (typeof WORKSPACE_READINESS_STATES)[number];
 
 /** Terminal state of the versioned seed manifest, or `unknown` for a legacy marker. */
-export type WorkspaceSeedReadinessState =
+export type WorktreeSeedReadinessState =
   | "pending"
   | "running"
   | "verified"
@@ -38,8 +38,8 @@ export type WorkspaceSeedReadinessState =
   | "unknown"
   | "absent";
 
-export interface WorkspaceReadiness {
-  state: WorkspaceReadinessState;
+export interface WorktreeReadiness {
+  state: WorktreeReadinessState;
   /** `SELECT 1` plus a readable migration journal on this instance's own database. */
   databaseReady: boolean;
   /** A representative cloned company/issue pair is readable. */
@@ -48,7 +48,7 @@ export interface WorkspaceReadiness {
   authHandoffReady: boolean;
   /** Exact cloned user checked for a caller-scoped handoff probe, or null. */
   authHandoffUserId: string | null;
-  seedState: WorkspaceSeedReadinessState;
+  seedState: WorktreeSeedReadinessState;
   /** Last recorded seed phase, e.g. `restore` or `post_restore_validation`. */
   seedPhase: string | null;
   seedMode: "minimal" | "full" | null;
@@ -67,8 +67,8 @@ export interface WorkspaceReadiness {
  * workspace runtime. `reason` is a stable machine code so the runtime gate and
  * the UI can branch without parsing prose.
  */
-export type WorkspaceReadinessProbeResult =
-  | { ok: true; readiness: WorkspaceReadiness }
+export type WorktreeReadinessProbeResult =
+  | { ok: true; readiness: WorktreeReadiness }
   | {
       ok: false;
       reason:
@@ -78,11 +78,11 @@ export type WorkspaceReadinessProbeResult =
         | "readiness_missing"
         | "not_ready"
         | "identity_mismatch";
-      readiness: WorkspaceReadiness | null;
+      readiness: WorktreeReadiness | null;
       detail: string | null;
     };
 
-export interface WorkspaceLoginHandoffTicketResponse {
+export interface WorktreeLoginHandoffTicketResponse {
   /** Absolute URL that exchanges the ticket and redirects to the cloned board. */
   url: string;
   expiresAt: string;

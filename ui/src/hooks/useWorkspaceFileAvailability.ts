@@ -3,16 +3,16 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { fileResourcesApi } from "@/api/file-resources";
 import { queryKeys } from "@/lib/queryKeys";
 import {
-  chunkWorkspaceFileAvailabilityRefs,
-  workspaceFileAvailabilityFromResult,
-  workspaceFileAvailabilityKey,
+  chunkWorktreeFileAvailabilityRefs,
+  worktreeFileAvailabilityFromResult,
+  worktreeFileAvailabilityKey,
   WORKSPACE_FILE_AVAILABILITY_PENDING,
   WORKSPACE_FILE_AVAILABILITY_STALE_MS,
-  type WorkspaceFileAvailability,
-  type WorkspaceFileAvailabilityRef,
+  type WorktreeFileAvailability,
+  type WorktreeFileAvailabilityRef,
 } from "@/lib/workspace-file-availability";
 
-type QueuedRef = readonly [key: string, ref: WorkspaceFileAvailabilityRef];
+type QueuedRef = readonly [key: string, ref: WorktreeFileAvailabilityRef];
 type QueuedBatch = {
   chunk: QueuedRef[];
   issueId: string;
@@ -22,7 +22,7 @@ type QueuedBatch = {
 /** Matches the server's per-actor, per-issue availability concurrency limit. */
 const WORKSPACE_FILE_AVAILABILITY_MAX_CONCURRENT = 2;
 
-export interface WorkspaceFileAvailabilityRegistry {
+export interface WorktreeFileAvailabilityRegistry {
   /**
    * Bumped whenever known results change. Consumers that memoize on the
    * registry (remark plugins) must include it so a completed batch re-renders.
@@ -33,7 +33,7 @@ export interface WorkspaceFileAvailabilityRegistry {
    * time it is seen. Safe to call during render: it only mutates internal
    * queues and schedules the request for the next macrotask.
    */
-  check(ref: WorkspaceFileAvailabilityRef): WorkspaceFileAvailability;
+  check(ref: WorktreeFileAvailabilityRef): WorktreeFileAvailability;
 }
 
 function isFileResourceKeyForIssue(queryKey: readonly unknown[], issueId: string) {
@@ -48,11 +48,11 @@ function isFileResourceKeyForIssue(queryKey: readonly unknown[], issueId: string
  * server's 100-query cap, and cached on the shared file-resource query key so
  * an invalidation of the issue's file resources forces a recheck.
  */
-export function useWorkspaceFileAvailability(issueId: string): WorkspaceFileAvailabilityRegistry {
+export function useWorktreeFileAvailability(issueId: string): WorktreeFileAvailabilityRegistry {
   const queryClient = useQueryClient();
   const [version, setVersion] = useState(0);
-  const resultsRef = useRef<Map<string, WorkspaceFileAvailability>>(new Map());
-  const queueRef = useRef<Map<string, WorkspaceFileAvailabilityRef>>(new Map());
+  const resultsRef = useRef<Map<string, WorktreeFileAvailability>>(new Map());
+  const queueRef = useRef<Map<string, WorktreeFileAvailabilityRef>>(new Map());
   const inFlightRef = useRef<Set<string>>(new Set());
   const batchQueueRef = useRef<QueuedBatch[]>([]);
   const activeBatchCountRef = useRef(0);
@@ -98,8 +98,8 @@ export function useWorkspaceFileAvailability(issueId: string): WorkspaceFileAvai
         if (generation !== generationRef.current) return;
         const byKey = new Map(
           response.results.map((result) => [
-            workspaceFileAvailabilityKey(result.query),
-            workspaceFileAvailabilityFromResult(result),
+            worktreeFileAvailabilityKey(result.query),
+            worktreeFileAvailabilityFromResult(result),
           ]),
         );
         for (const [key] of chunk) {
@@ -142,7 +142,7 @@ export function useWorkspaceFileAvailability(issueId: string): WorkspaceFileAvai
     if (fresh.length === 0) return;
     for (const [key] of fresh) inFlightRef.current.add(key);
     batchQueueRef.current.push(
-      ...chunkWorkspaceFileAvailabilityRefs(fresh).map((chunk) => ({
+      ...chunkWorktreeFileAvailabilityRefs(fresh).map((chunk) => ({
         chunk,
         issueId,
         generation: generationRef.current,
@@ -151,9 +151,9 @@ export function useWorkspaceFileAvailability(issueId: string): WorkspaceFileAvai
     drainBatchQueue();
   }, [drainBatchQueue, issueId]);
 
-  const check = useCallback<WorkspaceFileAvailabilityRegistry["check"]>(
+  const check = useCallback<WorktreeFileAvailabilityRegistry["check"]>(
     (ref) => {
-      const key = workspaceFileAvailabilityKey(ref);
+      const key = worktreeFileAvailabilityKey(ref);
       const known = resultsRef.current.get(key);
       if (known) return known;
       if (!inFlightRef.current.has(key) && !queueRef.current.has(key)) {

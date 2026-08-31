@@ -1,20 +1,20 @@
 import { useMemo } from "react";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
-  buildReusableExecutionWorkspaceOptionGroups,
-  reusableWorkspaceOptionMatches,
-  scoreReusableWorkspaceOptionMatch,
-  type ReusableExecutionWorkspaceLike,
-  type ReusableWorkspaceOption,
+  buildReusableExecutionWorktreeOptionGroups,
+  reusableWorktreeOptionMatches,
+  scoreReusableWorktreeOptionMatch,
+  type ReusableExecutionWorktreeLike,
+  type ReusableWorktreeOption,
 } from "@/lib/reusable-execution-workspaces";
 import { cn } from "@/lib/utils";
 
 const COMPACT_TRIGGER_CLASS = "h-8 px-2 py-1.5 text-xs font-normal";
 
-interface ReusableExecutionWorkspaceSelectProps<TWorkspace extends ReusableExecutionWorkspaceLike> {
+interface ReusableExecutionWorktreeSelectProps<TWorktree extends ReusableExecutionWorktreeLike> {
   value: string;
-  workspaces: readonly TWorkspace[];
-  onValueChange: (workspaceId: string, option: ReusableWorkspaceOption<TWorkspace>) => void;
+  worktrees: readonly TWorktree[];
+  onValueChange: (worktreeId: string, option: ReusableWorktreeOption<TWorktree>) => void;
   placeholder?: string;
   loading?: boolean;
   error?: boolean;
@@ -24,35 +24,35 @@ interface ReusableExecutionWorkspaceSelectProps<TWorkspace extends ReusableExecu
   disablePortal?: boolean;
 }
 
-export function ReusableExecutionWorkspaceSelect<TWorkspace extends ReusableExecutionWorkspaceLike>({
+export function ReusableExecutionWorktreeSelect<TWorktree extends ReusableExecutionWorktreeLike>({
   value,
-  workspaces,
+  worktrees,
   onValueChange,
-  placeholder = "Choose an existing workspace",
+  placeholder = "Choose an existing worktree",
   loading = false,
   error = false,
   disabled = false,
   className,
   triggerClassName,
   disablePortal,
-}: ReusableExecutionWorkspaceSelectProps<TWorkspace>) {
-  const groups = useMemo(() => buildReusableExecutionWorkspaceOptionGroups(workspaces), [workspaces]);
+}: ReusableExecutionWorktreeSelectProps<TWorktree>) {
+  const groups = useMemo(() => buildReusableExecutionWorktreeOptionGroups(worktrees), [worktrees]);
 
   return (
-    <SearchableSelect<string, ReusableWorkspaceOption<TWorkspace>>
+    <SearchableSelect<string, ReusableWorktreeOption<TWorktree>>
       value={value}
       groups={groups}
       onValueChange={onValueChange}
       placeholder={placeholder}
-      searchPlaceholder="Search workspaces..."
-      emptyMessage={error ? "Workspaces failed to load." : "No matching workspaces."}
-      loadingMessage="Loading workspaces..."
+      searchPlaceholder="Search worktrees..."
+      emptyMessage={error ? "Worktrees failed to load." : "No matching worktrees."}
+      loadingMessage="Loading worktrees..."
       loading={loading}
       disabled={disabled}
       className={className}
       triggerClassName={cn(COMPACT_TRIGGER_CLASS, triggerClassName)}
-      filterOption={reusableWorkspaceOptionMatches}
-      scoreOption={scoreReusableWorkspaceOptionMatch}
+      filterOption={reusableWorktreeOptionMatches}
+      scoreOption={scoreReusableWorktreeOptionMatch}
       disablePortal={disablePortal}
       renderOption={(option, { selected }) => (
         <span className="flex min-w-0 flex-col">

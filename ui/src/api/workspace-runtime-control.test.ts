@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeWorkspaceRuntimeControlTarget } from "./workspace-runtime-control";
+import { sanitizeWorktreeRuntimeControlTarget } from "./workspace-runtime-control";
 
 describe("sanitizeWorkspaceRuntimeControlTarget", () => {
   it("drops unexpected keys while preserving the selected runtime target", () => {
-    const sanitized = sanitizeWorkspaceRuntimeControlTarget({
+    const sanitized = sanitizeWorktreeRuntimeControlTarget({
       workspaceCommandId: "web",
       runtimeServiceId: "service-1",
       serviceIndex: 2,
@@ -19,7 +19,7 @@ describe("sanitizeWorkspaceRuntimeControlTarget", () => {
   });
 
   it("normalizes an omitted target to nullable fields", () => {
-    expect(sanitizeWorkspaceRuntimeControlTarget()).toEqual({
+    expect(sanitizeWorktreeRuntimeControlTarget()).toEqual({
       workspaceCommandId: null,
       runtimeServiceId: null,
       serviceIndex: null,

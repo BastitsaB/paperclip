@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildWorkspaceFileHref,
-  createRemarkWorkspaceFileRefs,
-  parseWorkspaceFileHref,
-  type WorkspaceFileRefResolver,
+  buildWorktreeFileHref,
+  createRemarkWorktreeFileRefs,
+  parseWorktreeFileHref,
+  type WorktreeFileRefResolver,
 } from "./remark-workspace-file-refs";
-import type { WorkspaceFileAvailabilityTarget } from "./workspace-file-availability";
+import type { WorktreeFileAvailabilityTarget } from "./workspace-file-availability";
 
 type MarkdownNode = {
   type: string;
@@ -14,7 +14,7 @@ type MarkdownNode = {
   children?: MarkdownNode[];
 };
 
-const AUTO_TARGET: WorkspaceFileAvailabilityTarget = {
+const AUTO_TARGET: WorktreeFileAvailabilityTarget = {
   workspace: "auto",
   projectId: null,
   workspaceId: null,
@@ -22,10 +22,10 @@ const AUTO_TARGET: WorkspaceFileAvailabilityTarget = {
 };
 
 /** Resolver standing in for "the server confirmed every reference is openable". */
-const resolveAllOpenable: WorkspaceFileRefResolver = () => AUTO_TARGET;
+const resolveAllOpenable: WorktreeFileRefResolver = () => AUTO_TARGET;
 
 /** Fail-closed resolver: nothing is openable. */
-const resolveNoneOpenable: WorkspaceFileRefResolver = () => null;
+const resolveNoneOpenable: WorktreeFileRefResolver = () => null;
 
 function textNode(value: string): MarkdownNode {
   return { type: "text", value };
@@ -39,8 +39,8 @@ function paragraph(children: MarkdownNode[]): MarkdownNode {
   return { type: "paragraph", children };
 }
 
-function runPlugin(tree: MarkdownNode, resolve: WorkspaceFileRefResolver = resolveAllOpenable): MarkdownNode {
-  const transform = createRemarkWorkspaceFileRefs(resolve)();
+function runPlugin(tree: MarkdownNode, resolve: WorktreeFileRefResolver = resolveAllOpenable): MarkdownNode {
+  const transform = createRemarkWorktreeFileRefs(resolve)();
   transform(tree);
   return tree;
 }
@@ -57,7 +57,7 @@ describe("remarkWorkspaceFileRefs", () => {
     const link = tree.children![1];
     expect(link.type).toBe("link");
     expect(link.url?.startsWith("workspace-file:")).toBe(true);
-    const parsed = parseWorkspaceFileHref(link.url);
+    const parsed = parseWorktreeFileHref(link.url);
     expect(parsed?.path).toBe("ui/src/pages/IssueDetail.tsx");
     expect(parsed?.resourceKind).toBe("file");
     expect(parsed?.line).toBe(42);
@@ -77,8 +77,8 @@ describe("remarkWorkspaceFileRefs", () => {
   });
 
   it("round-trips workspace file hrefs", () => {
-    const href = buildWorkspaceFileHref({ path: "a/b.ts", line: 5, column: 2, raw: "a/b.ts:5:2" });
-    const parsed = parseWorkspaceFileHref(href);
+    const href = buildWorktreeFileHref({ path: "a/b.ts", line: 5, column: 2, raw: "a/b.ts:5:2" });
+    const parsed = parseWorktreeFileHref(href);
     expect(parsed?.path).toBe("a/b.ts");
     expect(parsed?.line).toBe(5);
     expect(parsed?.column).toBe(2);
@@ -86,7 +86,7 @@ describe("remarkWorkspaceFileRefs", () => {
 
   it("round-trips workspace folder hrefs", () => {
     const targetPath = "content-os/cases/active/2026-06-06-pap-10199-bundled-skills/";
-    const href = buildWorkspaceFileHref({
+    const href = buildWorktreeFileHref({
       path: targetPath,
       resourceKind: "directory",
       line: null,
@@ -95,7 +95,7 @@ describe("remarkWorkspaceFileRefs", () => {
       projectId: "17acae7d-9d0c-46bf-9c82-be9694ac3461",
       workspaceId: "0de5f74f-a7d4-4f73-a9a0-455a2b968cf2",
     });
-    const parsed = parseWorkspaceFileHref(href);
+    const parsed = parseWorktreeFileHref(href);
     expect(parsed).toMatchObject({
       path: targetPath,
       resourceKind: "directory",
@@ -115,7 +115,7 @@ describe("remarkWorkspaceFileRefs", () => {
     runPlugin(tree);
     const link = tree.children![1];
     expect(link.type).toBe("link");
-    expect(parseWorkspaceFileHref(link.url)).toMatchObject({
+    expect(parseWorktreeFileHref(link.url)).toMatchObject({
       path: "content-os/cases/active/2026-06-06-pap-10199-bundled-skills/",
       resourceKind: "directory",
     });
@@ -123,7 +123,7 @@ describe("remarkWorkspaceFileRefs", () => {
 
   it("round-trips explicit project workspace identity", () => {
     const targetPath = "content-os/cases/active/2026-06-06-pap-10199-bundled-skills/README.md";
-    const href = buildWorkspaceFileHref({
+    const href = buildWorktreeFileHref({
       path: targetPath,
       line: 5,
       column: null,
@@ -132,7 +132,7 @@ describe("remarkWorkspaceFileRefs", () => {
       workspaceId: "0de5f74f-a7d4-4f73-a9a0-455a2b968cf2",
       projectName: "Paperclip Content",
     });
-    const parsed = parseWorkspaceFileHref(href);
+    const parsed = parseWorktreeFileHref(href);
     expect(parsed).toMatchObject({
       path: targetPath,
       line: 5,
@@ -158,7 +158,7 @@ describe("remarkWorkspaceFileRefs", () => {
     const link = tree.children![0];
     expect(link.type).toBe("link");
     expect(link.url?.startsWith("workspace-file:")).toBe(true);
-    expect(parseWorkspaceFileHref(link.url)?.path).toBe("ui/src/a.ts");
+    expect(parseWorktreeFileHref(link.url)?.path).toBe("ui/src/a.ts");
   });
 
   it("does not descend into existing links with mixed labels", () => {
@@ -225,7 +225,7 @@ describe("remarkWorkspaceFileRefs", () => {
         workspaceId: "0de5f74f-a7d4-4f73-a9a0-455a2b968cf2",
         projectName: "Paperclip Content",
       }));
-      expect(parseWorkspaceFileHref(tree.children![0].url)).toMatchObject({
+      expect(parseWorktreeFileHref(tree.children![0].url)).toMatchObject({
         path: "ui/src/a.ts",
         line: 7,
         workspace: "project",
@@ -242,7 +242,7 @@ describe("remarkWorkspaceFileRefs", () => {
         workspaceId: null,
         projectName: null,
       }));
-      const parsed = parseWorkspaceFileHref(tree.children![0].url);
+      const parsed = parseWorktreeFileHref(tree.children![0].url);
       expect(parsed?.workspace).toBe("execution");
       expect(parsed?.projectId).toBeNull();
       expect(parsed?.workspaceId).toBeNull();

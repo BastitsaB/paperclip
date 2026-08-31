@@ -6,7 +6,7 @@ import { flushSync } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HeartbeatRun, Issue, IssueRecoveryAction } from "@paperclipai/shared";
-import { RunWorkspaceRecoverySurface } from "./RunWorkspaceRecoverySurface";
+import { RunWorktreeRecoverySurface } from "./RunWorkspaceRecoverySurface";
 import { ToastProvider } from "../context/ToastContext";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -32,7 +32,7 @@ vi.mock("../api/issues", () => ({
 }));
 
 vi.mock("../api/execution-workspaces", () => ({
-  executionWorkspacesApi: {
+  executionWorktreesApi: {
     reconcile: reconcileMock,
   },
 }));
@@ -118,7 +118,7 @@ function buildRecoveryAction(): IssueRecoveryAction {
         },
       },
     },
-    nextAction: "Repair the workspace.",
+    nextAction: "Repair the worktree.",
     wakePolicy: null,
     monitorPolicy: null,
     attemptCount: 1,
@@ -160,7 +160,7 @@ async function renderSurface(run: HeartbeatRun) {
     root?.render(
       <QueryClientProvider client={client}>
         <ToastProvider>
-          <RunWorkspaceRecoverySurface run={run} />
+          <RunWorktreeRecoverySurface run={run} />
         </ToastProvider>
       </QueryClientProvider>,
     );
@@ -177,7 +177,7 @@ function click(element: Element | null) {
   });
 }
 
-describe("RunWorkspaceRecoverySurface", () => {
+describe("RunWorktreeRecoverySurface", () => {
   it("renders nothing for a run that is not a workspace-validation failure", async () => {
     issueGetMock.mockResolvedValue(buildIssue(buildRecoveryAction()));
     boardAccessMock.mockResolvedValue(undefined);
@@ -201,10 +201,10 @@ describe("RunWorkspaceRecoverySurface", () => {
     expect(node.querySelector("[data-testid='recovery-divergence-diagnosis']")).not.toBeNull();
     expect(node.querySelector("[data-testid='recovery-action-repair-trigger']")).not.toBeNull();
     // Compact: metadata rows dropped.
-    expect(node.textContent).not.toContain("Repair the workspace.");
+    expect(node.textContent).not.toContain("Repair the worktree.");
   });
 
-  it("wires the repair confirm to reconcile in quarantine_restore mode against the pinned workspace", async () => {
+  it("wires the repair confirm to reconcile in quarantine_restore mode against the pinned worktree", async () => {
     issueGetMock.mockResolvedValue(buildIssue(buildRecoveryAction()));
     boardAccessMock.mockResolvedValue({ source: "local_implicit", companyIds: ["company-1"] });
     reconcileMock.mockResolvedValue({ id: "ws-1" });

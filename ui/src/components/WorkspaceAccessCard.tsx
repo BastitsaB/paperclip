@@ -2,7 +2,7 @@ import { ExternalLink, Loader2, Play, ScrollText, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "../lib/utils";
-import type { WorkspaceAccessState } from "../lib/workspace-access-state";
+import type { WorktreeAccessState } from "../lib/workspace-access-state";
 
 /**
  * Workspace access surface (PAP-17572).
@@ -19,7 +19,7 @@ import type { WorkspaceAccessState } from "../lib/workspace-access-state";
  * and `degraded` the "todo" (amber) tone; the icon variants are the contrast-
  * corrected pair the token layer already tunes per mode.
  */
-const STATE_BADGE_CLASSES: Record<WorkspaceAccessState["state"], string> = {
+const STATE_BADGE_CLASSES: Record<WorktreeAccessState["state"], string> = {
   provisioning: "border-border text-muted-foreground",
   validating: "border-border text-muted-foreground",
   ready: "border-(--status-task-done) text-(--status-task-icon-done)",
@@ -28,7 +28,7 @@ const STATE_BADGE_CLASSES: Record<WorkspaceAccessState["state"], string> = {
   failed: "border-destructive/50 text-destructive",
 };
 
-const STATE_LABELS: Record<WorkspaceAccessState["state"], string> = {
+const STATE_LABELS: Record<WorktreeAccessState["state"], string> = {
   provisioning: "Provisioning",
   validating: "Validating clone",
   ready: "Ready",
@@ -45,7 +45,7 @@ const ACTION_ICONS = {
   wait: Loader2,
 } as const;
 
-export function WorkspaceAccessCard({
+export function WorktreeAccessCard({
   access,
   isBusy,
   onOpen,
@@ -54,7 +54,7 @@ export function WorkspaceAccessCard({
   onViewLogs,
   errorMessage,
 }: {
-  access: WorkspaceAccessState;
+  access: WorktreeAccessState;
   isBusy?: boolean;
   onOpen: () => void;
   onStart: () => void;
@@ -64,7 +64,7 @@ export function WorkspaceAccessCard({
 }) {
   const Icon = ACTION_ICONS[access.action.kind];
   const isWaiting = access.action.kind === "wait";
-  const handlers: Record<WorkspaceAccessState["action"]["kind"], () => void> = {
+  const handlers: Record<WorktreeAccessState["action"]["kind"], () => void> = {
     open: onOpen,
     start: onStart,
     repair: onRepair,

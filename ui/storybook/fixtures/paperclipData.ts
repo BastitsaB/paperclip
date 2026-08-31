@@ -9,7 +9,7 @@ import type {
   CompanySecretBinding,
   CompanySecretProviderConfig,
   DashboardSummary,
-  ExecutionWorkspace,
+  ExecutionWorktree,
   Goal,
   Issue,
   IssueDocument,
@@ -19,7 +19,7 @@ import type {
   SecretProviderConfigDiscoveryPreviewResult,
   SecretProviderDescriptor,
   SidebarBadges,
-  WorkspaceRuntimeService,
+  WorktreeRuntimeService,
 } from "@paperclipai/shared";
 import type { RunForIssue } from "@/api/activity";
 import type { LiveRunForIssue } from "@/api/heartbeats";
@@ -310,8 +310,8 @@ export const storybookGoals: Goal[] = [
 ];
 
 function createRuntimeService(
-  overrides: Partial<WorkspaceRuntimeService> = {},
-): WorkspaceRuntimeService {
+  overrides: Partial<WorktreeRuntimeService> = {},
+): WorktreeRuntimeService {
   return {
     id: overrides.id ?? "service-storybook",
     companyId: overrides.companyId ?? "company-storybook",
@@ -492,7 +492,7 @@ export const storybookProjectWorkspaces: Project["workspaces"] = [
   },
 ];
 
-export const storybookExecutionWorkspaces: ExecutionWorkspace[] = [
+export const storybookExecutionWorkspaces: ExecutionWorktree[] = [
   {
     id: "execution-workspace-storybook",
     companyId: "company-storybook",

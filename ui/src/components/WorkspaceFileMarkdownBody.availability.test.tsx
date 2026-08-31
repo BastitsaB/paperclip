@@ -6,9 +6,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  ResolvedWorkspaceResource,
-  WorkspaceFileAvailabilityResponse,
-  WorkspaceFileAvailabilityResult,
+  ResolvedWorktreeResource,
+  WorktreeFileAvailabilityResponse,
+  WorktreeFileAvailabilityResult,
 } from "@paperclipai/shared";
 import type { FileResourceQuery } from "@/api/file-resources";
 
@@ -34,7 +34,7 @@ vi.mock("../context/CompanyContext", () => ({
 
 import { FileViewerProvider } from "@/context/FileViewerContext";
 import { ThemeProvider } from "@/context/ThemeContext";
-import { WorkspaceFileMarkdownBody } from "./WorkspaceFileMarkdownBody";
+import { WorktreeFileMarkdownBody } from "./WorkspaceFileMarkdownBody";
 
 const ISSUE_ID = "3fb1a3f4-3f0e-4c58-8d3e-1c2f0f5a9b11";
 const PROJECT_ID = "17acae7d-9d0c-46bf-9c82-be9694ac3461";
@@ -61,13 +61,13 @@ async function waitForExpectation(assertion: () => void) {
   await vi.waitFor(assertion);
 }
 
-function resource(overrides: Partial<ResolvedWorkspaceResource> = {}): ResolvedWorkspaceResource {
+function resource(overrides: Partial<ResolvedWorktreeResource> = {}): ResolvedWorktreeResource {
   return {
     kind: "file",
     provider: "git_worktree",
     title: "a.ts",
     displayPath: "ui/src/a.ts",
-    workspaceLabel: "Execution workspace",
+    workspaceLabel: "Execution worktree",
     workspaceKind: "execution_workspace",
     workspaceId: WORKSPACE_ID,
     previewKind: "text",
@@ -76,7 +76,7 @@ function resource(overrides: Partial<ResolvedWorkspaceResource> = {}): ResolvedW
   };
 }
 
-function openable(path: string, overrides: Partial<ResolvedWorkspaceResource> = {}): WorkspaceFileAvailabilityResult {
+function openable(path: string, overrides: Partial<ResolvedWorktreeResource> = {}): WorktreeFileAvailabilityResult {
   return {
     query: { path, workspace: "auto", projectId: null, workspaceId: null },
     openable: true,
@@ -84,7 +84,7 @@ function openable(path: string, overrides: Partial<ResolvedWorkspaceResource> = 
   };
 }
 
-function unavailable(path: string, reason: string): WorkspaceFileAvailabilityResult {
+function unavailable(path: string, reason: string): WorktreeFileAvailabilityResult {
   return {
     query: { path, workspace: "auto", projectId: null, workspaceId: null },
     openable: false,
@@ -93,7 +93,7 @@ function unavailable(path: string, reason: string): WorkspaceFileAvailabilityRes
   };
 }
 
-function respondWith(results: WorkspaceFileAvailabilityResult[]): WorkspaceFileAvailabilityResponse {
+function respondWith(results: WorktreeFileAvailabilityResult[]): WorktreeFileAvailabilityResponse {
   return { kind: "workspace_file_availability", results };
 }
 
@@ -140,12 +140,12 @@ afterEach(() => {
   container.remove();
 });
 
-describe("WorkspaceFileMarkdownBody availability gating", () => {
+describe("WorktreeFileMarkdownBody availability gating", () => {
   it("renders plain inline code until the batch confirms the reference", async () => {
-    let resolveBatch: ((value: WorkspaceFileAvailabilityResponse) => void) | undefined;
+    let resolveBatch: ((value: WorktreeFileAvailabilityResponse) => void) | undefined;
     mockAvailability.mockReturnValue(new Promise((resolve) => { resolveBatch = resolve; }));
 
-    render(<WorkspaceFileMarkdownBody>{"Check `ui/src/a.ts:42` please."}</WorkspaceFileMarkdownBody>);
+    render(<WorktreeFileMarkdownBody>{"Check `ui/src/a.ts:42` please."}</WorktreeFileMarkdownBody>);
 
     // Pending: no chip, no icon, no button role — just code.
     expect(chips()).toHaveLength(0);
@@ -167,9 +167,9 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
     ]));
 
     render(
-      <WorkspaceFileMarkdownBody>
+      <WorktreeFileMarkdownBody>
         {"See `ui/src/missing.ts:1`, `ui/src/denied.ts:2` and `ui/src/remote.ts:3`."}
-      </WorkspaceFileMarkdownBody>,
+      </WorktreeFileMarkdownBody>,
     );
 
     await waitForExpectation(() => expect(mockAvailability).toHaveBeenCalledTimes(1));
@@ -181,7 +181,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
   it("fails closed when the availability batch errors", async () => {
     mockAvailability.mockRejectedValue(new Error("boom"));
 
-    render(<WorkspaceFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorkspaceFileMarkdownBody>);
+    render(<WorktreeFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorktreeFileMarkdownBody>);
 
     await waitForExpectation(() => expect(mockAvailability).toHaveBeenCalledTimes(1));
     await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -194,9 +194,9 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
 
     render(
       <>
-        <WorkspaceFileMarkdownBody>{"First `ui/src/a.ts:1`."}</WorkspaceFileMarkdownBody>
-        <WorkspaceFileMarkdownBody>{"Second `ui/src/a.ts:1` again."}</WorkspaceFileMarkdownBody>
-        <WorkspaceFileMarkdownBody>{"Third `ui/src/a.ts:9` at another line."}</WorkspaceFileMarkdownBody>
+        <WorktreeFileMarkdownBody>{"First `ui/src/a.ts:1`."}</WorktreeFileMarkdownBody>
+        <WorktreeFileMarkdownBody>{"Second `ui/src/a.ts:1` again."}</WorktreeFileMarkdownBody>
+        <WorktreeFileMarkdownBody>{"Third `ui/src/a.ts:9` at another line."}</WorktreeFileMarkdownBody>
       </>,
     );
 
@@ -214,9 +214,9 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
     const paths = Array.from({ length: 150 }, (_, index) => `ui/src/file-${index}.ts`);
 
     render(
-      <WorkspaceFileMarkdownBody>
+      <WorktreeFileMarkdownBody>
         {paths.map((path) => `\`${path}\``).join(" ")}
-      </WorkspaceFileMarkdownBody>,
+      </WorktreeFileMarkdownBody>,
     );
 
     await waitForExpectation(() => expect(mockAvailability).toHaveBeenCalledTimes(2));
@@ -232,7 +232,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
     mockAvailability.mockImplementation((_issueId: string, queries: FileResourceQuery[]) => {
       activeRequests += 1;
       maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
-      return new Promise<WorkspaceFileAvailabilityResponse>((resolve) => {
+      return new Promise<WorktreeFileAvailabilityResponse>((resolve) => {
         resolveRequests.push(() => {
           activeRequests -= 1;
           resolve(respondWith(queries.map((query) => openable(query.path))));
@@ -242,9 +242,9 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
     const paths = Array.from({ length: 250 }, (_, index) => `ui/src/file-${index}.ts`);
 
     render(
-      <WorkspaceFileMarkdownBody>
+      <WorktreeFileMarkdownBody>
         {paths.map((path) => `\`${path}\``).join(" ")}
-      </WorkspaceFileMarkdownBody>,
+      </WorktreeFileMarkdownBody>,
     );
 
     await waitForExpectation(() => expect(mockAvailability).toHaveBeenCalledTimes(2));
@@ -267,7 +267,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
   it("checks only unseen references when a new comment arrives", async () => {
     mockAvailability.mockImplementation(echoOpenable);
 
-    const first = <WorkspaceFileMarkdownBody>{"First `ui/src/a.ts:1`."}</WorkspaceFileMarkdownBody>;
+    const first = <WorktreeFileMarkdownBody>{"First `ui/src/a.ts:1`."}</WorktreeFileMarkdownBody>;
     const queryClient = render(first);
     await waitForExpectation(() => expect(chipPaths()).toEqual(["ui/src/a.ts"]));
     expect(mockAvailability).toHaveBeenCalledTimes(1);
@@ -278,7 +278,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
           <ThemeProvider>
             <FileViewerProvider issueId={ISSUE_ID}>
               {first}
-              <WorkspaceFileMarkdownBody>{"New `ui/src/a.ts:1` and `ui/src/b.ts:2`."}</WorkspaceFileMarkdownBody>
+              <WorktreeFileMarkdownBody>{"New `ui/src/a.ts:1` and `ui/src/b.ts:2`."}</WorktreeFileMarkdownBody>
             </FileViewerProvider>
           </ThemeProvider>
         </QueryClientProvider>,
@@ -291,7 +291,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
     ]);
   });
 
-  it("binds the confirmed project workspace to the chip and opens it on click", async () => {
+  it("binds the confirmed project worktree to the chip and opens it on click", async () => {
     mockAvailability.mockResolvedValue(respondWith([
       {
         query: { path: "ui/src/a.ts", workspace: "auto", projectId: null, workspaceId: null },
@@ -305,7 +305,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
       },
     ]));
 
-    render(<WorkspaceFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorkspaceFileMarkdownBody>);
+    render(<WorktreeFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorktreeFileMarkdownBody>);
     await waitForExpectation(() => expect(chips()).toHaveLength(1));
 
     const chip = chips()[0] as HTMLAnchorElement;
@@ -339,7 +339,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
           <QueryClientProvider client={queryClient}>
             <ThemeProvider>
               <FileViewerProvider issueId={ISSUE_ID}>
-                <WorkspaceFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorkspaceFileMarkdownBody>
+                <WorktreeFileMarkdownBody>{"Check `ui/src/a.ts:42`."}</WorktreeFileMarkdownBody>
               </FileViewerProvider>
             </ThemeProvider>
           </QueryClientProvider>
@@ -353,7 +353,7 @@ describe("WorkspaceFileMarkdownBody availability gating", () => {
 
   it("rechecks after the issue's file resources are invalidated", async () => {
     mockAvailability.mockImplementation(echoOpenable);
-    const queryClient = render(<WorkspaceFileMarkdownBody>{"Check `ui/src/a.ts:1`."}</WorkspaceFileMarkdownBody>);
+    const queryClient = render(<WorktreeFileMarkdownBody>{"Check `ui/src/a.ts:1`."}</WorktreeFileMarkdownBody>);
     await waitForExpectation(() => expect(chips()).toHaveLength(1));
     expect(mockAvailability).toHaveBeenCalledTimes(1);
 

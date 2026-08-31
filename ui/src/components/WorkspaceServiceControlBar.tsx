@@ -15,7 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
-export type WorkspaceServiceControlState =
+export type WorktreeServiceControlState =
   | "stopped"
   | "provisioning"
   | "starting"
@@ -24,12 +24,12 @@ export type WorkspaceServiceControlState =
   | "restarting"
   | "failed";
 
-export type WorkspaceServiceControlAction = "start" | "stop" | "restart";
+export type WorktreeServiceControlAction = "start" | "stop" | "restart";
 
-export type WorkspaceServiceControlEntry = {
+export type WorktreeServiceControlEntry = {
   key: string;
   name: string;
-  state: WorkspaceServiceControlState;
+  state: WorktreeServiceControlState;
   healthStatus?: "unknown" | "healthy" | "unhealthy" | null;
   url?: string | null;
   port?: number | null;
@@ -41,10 +41,10 @@ export type WorkspaceServiceControlEntry = {
   canStart?: boolean;
 };
 
-export type WorkspaceServiceControlBarProps = {
-  services: WorkspaceServiceControlEntry[];
+export type WorktreeServiceControlBarProps = {
+  services: WorktreeServiceControlEntry[];
   /** serviceKey is null when the action targets all services (aggregate bar / popover footer). */
-  onAction: (action: WorkspaceServiceControlAction, serviceKey: string | null) => void;
+  onAction: (action: WorktreeServiceControlAction, serviceKey: string | null) => void;
   onViewLogs?: () => void;
   /** Optional link target for "Manage in Services tab" in the multi-service popover. */
   onManageServices?: () => void;
@@ -53,9 +53,9 @@ export type WorkspaceServiceControlBarProps = {
   className?: string;
 };
 
-const TRANSITIONAL_STATES: WorkspaceServiceControlState[] = ["provisioning", "starting", "stopping", "restarting"];
+const TRANSITIONAL_STATES: WorktreeServiceControlState[] = ["provisioning", "starting", "stopping", "restarting"];
 
-function isTransitional(state: WorkspaceServiceControlState) {
+function isTransitional(state: WorktreeServiceControlState) {
   return TRANSITIONAL_STATES.includes(state);
 }
 
@@ -64,7 +64,7 @@ function formatServiceUrl(url: string | null | undefined) {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-function statusMeta(entry: WorkspaceServiceControlEntry): { label: string; unhealthy: boolean } {
+function statusMeta(entry: WorktreeServiceControlEntry): { label: string; unhealthy: boolean } {
   switch (entry.state) {
     case "provisioning":
       return { label: "Provisioning…", unhealthy: false };
@@ -85,7 +85,7 @@ function statusMeta(entry: WorkspaceServiceControlEntry): { label: string; unhea
   }
 }
 
-function StatusIndicator({ entry, className }: { entry: WorkspaceServiceControlEntry; className?: string }) {
+function StatusIndicator({ entry, className }: { entry: WorktreeServiceControlEntry; className?: string }) {
   if (isTransitional(entry.state)) {
     return <Loader2 className={cn("size-3 shrink-0 animate-spin text-muted-foreground", className)} />;
   }
@@ -146,7 +146,7 @@ function CopyUrlButton({ url, disabled }: { url: string; disabled?: boolean }) {
   );
 }
 
-function UrlSegment({ entry, compact }: { entry: WorkspaceServiceControlEntry; compact?: boolean }) {
+function UrlSegment({ entry, compact }: { entry: WorktreeServiceControlEntry; compact?: boolean }) {
   const displayUrl = formatServiceUrl(entry.url) ?? (entry.port ? `:${entry.port}` : null);
   const live = entry.state === "running" && Boolean(entry.url);
 
@@ -200,8 +200,8 @@ function ActionSlots({
   entry,
   onAction,
 }: {
-  entry: Pick<WorkspaceServiceControlEntry, "state" | "canStart">;
-  onAction: (action: WorkspaceServiceControlAction) => void;
+  entry: Pick<WorktreeServiceControlEntry, "state" | "canStart">;
+  onAction: (action: WorktreeServiceControlAction) => void;
 }) {
   const transitional = isTransitional(entry.state);
   const canStart = entry.canStart ?? true;
@@ -283,7 +283,7 @@ function ServiceDetail({
   entry,
   onViewLogs,
 }: {
-  entry: WorkspaceServiceControlEntry;
+  entry: WorktreeServiceControlEntry;
   onViewLogs?: () => void;
 }) {
   const detail = entry.exposureDetail ?? (entry.state === "failed" ? entry.failureDetail : null);
@@ -314,8 +314,8 @@ function SingleServiceBar({
   onViewLogs,
   className,
 }: {
-  entry: WorkspaceServiceControlEntry;
-  onAction: (action: WorkspaceServiceControlAction, serviceKey: string | null) => void;
+  entry: WorktreeServiceControlEntry;
+  onAction: (action: WorktreeServiceControlAction, serviceKey: string | null) => void;
   onViewLogs?: () => void;
   className?: string;
 }) {
@@ -353,8 +353,8 @@ function ServicePopoverRow({
   entry,
   onAction,
 }: {
-  entry: WorkspaceServiceControlEntry;
-  onAction: (action: WorkspaceServiceControlAction, serviceKey: string | null) => void;
+  entry: WorktreeServiceControlEntry;
+  onAction: (action: WorktreeServiceControlAction, serviceKey: string | null) => void;
 }) {
   const meta = statusMeta(entry);
   const displayUrl = formatServiceUrl(entry.url);
@@ -417,8 +417,8 @@ function MultiServiceBar({
   defaultServicesOpen,
   className,
 }: {
-  services: WorkspaceServiceControlEntry[];
-  onAction: (action: WorkspaceServiceControlAction, serviceKey: string | null) => void;
+  services: WorktreeServiceControlEntry[];
+  onAction: (action: WorktreeServiceControlAction, serviceKey: string | null) => void;
   onManageServices?: () => void;
   defaultServicesOpen?: boolean;
   className?: string;
@@ -430,7 +430,7 @@ function MultiServiceBar({
   const anyRunning = runningCount > 0;
   const primary = services.find((entry) => entry.state === "running" && entry.url) ?? null;
 
-  const aggregateEntry: WorkspaceServiceControlEntry = {
+  const aggregateEntry: WorktreeServiceControlEntry = {
     key: "__all__",
     name: "All services",
     state: anyTransitional
@@ -521,14 +521,14 @@ function MultiServiceBar({
  * Geometry is identical in every state — transitions are announced by the status
  * segment (spinner + label) instead of buttons appearing and disappearing.
  */
-export function WorkspaceServiceControlBar({
+export function WorktreeServiceControlBar({
   services,
   onAction,
   onViewLogs,
   onManageServices,
   defaultServicesOpen,
   className,
-}: WorkspaceServiceControlBarProps) {
+}: WorktreeServiceControlBarProps) {
   if (services.length === 0) return null;
   if (services.length === 1) {
     return (

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Project, ProjectWorkspace } from "@paperclipai/shared";
+import type { Project, ProjectWorktree } from "@paperclipai/shared";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProjectWorkspaceDetail } from "./ProjectWorkspaceDetail";
+import { ProjectWorktreeDetail } from "./ProjectWorktreeDetail";
 import { queryKeys } from "../lib/queryKeys";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -34,13 +34,13 @@ vi.mock("@/lib/router", () => ({
     <a href={to} className={className}>{children}</a>
   ),
   useLocation: () => ({
-    pathname: "/PAP/projects/paperclip-app/workspaces/workspace-1",
+    pathname: "/PAP/projects/paperclip-app/worktrees/workspace-1",
     search: mockRouteSearch.value,
     hash: "",
     state: null,
   }),
   useNavigate: () => mockNavigate,
-  useParams: () => ({ companyPrefix: "PAP", projectId: "paperclip-app", workspaceId: "workspace-1" }),
+  useParams: () => ({ companyPrefix: "PAP", projectId: "paperclip-app", worktreeId: "workspace-1" }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -94,7 +94,7 @@ vi.mock("../components/PageTabBar", () => ({
   ),
 }));
 
-function projectWorkspace(overrides: Partial<ProjectWorkspace> = {}): ProjectWorkspace {
+function projectWorktree(overrides: Partial<ProjectWorktree> = {}): ProjectWorktree {
   const now = new Date("2026-05-01T00:00:00Z");
   return {
     id: "workspace-1",
@@ -124,7 +124,7 @@ function projectWorkspace(overrides: Partial<ProjectWorkspace> = {}): ProjectWor
 
 function project(overrides: Partial<Project> = {}): Project {
   const now = new Date("2026-05-01T00:00:00Z");
-  const workspace = projectWorkspace();
+  const worktree = projectWorktree();
   return {
     id: "project-1",
     companyId: "company-1",
@@ -144,18 +144,18 @@ function project(overrides: Partial<Project> = {}): Project {
     pausedAt: null,
     executionWorkspacePolicy: null,
     codebase: {
-      workspaceId: workspace.id,
-      repoUrl: workspace.repoUrl,
-      repoRef: workspace.repoRef,
-      defaultRef: workspace.defaultRef,
+      workspaceId: worktree.id,
+      repoUrl: worktree.repoUrl,
+      repoRef: worktree.repoRef,
+      defaultRef: worktree.defaultRef,
       repoName: "paperclip",
-      localFolder: workspace.cwd,
-      managedFolder: workspace.cwd ?? "/tmp/paperclip",
-      effectiveLocalFolder: workspace.cwd ?? "/tmp/paperclip",
+      localFolder: worktree.cwd,
+      managedFolder: worktree.cwd ?? "/tmp/paperclip",
+      effectiveLocalFolder: worktree.cwd ?? "/tmp/paperclip",
       origin: "local_folder",
     },
-    workspaces: [workspace],
-    primaryWorkspace: workspace,
+    workspaces: [worktree],
+    primaryWorkspace: worktree,
     managedByPlugin: null,
     archivedAt: null,
     createdAt: now,
@@ -174,7 +174,7 @@ function pluginSlot(overrides: Record<string, unknown> = {}) {
     id: "quality-tab",
     type: "detailTab",
     displayName: "Quality",
-    exportName: "ProjectWorkspaceQualityTab",
+    exportName: "ProjectWorktreeQualityTab",
     entityTypes: ["project_workspace"],
     pluginId: "plugin-1",
     pluginKey: "paperclip.quality",
@@ -184,7 +184,7 @@ function pluginSlot(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("ProjectWorkspaceDetail plugin tabs", () => {
+describe("ProjectWorktreeDetail plugin tabs", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
 
@@ -211,7 +211,7 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
       root = createRoot(container);
       root.render(
         <QueryClientProvider client={queryClient}>
-          <ProjectWorkspaceDetail />
+          <ProjectWorktreeDetail />
         </QueryClientProvider>,
       );
     });
@@ -252,21 +252,21 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
     );
   });
 
-  it("keeps the project workspace heading visible on plugin tabs", async () => {
+  it("keeps the project worktree heading visible on plugin tabs", async () => {
     mockPluginSlotState.slots = [pluginSlot({ displayName: "Changes" })];
     mockRouteSearch.value = "?tab=plugin%3Apaperclip.quality%3Aquality-tab";
 
     await render();
 
     expect(container.querySelector("h1")?.textContent).toBe("Primary checkout");
-    expect(container.textContent).toContain("Project workspace");
-    expect(container.textContent).toContain("This is the project’s primary codebase workspace.");
+    expect(container.textContent).toContain("Project worktree");
+    expect(container.textContent).toContain("This is the project’s primary codebase worktree.");
     expect(container.querySelector('[data-testid="plugin-slot-mount"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("Configure the concrete workspace");
-    expect(container.textContent).not.toContain("Workspace name");
+    expect(container.textContent).not.toContain("Configure the concrete worktree");
+    expect(container.textContent).not.toContain("Worktree name");
   });
 
-  it("orders project workspace plugin tabs against built-in tabs by slot order", async () => {
+  it("orders project worktree plugin tabs against built-in tabs by slot order", async () => {
     mockPluginSlotState.slots = [
       pluginSlot({ id: "late-tab", displayName: "Late", order: 40 }),
       pluginSlot({ id: "early-tab", displayName: "Early", order: 20 }),
@@ -289,7 +289,7 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
     });
 
     expect(mockNavigate).toHaveBeenCalledWith(
-      "/projects/paperclip-app/workspaces/workspace-1?tab=plugin%3Apaperclip.quality%3Aquality-tab",
+      "/projects/paperclip-app/worktrees/workspace-1?tab=plugin%3Apaperclip.quality%3Aquality-tab",
     );
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("diffView"));
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("baseRef"));
@@ -303,7 +303,7 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
 
     expect(container.querySelector('[data-tab-value="changes"]')).toBeNull();
     expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
-    expect(container.textContent).toContain("Project workspace");
+    expect(container.textContent).toContain("Project worktree");
   });
 
   it("shows a missing plugin placeholder instead of configuration for stale plugin tab URLs", async () => {
@@ -311,13 +311,13 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
 
     await render();
 
-    expect(container.textContent).toContain("Workspace plugin tab is not available.");
-    expect(container.querySelector('a[href="/projects/paperclip-app/workspaces/workspace-1?tab=configuration"]')?.textContent).toBe(
+    expect(container.textContent).toContain("Worktree plugin tab is not available.");
+    expect(container.querySelector('a[href="/projects/paperclip-app/worktrees/workspace-1?tab=configuration"]')?.textContent).toBe(
       "Back to configuration",
     );
     expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
-    expect(container.textContent).not.toContain("Configure the concrete workspace");
-    expect(container.textContent).not.toContain("Workspace name");
+    expect(container.textContent).not.toContain("Configure the concrete worktree");
+    expect(container.textContent).not.toContain("Worktree name");
   });
 
   it("shows loading and error states for plugin tab manifests", async () => {
@@ -326,7 +326,7 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
 
     await render();
 
-    expect(container.textContent).toContain("Loading workspace plugin...");
+    expect(container.textContent).toContain("Loading worktree plugin...");
 
     act(() => root?.unmount());
     root = null;
@@ -342,7 +342,7 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
   });
 });
 
-describe("ProjectWorkspaceDetail local path under the managed-sandbox-only policy", () => {
+describe("ProjectWorktreeDetail local path under the managed-sandbox-only policy", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
 
@@ -370,7 +370,7 @@ describe("ProjectWorkspaceDetail local path under the managed-sandbox-only polic
       root = createRoot(container);
       root.render(
         <QueryClientProvider client={queryClient}>
-          <ProjectWorkspaceDetail />
+          <ProjectWorktreeDetail />
         </QueryClientProvider>,
       );
     });

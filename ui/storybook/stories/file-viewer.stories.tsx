@@ -2,9 +2,9 @@ import { useLayoutEffect, useState, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
-  ResolvedWorkspaceResource,
-  WorkspaceFileContent,
-  WorkspaceFileSelector,
+  ResolvedWorktreeResource,
+  WorktreeFileContent,
+  WorktreeFileSelector,
 } from "@paperclipai/shared";
 import { FileViewerProvider } from "@/context/FileViewerContext";
 import { FileViewerSheet } from "@/components/FileViewerSheet";
@@ -54,8 +54,8 @@ export function FileViewerSheet({
 `;
 
 function buildResource(
-  overrides: Partial<ResolvedWorkspaceResource> = {},
-): ResolvedWorkspaceResource {
+  overrides: Partial<ResolvedWorktreeResource> = {},
+): ResolvedWorktreeResource {
   return {
     kind: "file",
     provider: "git_worktree",
@@ -74,9 +74,9 @@ function buildResource(
 }
 
 function buildContent(
-  resource: ResolvedWorkspaceResource,
+  resource: ResolvedWorktreeResource,
   data = SAMPLE_CODE,
-): WorkspaceFileContent {
+): WorktreeFileContent {
   return {
     resource,
     content: { encoding: "utf8", data },
@@ -135,7 +135,7 @@ type ViewerRenderProps = {
   path: string;
   line?: number | null;
   column?: number | null;
-  workspace?: WorkspaceFileSelector;
+  workspace?: WorktreeFileSelector;
   showPromptWhenEmpty?: boolean;
 };
 
@@ -171,9 +171,9 @@ function FileViewerShell({
 function seedContent(
   queryClient: ReturnType<typeof useQueryClient>,
   path: string,
-  workspace: WorkspaceFileSelector,
-  resource: ResolvedWorkspaceResource,
-  content: WorkspaceFileContent | null,
+  workspace: WorktreeFileSelector,
+  resource: ResolvedWorktreeResource,
+  content: WorktreeFileContent | null,
 ) {
   queryClient.setQueryData(
     queryKeys.issues.fileResource(ISSUE_ID, { path, workspace }),

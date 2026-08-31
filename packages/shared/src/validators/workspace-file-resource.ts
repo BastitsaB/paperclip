@@ -1,23 +1,23 @@
 import { z } from "zod";
 
-const workspaceFileListSearchMaxBytes = 128;
+const worktreeFileListSearchMaxBytes = 128;
 
 function utf8ByteLength(value: string) {
   return new TextEncoder().encode(value).length;
 }
 
-export const workspaceFileWorkspaceKindSchema = z.enum(["execution_workspace", "project_workspace"]);
-export const workspaceFileSelectorSchema = z.enum(["auto", "execution", "project"]).default("auto");
-export const workspaceFileListModeSchema = z.enum(["all", "recent", "changed"]).default("all");
-export const workspaceFilePreviewKindSchema = z.enum(["text", "image", "video", "pdf", "unsupported"]);
-export const workspaceFileResourceKindSchema = z.enum(["file", "directory", "remote_resource"]);
+export const worktreeFileWorktreeKindSchema = z.enum(["execution_workspace", "project_workspace"]);
+export const worktreeFileSelectorSchema = z.enum(["auto", "execution", "project"]).default("auto");
+export const worktreeFileListModeSchema = z.enum(["all", "recent", "changed"]).default("all");
+export const worktreeFilePreviewKindSchema = z.enum(["text", "image", "video", "pdf", "unsupported"]);
+export const worktreeFileResourceKindSchema = z.enum(["file", "directory", "remote_resource"]);
 
-export const workspaceFileRefSchema = z.object({
+export const worktreeFileRefSchema = z.object({
   kind: z.literal("workspace_file"),
   issueId: z.string().guid().optional(),
   projectId: z.string().guid().optional(),
   projectName: z.string().min(1).optional(),
-  workspaceKind: workspaceFileWorkspaceKindSchema,
+  workspaceKind: worktreeFileWorktreeKindSchema,
   workspaceId: z.string().guid(),
   relativePath: z.string().min(1),
   line: z.number().int().positive().nullable().optional(),
@@ -25,7 +25,7 @@ export const workspaceFileRefSchema = z.object({
   displayPath: z.string().min(1),
 });
 
-export const workspaceFileResourceQuerySchema = z.object({
+export const worktreeFileResourceQuerySchema = z.object({
   projectId: z.string().guid().optional(),
   workspaceId: z.string().guid().optional(),
   path: z
@@ -35,21 +35,21 @@ export const workspaceFileResourceQuerySchema = z.object({
       message: "Workspace file path contains an invalid character",
       params: { code: "invalid_path" },
     }),
-  workspace: workspaceFileSelectorSchema.optional(),
+  workspace: worktreeFileSelectorSchema.optional(),
 }).refine((value) => Boolean(value.projectId) === Boolean(value.workspaceId), {
   message: "Workspace file target requires both projectId and workspaceId",
   path: ["workspaceId"],
   params: { code: "invalid_target" },
 });
 
-export const workspaceFileAvailabilityRequestSchema = z.object({
-  queries: z.array(workspaceFileResourceQuerySchema).max(100),
+export const worktreeFileAvailabilityRequestSchema = z.object({
+  queries: z.array(worktreeFileResourceQuerySchema).max(100),
 });
 
-export const workspaceFileListQuerySchema = z.object({
+export const worktreeFileListQuerySchema = z.object({
   projectId: z.string().guid().optional(),
   workspaceId: z.string().guid().optional(),
-  workspace: workspaceFileSelectorSchema.optional(),
+  workspace: worktreeFileSelectorSchema.optional(),
   path: z
     .string()
     .min(1)
@@ -58,14 +58,14 @@ export const workspaceFileListQuerySchema = z.object({
       params: { code: "invalid_path" },
     })
     .optional(),
-  mode: workspaceFileListModeSchema.optional(),
+  mode: worktreeFileListModeSchema.optional(),
   q: z
     .string()
     .refine((value) => !/[\x00-\x1f\x7f]/.test(value), {
       message: "Workspace file search contains an invalid character",
       params: { code: "invalid_query" },
     })
-    .refine((value) => utf8ByteLength(value.trim()) <= workspaceFileListSearchMaxBytes, {
+    .refine((value) => utf8ByteLength(value.trim()) <= worktreeFileListSearchMaxBytes, {
       message: "Workspace file search is too long",
       params: { code: "invalid_query" },
     })
@@ -78,19 +78,19 @@ export const workspaceFileListQuerySchema = z.object({
   params: { code: "invalid_target" },
 });
 
-export const resolvedWorkspaceResourceSchema = z.object({
-  kind: workspaceFileResourceKindSchema,
+export const resolvedWorktreeResourceSchema = z.object({
+  kind: worktreeFileResourceKindSchema,
   provider: z.string().min(1),
   title: z.string().min(1),
   displayPath: z.string().min(1),
   workspaceLabel: z.string().min(1),
-  workspaceKind: workspaceFileWorkspaceKindSchema,
+  workspaceKind: worktreeFileWorktreeKindSchema,
   workspaceId: z.string().guid(),
   projectId: z.string().guid().nullable().optional(),
   projectName: z.string().min(1).nullable().optional(),
   contentType: z.string().nullable().optional(),
   byteSize: z.number().int().nonnegative().nullable().optional(),
-  previewKind: workspaceFilePreviewKindSchema,
+  previewKind: worktreeFilePreviewKindSchema,
   denialReason: z.string().nullable().optional(),
   capabilities: z.object({
     preview: z.boolean(),
@@ -99,33 +99,33 @@ export const resolvedWorkspaceResourceSchema = z.object({
   }),
 });
 
-export const normalizedWorkspaceFileAvailabilityQuerySchema = z.object({
+export const normalizedWorktreeFileAvailabilityQuerySchema = z.object({
   projectId: z.string().guid().nullable(),
   workspaceId: z.string().guid().nullable(),
   path: z.string().min(1),
-  workspace: workspaceFileSelectorSchema,
+  workspace: worktreeFileSelectorSchema,
 });
 
-export const workspaceFileAvailabilityResultSchema = z.object({
-  query: normalizedWorkspaceFileAvailabilityQuerySchema,
+export const worktreeFileAvailabilityResultSchema = z.object({
+  query: normalizedWorktreeFileAvailabilityQuerySchema,
   openable: z.boolean(),
   unavailableReason: z.string().min(1).nullable().optional(),
-  resource: resolvedWorkspaceResourceSchema.nullable(),
+  resource: resolvedWorktreeResourceSchema.nullable(),
 });
 
-export const workspaceFileAvailabilityResponseSchema = z.object({
+export const worktreeFileAvailabilityResponseSchema = z.object({
   kind: z.literal("workspace_file_availability"),
-  results: z.array(workspaceFileAvailabilityResultSchema).max(100),
+  results: z.array(worktreeFileAvailabilityResultSchema).max(100),
 });
 
-export const workspaceFileContentSchema = z.object({
-  resource: resolvedWorkspaceResourceSchema,
+export const worktreeFileContentSchema = z.object({
+  resource: resolvedWorktreeResourceSchema,
   content: z.object({
     encoding: z.enum(["utf8", "base64"]),
     data: z.string(),
   }),
 });
 
-export type WorkspaceFileResourceQuery = z.infer<typeof workspaceFileResourceQuerySchema>;
-export type WorkspaceFileListQuery = z.infer<typeof workspaceFileListQuerySchema>;
-export type WorkspaceFileAvailabilityRequestInput = z.infer<typeof workspaceFileAvailabilityRequestSchema>;
+export type WorktreeFileResourceQuery = z.infer<typeof worktreeFileResourceQuerySchema>;
+export type WorktreeFileListQuery = z.infer<typeof worktreeFileListQuerySchema>;
+export type WorktreeFileAvailabilityRequestInput = z.infer<typeof worktreeFileAvailabilityRequestSchema>;

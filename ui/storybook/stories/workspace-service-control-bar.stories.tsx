@@ -1,12 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
-  WorkspaceServiceControlBar,
-  type WorkspaceServiceControlEntry,
+  WorktreeServiceControlBar,
+  type WorktreeServiceControlEntry,
 } from "@/components/WorkspaceServiceControlBar";
 
 const noop = () => {};
 
-function entry(overrides: Partial<WorkspaceServiceControlEntry> = {}): WorkspaceServiceControlEntry {
+function entry(overrides: Partial<WorktreeServiceControlEntry> = {}): WorktreeServiceControlEntry {
   return {
     key: "svc-dev",
     name: "dev",
@@ -19,9 +19,9 @@ function entry(overrides: Partial<WorkspaceServiceControlEntry> = {}): Workspace
   };
 }
 
-const meta: Meta<typeof WorkspaceServiceControlBar> = {
+const meta: Meta<typeof WorktreeServiceControlBar> = {
   title: "Workspaces/Service control bar",
-  component: WorkspaceServiceControlBar,
+  component: WorktreeServiceControlBar,
   parameters: {
     layout: "padded",
   },
@@ -31,7 +31,7 @@ const meta: Meta<typeof WorkspaceServiceControlBar> = {
 };
 
 export default meta;
-type Story = StoryObj<typeof WorkspaceServiceControlBar>;
+type Story = StoryObj<typeof WorktreeServiceControlBar>;
 
 export const Running: Story = {
   args: { services: [entry()] },
@@ -91,7 +91,7 @@ export const LongUrl: Story = {
   },
 };
 
-const MULTI_SERVICES: WorkspaceServiceControlEntry[] = [
+const MULTI_SERVICES: WorktreeServiceControlEntry[] = [
   entry({ key: "svc-web", name: "web" }),
   entry({ key: "svc-api", name: "api", state: "starting", url: null, port: 8080 }),
   entry({ key: "svc-worker", name: "worker", state: "stopped", url: null, port: null }),
@@ -131,7 +131,7 @@ export const HeaderContext: Story = {
             PAP-14025-skills-need-to-be-organized-in-folders-the-ta…
           </h1>
         </div>
-        <WorkspaceServiceControlBar {...args} />
+        <WorktreeServiceControlBar {...args} />
       </div>
       <div className="mt-8 flex gap-6 border-b border-border pb-2 text-sm text-muted-foreground">
         <span className="font-medium text-foreground">Tasks</span>
@@ -158,7 +158,7 @@ export const HeaderContextFailed: Story = {
             PAP-14025-skills-need-to-be-organized-in-folders-the-ta…
           </h1>
         </div>
-        <WorkspaceServiceControlBar {...args} />
+        <WorktreeServiceControlBar {...args} />
       </div>
       <div className="mt-8 flex gap-6 border-b border-border pb-2 text-sm text-muted-foreground">
         <span className="font-medium text-foreground">Tasks</span>
@@ -211,7 +211,7 @@ export const AllStates: Story = {
       ).map(([label, service]) => (
         <div key={label} className="flex w-full items-center justify-between gap-6">
           <span className="text-sm font-medium text-muted-foreground">{label}</span>
-          <WorkspaceServiceControlBar services={[service]} onAction={noop} onViewLogs={noop} />
+          <WorktreeServiceControlBar services={[service]} onAction={noop} onViewLogs={noop} />
         </div>
       ))}
     </div>

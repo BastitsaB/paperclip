@@ -2,14 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
   DocumentRevision,
-  ExecutionWorkspaceCloseReadiness,
+  ExecutionWorktreeCloseReadiness,
   Goal,
   IssueAttachment,
 } from "@paperclipai/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { DocumentDiffModal } from "@/components/DocumentDiffModal";
-import { ExecutionWorkspaceCloseDialog } from "@/components/ExecutionWorkspaceCloseDialog";
+import { ExecutionWorktreeCloseDialog } from "@/components/ExecutionWorkspaceCloseDialog";
 import { ImageGalleryModal } from "@/components/ImageGalleryModal";
 import { NewAgentDialog } from "@/components/NewAgentDialog";
 import { NewGoalDialog } from "@/components/NewGoalDialog";
@@ -135,7 +135,7 @@ const documentRevisions: DocumentRevision[] = [
   },
 ];
 
-const closeReadinessReady: ExecutionWorkspaceCloseReadiness = {
+const closeReadinessReady: ExecutionWorktreeCloseReadiness = {
   workspaceId: "execution-workspace-storybook",
   deliveryState: "unmerged",
   state: "ready_with_warnings",
@@ -200,7 +200,7 @@ const closeReadinessReady: ExecutionWorkspaceCloseReadiness = {
   runtimeServices: storybookExecutionWorkspaces[0]?.runtimeServices ?? [],
 };
 
-const closeReadinessBlocked: ExecutionWorkspaceCloseReadiness = {
+const closeReadinessBlocked: ExecutionWorktreeCloseReadiness = {
   ...closeReadinessReady,
   state: "blocked",
   blockingReasons: [
@@ -339,10 +339,10 @@ function hydrateDialogQueries(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.setQueryData(queryKeys.issues.labels(COMPANY_ID), storybookIssueLabels);
   queryClient.setQueryData(queryKeys.issues.documents("issue-storybook-1"), storybookIssueDocuments);
   queryClient.setQueryData(queryKeys.issues.documentRevisions("issue-storybook-1", "plan"), documentRevisions);
-  queryClient.setQueryData(queryKeys.executionWorkspaces.closeReadiness("execution-workspace-storybook"), closeReadinessReady);
-  queryClient.setQueryData(queryKeys.executionWorkspaces.closeReadiness("execution-workspace-blocked"), closeReadinessBlocked);
+  queryClient.setQueryData(queryKeys.executionWorktrees.closeReadiness("execution-workspace-storybook"), closeReadinessReady);
+  queryClient.setQueryData(queryKeys.executionWorktrees.closeReadiness("execution-workspace-blocked"), closeReadinessBlocked);
   queryClient.setQueryData(
-    queryKeys.executionWorkspaces.list(COMPANY_ID, {
+    queryKeys.executionWorktrees.list(COMPANY_ID, {
       projectId: "project-board-ui",
       projectWorkspaceId: "workspace-board-ui",
       reuseEligible: true,
@@ -651,7 +651,7 @@ function ExecutionWorkspaceDialogStory({ blocked }: { blocked?: boolean }) {
       description="The close dialog exposes linked issues, git state, runtime services, and planned cleanup actions before archiving an execution workspace."
       badges={blocked ? ["blocked", "dirty worktree", "linked issue"] : ["ready with warnings", "cleanup actions"]}
     >
-      <ExecutionWorkspaceCloseDialog
+      <ExecutionWorktreeCloseDialog
         workspaceId={blocked ? "execution-workspace-blocked" : workspace.id}
         workspaceName={blocked ? "PAP-1670 publish preview worktree" : workspace.name}
         currentStatus={workspace.status}

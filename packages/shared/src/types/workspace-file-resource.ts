@@ -1,16 +1,16 @@
-export type WorkspaceFileWorkspaceKind = "execution_workspace" | "project_workspace";
-export type WorkspaceFileSelector = "auto" | "execution" | "project";
-export type WorkspaceFileListMode = "all" | "recent" | "changed";
-export type WorkspaceFilePreviewKind = "text" | "image" | "video" | "pdf" | "unsupported";
-export type WorkspaceFileResourceKind = "file" | "directory" | "remote_resource";
-export type WorkspaceFileContentEncoding = "utf8" | "base64";
+export type WorktreeFileWorktreeKind = "execution_workspace" | "project_workspace";
+export type WorktreeFileSelector = "auto" | "execution" | "project";
+export type WorktreeFileListMode = "all" | "recent" | "changed";
+export type WorktreeFilePreviewKind = "text" | "image" | "video" | "pdf" | "unsupported";
+export type WorktreeFileResourceKind = "file" | "directory" | "remote_resource";
+export type WorktreeFileContentEncoding = "utf8" | "base64";
 
-export interface WorkspaceFileRef {
+export interface WorktreeFileRef {
   kind: "workspace_file";
   issueId?: string;
   projectId?: string;
   projectName?: string;
-  workspaceKind: WorkspaceFileWorkspaceKind;
+  workspaceKind: WorktreeFileWorktreeKind;
   workspaceId: string;
   relativePath: string;
   line?: number | null;
@@ -18,19 +18,19 @@ export interface WorkspaceFileRef {
   displayPath: string;
 }
 
-export interface ResolvedWorkspaceResource {
-  kind: WorkspaceFileResourceKind;
+export interface ResolvedWorktreeResource {
+  kind: WorktreeFileResourceKind;
   provider: "local_fs" | "git_worktree" | "remote_managed" | string;
   title: string;
   displayPath: string;
   workspaceLabel: string;
-  workspaceKind: WorkspaceFileWorkspaceKind;
+  workspaceKind: WorktreeFileWorktreeKind;
   workspaceId: string;
   projectId?: string | null;
   projectName?: string | null;
   contentType?: string | null;
   byteSize?: number | null;
-  previewKind: WorkspaceFilePreviewKind;
+  previewKind: WorktreeFilePreviewKind;
   denialReason?: string | null;
   capabilities: {
     preview: boolean;
@@ -39,29 +39,29 @@ export interface ResolvedWorkspaceResource {
   };
 }
 
-export interface WorkspaceFileContent {
-  resource: ResolvedWorkspaceResource;
+export interface WorktreeFileContent {
+  resource: ResolvedWorktreeResource;
   content: {
-    encoding: WorkspaceFileContentEncoding;
+    encoding: WorktreeFileContentEncoding;
     data: string;
   };
 }
 
-export interface WorkspaceFileListFileItem {
+export interface WorktreeFileListFileItem {
   kind: "file";
   provider: "local_fs" | "git_worktree" | string;
   title: string;
   relativePath: string;
   displayPath: string;
   workspaceLabel: string;
-  workspaceKind: WorkspaceFileWorkspaceKind;
+  workspaceKind: WorktreeFileWorktreeKind;
   workspaceId: string;
   projectId?: string | null;
   projectName?: string | null;
   contentType?: string | null;
   byteSize?: number | null;
   modifiedAt?: string | null;
-  previewKind: WorkspaceFilePreviewKind;
+  previewKind: WorktreeFilePreviewKind;
   capabilities: {
     preview: boolean;
     download: true;
@@ -69,14 +69,14 @@ export interface WorkspaceFileListFileItem {
   };
 }
 
-export interface WorkspaceFileListDirectoryItem {
+export interface WorktreeFileListDirectoryItem {
   kind: "directory";
   provider: "local_fs" | "git_worktree" | string;
   title: string;
   relativePath: string;
   displayPath: string;
   workspaceLabel: string;
-  workspaceKind: WorkspaceFileWorkspaceKind;
+  workspaceKind: WorktreeFileWorktreeKind;
   workspaceId: string;
   projectId?: string | null;
   projectName?: string | null;
@@ -91,59 +91,59 @@ export interface WorkspaceFileListDirectoryItem {
   };
 }
 
-export type WorkspaceFileListItem = WorkspaceFileListFileItem | WorkspaceFileListDirectoryItem;
+export type WorktreeFileListItem = WorktreeFileListFileItem | WorktreeFileListDirectoryItem;
 
-export interface WorkspaceFileListResponse {
+export interface WorktreeFileListResponse {
   kind: "workspace_file_list";
   state: "available" | "unavailable";
   unavailableReason?: string | null;
   workspace: {
     provider: "local_fs" | "git_worktree" | string;
     workspaceLabel: string;
-    workspaceKind: WorkspaceFileWorkspaceKind;
+    workspaceKind: WorktreeFileWorktreeKind;
     workspaceId: string;
     projectId?: string | null;
     projectName?: string | null;
   } | null;
   query: {
-    workspace: WorkspaceFileSelector;
-    mode: WorkspaceFileListMode;
+    workspace: WorktreeFileSelector;
+    mode: WorktreeFileListMode;
     path?: string | null;
     q: string | null;
     limit: number;
     offset: number;
   };
-  items: WorkspaceFileListItem[];
+  items: WorktreeFileListItem[];
   scannedCount: number;
   truncated: boolean;
 }
 
-export interface WorkspaceFileAvailabilityQuery {
+export interface WorktreeFileAvailabilityQuery {
   path: string;
-  workspace?: WorkspaceFileSelector;
+  workspace?: WorktreeFileSelector;
   projectId?: string;
   workspaceId?: string;
 }
 
-export interface NormalizedWorkspaceFileAvailabilityQuery {
+export interface NormalizedWorktreeFileAvailabilityQuery {
   path: string;
-  workspace: WorkspaceFileSelector;
+  workspace: WorktreeFileSelector;
   projectId: string | null;
   workspaceId: string | null;
 }
 
-export interface WorkspaceFileAvailabilityRequest {
-  queries: WorkspaceFileAvailabilityQuery[];
+export interface WorktreeFileAvailabilityRequest {
+  queries: WorktreeFileAvailabilityQuery[];
 }
 
-export interface WorkspaceFileAvailabilityResult {
-  query: NormalizedWorkspaceFileAvailabilityQuery;
+export interface WorktreeFileAvailabilityResult {
+  query: NormalizedWorktreeFileAvailabilityQuery;
   openable: boolean;
   unavailableReason?: string | null;
-  resource: ResolvedWorkspaceResource | null;
+  resource: ResolvedWorktreeResource | null;
 }
 
-export interface WorkspaceFileAvailabilityResponse {
+export interface WorktreeFileAvailabilityResponse {
   kind: "workspace_file_availability";
-  results: WorkspaceFileAvailabilityResult[];
+  results: WorktreeFileAvailabilityResult[];
 }

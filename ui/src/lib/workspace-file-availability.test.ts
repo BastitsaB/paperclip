@@ -1,17 +1,17 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
-import type { ResolvedWorkspaceResource } from "@paperclipai/shared";
+import type { ResolvedWorktreeResource } from "@paperclipai/shared";
 import {
-  chunkWorkspaceFileAvailabilityRefs,
-  workspaceFileAvailabilityFromResult,
-  workspaceFileAvailabilityKey,
-  workspaceFileAvailabilityRef,
-  workspaceFileAvailabilityTarget,
+  chunkWorktreeFileAvailabilityRefs,
+  worktreeFileAvailabilityFromResult,
+  worktreeFileAvailabilityKey,
+  worktreeFileAvailabilityRef,
+  worktreeFileAvailabilityTarget,
   WORKSPACE_FILE_AVAILABILITY_MAX_BATCH,
 } from "./workspace-file-availability";
 
-function resource(overrides: Partial<ResolvedWorkspaceResource> = {}): ResolvedWorkspaceResource {
+function resource(overrides: Partial<ResolvedWorktreeResource> = {}): ResolvedWorktreeResource {
   return {
     kind: "file",
     provider: "git_worktree",
@@ -28,13 +28,13 @@ function resource(overrides: Partial<ResolvedWorkspaceResource> = {}): ResolvedW
 
 describe("workspaceFileAvailabilityRef", () => {
   it("drops line/column so anchors of the same file share one lookup", () => {
-    const a = workspaceFileAvailabilityRef({ path: "ui/src/a.ts", line: 4, column: 2, raw: "ui/src/a.ts:4:2" });
-    const b = workspaceFileAvailabilityRef({ path: "ui/src/a.ts", line: 90, column: null, raw: "ui/src/a.ts:90" });
-    expect(workspaceFileAvailabilityKey(a)).toBe(workspaceFileAvailabilityKey(b));
+    const a = worktreeFileAvailabilityRef({ path: "ui/src/a.ts", line: 4, column: 2, raw: "ui/src/a.ts:4:2" });
+    const b = worktreeFileAvailabilityRef({ path: "ui/src/a.ts", line: 90, column: null, raw: "ui/src/a.ts:90" });
+    expect(worktreeFileAvailabilityKey(a)).toBe(worktreeFileAvailabilityKey(b));
   });
 
   it("defaults an unbound reference to the auto selector", () => {
-    expect(workspaceFileAvailabilityRef({ path: "a/b.ts", line: null, column: null, raw: "a/b.ts" })).toEqual({
+    expect(worktreeFileAvailabilityRef({ path: "a/b.ts", line: null, column: null, raw: "a/b.ts" })).toEqual({
       path: "a/b.ts",
       workspace: "auto",
       projectId: null,
@@ -43,37 +43,37 @@ describe("workspaceFileAvailabilityRef", () => {
   });
 
   it("keeps distinct targets on distinct keys", () => {
-    const auto = workspaceFileAvailabilityKey({ path: "a/b.ts", workspace: "auto", projectId: null, workspaceId: null });
-    const execution = workspaceFileAvailabilityKey({ path: "a/b.ts", workspace: "execution", projectId: null, workspaceId: null });
-    const folder = workspaceFileAvailabilityKey({ path: "a/b.ts/", workspace: "auto", projectId: null, workspaceId: null });
+    const auto = worktreeFileAvailabilityKey({ path: "a/b.ts", workspace: "auto", projectId: null, workspaceId: null });
+    const execution = worktreeFileAvailabilityKey({ path: "a/b.ts", workspace: "execution", projectId: null, workspaceId: null });
+    const folder = worktreeFileAvailabilityKey({ path: "a/b.ts/", workspace: "auto", projectId: null, workspaceId: null });
     expect(new Set([auto, execution, folder]).size).toBe(3);
   });
 
   it("matches the server's dedup key ordering", () => {
-    expect(workspaceFileAvailabilityKey({ path: "a/b.ts", workspace: "auto", projectId: null, workspaceId: null }))
+    expect(worktreeFileAvailabilityKey({ path: "a/b.ts", workspace: "auto", projectId: null, workspaceId: null }))
       .toBe(JSON.stringify(["auto", null, null, "a/b.ts"]));
   });
 });
 
 describe("chunkWorkspaceFileAvailabilityRefs", () => {
   it("returns nothing for an empty list", () => {
-    expect(chunkWorkspaceFileAvailabilityRefs([])).toEqual([]);
+    expect(chunkWorktreeFileAvailabilityRefs([])).toEqual([]);
   });
 
   it("keeps a batch at the cap in one request", () => {
     const refs = Array.from({ length: WORKSPACE_FILE_AVAILABILITY_MAX_BATCH }, (_, index) => index);
-    expect(chunkWorkspaceFileAvailabilityRefs(refs)).toHaveLength(1);
+    expect(chunkWorktreeFileAvailabilityRefs(refs)).toHaveLength(1);
   });
 
   it("chunks only above the cap", () => {
     const refs = Array.from({ length: 250 }, (_, index) => index);
-    expect(chunkWorkspaceFileAvailabilityRefs(refs).map((chunk) => chunk.length)).toEqual([100, 100, 50]);
+    expect(chunkWorktreeFileAvailabilityRefs(refs).map((chunk) => chunk.length)).toEqual([100, 100, 50]);
   });
 });
 
 describe("workspaceFileAvailabilityTarget", () => {
   it("binds a project workspace by explicit ids", () => {
-    expect(workspaceFileAvailabilityTarget(resource({
+    expect(worktreeFileAvailabilityTarget(resource({
       workspaceKind: "project_workspace",
       projectId: "17acae7d-9d0c-46bf-9c82-be9694ac3461",
       projectName: "Paperclip App",
@@ -86,7 +86,7 @@ describe("workspaceFileAvailabilityTarget", () => {
   });
 
   it("binds an execution workspace by selector alone", () => {
-    expect(workspaceFileAvailabilityTarget(resource())).toMatchObject({
+    expect(worktreeFileAvailabilityTarget(resource())).toMatchObject({
       workspace: "execution",
       projectId: null,
       workspaceId: null,
@@ -96,11 +96,11 @@ describe("workspaceFileAvailabilityTarget", () => {
 
 describe("workspaceFileAvailabilityFromResult", () => {
   it("accepts an openable result with a resolved resource", () => {
-    expect(workspaceFileAvailabilityFromResult({ openable: true, resource: resource() }).state).toBe("openable");
+    expect(worktreeFileAvailabilityFromResult({ openable: true, resource: resource() }).state).toBe("openable");
   });
 
   it("rejects a non-openable result and keeps the reason", () => {
-    expect(workspaceFileAvailabilityFromResult({
+    expect(worktreeFileAvailabilityFromResult({
       openable: false,
       unavailableReason: "not_found",
       resource: null,
@@ -108,11 +108,11 @@ describe("workspaceFileAvailabilityFromResult", () => {
   });
 
   it("fails closed when a result claims openable without a resource", () => {
-    expect(workspaceFileAvailabilityFromResult({ openable: true, resource: null }).state).toBe("unavailable");
+    expect(worktreeFileAvailabilityFromResult({ openable: true, resource: null }).state).toBe("unavailable");
   });
 
   it("fails closed for remote resources the viewer cannot preview", () => {
-    expect(workspaceFileAvailabilityFromResult({
+    expect(worktreeFileAvailabilityFromResult({
       openable: false,
       unavailableReason: "remote_workspace",
       resource: resource({ kind: "remote_resource", capabilities: { preview: false, download: false, listChildren: false } }),

@@ -1,11 +1,11 @@
-import type { WorkspaceOperation, WorkspaceRuntimeService } from "@paperclipai/shared";
+import type { WorktreeOperation, WorktreeRuntimeService } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
 import {
-  describeWorkspaceReadinessCause,
-  resolveWorkspaceAccessState,
+  describeWorktreeReadinessCause,
+  resolveWorktreeAccessState,
 } from "./workspace-access-state";
 
-function runtimeService(overrides: Partial<WorkspaceRuntimeService> = {}): WorkspaceRuntimeService {
+function runtimeService(overrides: Partial<WorktreeRuntimeService> = {}): WorktreeRuntimeService {
   return {
     id: "runtime-1",
     companyId: "company-1",
@@ -38,7 +38,7 @@ function runtimeService(overrides: Partial<WorkspaceRuntimeService> = {}): Works
   };
 }
 
-function operation(overrides: Partial<WorkspaceOperation> = {}): WorkspaceOperation {
+function operation(overrides: Partial<WorktreeOperation> = {}): WorktreeOperation {
   return {
     id: "op-1",
     companyId: "company-1",
@@ -68,7 +68,7 @@ function operation(overrides: Partial<WorkspaceOperation> = {}): WorkspaceOperat
 
 describe("resolveWorkspaceAccessState", () => {
   it("is ready with a password-independent open action when a healthy runtime publishes a URL", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [operation()],
     });
@@ -81,7 +81,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("shows a repair-in-progress state with the current phase and no action", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [
         operation({ phase: "workspace_repair", status: "running", metadata: { repairPhase: "full_reseed" } }),
@@ -94,7 +94,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("shows a failed repair with the failing phase and points at the log", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [],
       operations: [
         operation({ phase: "workspace_repair", status: "failed", metadata: { repairPhase: "readiness_validation" } }),
@@ -107,7 +107,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("returns to ready after a failed repair when a newer healthy runtime is serving", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ startedAt: new Date("2026-08-19T00:03:00.000Z") })],
       operations: [
         operation({
@@ -132,7 +132,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("returns to ready when a serving runtime has subsequently reported ready", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ startedAt: new Date("2026-08-19T00:01:00.000Z") })],
       operations: [
         operation({
@@ -166,7 +166,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("keeps a newer failed repair primary even when an older runtime is healthy", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ startedAt: new Date("2026-08-19T00:01:00.000Z") })],
       operations: [
         operation({
@@ -182,7 +182,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("shows provisioning while the clone is restoring", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [],
       operations: [operation({ status: "running" })],
     });
@@ -191,7 +191,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("offers a repair when provisioning failed, naming the seed phase", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [],
       operations: [operation({ status: "failed", metadata: { seedFailurePhase: "restore" } })],
     });
@@ -200,7 +200,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("returns to ready after a failed seed when a later repair succeeded and a healthy runtime is serving", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ startedAt: new Date("2026-08-20T00:18:00.000Z") })],
       operations: [
         operation({
@@ -234,7 +234,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("does not offer repair for a stale failed seed after a later successful repair", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [],
       operations: [
         operation({
@@ -259,7 +259,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("returns to ready when a healthy runtime proves a failed seed is stale", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [operation({ status: "failed" })],
     });
@@ -275,7 +275,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("shows validating, not degraded, while a fresh clone is still being confirmed", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [operation()],
       handoffFailure: {
@@ -302,7 +302,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("degrades a verified clone whose database regressed and offers one repair", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [operation()],
       handoffFailure: {
@@ -329,7 +329,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("labels the credential path accurately when no handoff is configured", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService()],
       operations: [operation()],
       handoffFailure: { reason: "handoff_not_configured" },
@@ -344,11 +344,11 @@ describe("resolveWorkspaceAccessState", () => {
 
   it("offers start when nothing is running", () => {
     expect(
-      resolveWorkspaceAccessState({ runtimeServices: [], operations: [] }),
+      resolveWorktreeAccessState({ runtimeServices: [], operations: [] }),
     ).toMatchObject({ state: "provisioning", action: { kind: "start", label: "Start workspace" } });
 
     expect(
-      resolveWorkspaceAccessState({
+      resolveWorktreeAccessState({
         runtimeServices: [],
         operations: [],
         handoffFailure: { reason: "runtime_not_running" },
@@ -357,7 +357,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("refuses to call an unhealthy running runtime ready", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ healthStatus: "unhealthy" })],
       operations: [operation()],
     });
@@ -365,7 +365,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("treats a running service with no URL as not yet serving", () => {
-    const access = resolveWorkspaceAccessState({
+    const access = resolveWorktreeAccessState({
       runtimeServices: [runtimeService({ url: null })],
       operations: [operation()],
     });
@@ -373,7 +373,7 @@ describe("resolveWorkspaceAccessState", () => {
   });
 
   it("handles missing operations and services without throwing", () => {
-    expect(resolveWorkspaceAccessState({ runtimeServices: null, operations: undefined }).state)
+    expect(resolveWorktreeAccessState({ runtimeServices: null, operations: undefined }).state)
       .toBe("provisioning");
   });
 });
@@ -381,7 +381,7 @@ describe("resolveWorkspaceAccessState", () => {
 describe("describeWorkspaceReadinessCause", () => {
   it("prefers the recorded readiness phase over the generic reason", () => {
     expect(
-      describeWorkspaceReadinessCause({
+      describeWorktreeReadinessCause({
         reason: "workspace_not_ready",
         readiness: {
           state: "degraded",
@@ -402,9 +402,9 @@ describe("describeWorkspaceReadinessCause", () => {
   });
 
   it("falls back to the reason and finally to null", () => {
-    expect(describeWorkspaceReadinessCause({ reason: "runtime_not_running" }))
+    expect(describeWorktreeReadinessCause({ reason: "runtime_not_running" }))
       .toContain("No healthy runtime service");
-    expect(describeWorkspaceReadinessCause({ reason: "something_new" })).toBeNull();
-    expect(describeWorkspaceReadinessCause(null)).toBeNull();
+    expect(describeWorktreeReadinessCause({ reason: "something_new" })).toBeNull();
+    expect(describeWorktreeReadinessCause(null)).toBeNull();
   });
 });

@@ -2,14 +2,14 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
-  ResolvedWorkspaceResource,
-  WorkspaceFileContent,
-  WorkspaceFileListFileItem,
-  WorkspaceFileListResponse,
+  ResolvedWorktreeResource,
+  WorktreeFileContent,
+  WorktreeFileListFileItem,
+  WorktreeFileListResponse,
 } from "@paperclipai/shared";
 import { FileViewerProvider, useRequiredFileViewer } from "@/context/FileViewerContext";
 import { FileViewerSheet } from "@/components/FileViewerSheet";
-import { IssueWorkspaceCard } from "@/components/IssueWorkspaceCard";
+import { IssueWorktreeCard } from "@/components/IssueWorkspaceCard";
 import { queryKeys } from "@/lib/queryKeys";
 
 /**
@@ -25,7 +25,7 @@ function listKey(issueId: string) {
   return queryKeys.issues.fileResources(issueId, { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 });
 }
 
-function item(relativePath: string, minutesAgo: number, overrides: Partial<WorkspaceFileListFileItem> = {}): WorkspaceFileListFileItem {
+function item(relativePath: string, minutesAgo: number, overrides: Partial<WorktreeFileListFileItem> = {}): WorktreeFileListFileItem {
   return {
     kind: "file",
     provider: "git_worktree",
@@ -44,7 +44,7 @@ function item(relativePath: string, minutesAgo: number, overrides: Partial<Works
   };
 }
 
-const recentList: WorkspaceFileListResponse = {
+const recentList: WorktreeFileListResponse = {
   kind: "workspace_file_list",
   state: "available",
   workspace: {
@@ -66,7 +66,7 @@ const recentList: WorkspaceFileListResponse = {
   truncated: true,
 };
 
-function unavailable(reason: string): WorkspaceFileListResponse {
+function unavailable(reason: string): WorktreeFileListResponse {
   return {
     kind: "workspace_file_list",
     state: "unavailable",
@@ -79,7 +79,7 @@ function unavailable(reason: string): WorkspaceFileListResponse {
   };
 }
 
-const viewedResource: ResolvedWorkspaceResource = {
+const viewedResource: ResolvedWorktreeResource = {
   kind: "file",
   provider: "git_worktree",
   title: "FileViewerSheet.tsx",
@@ -93,7 +93,7 @@ const viewedResource: ResolvedWorkspaceResource = {
   capabilities: { preview: true, download: false, listChildren: false },
 };
 
-const viewedContent: WorkspaceFileContent = {
+const viewedContent: WorktreeFileContent = {
   resource: viewedResource,
   content: {
     encoding: "utf8",
@@ -109,7 +109,7 @@ const viewedContent: WorkspaceFileContent = {
   },
 };
 
-function BrowseSheet({ data }: { data: WorkspaceFileListResponse }) {
+function BrowseSheet({ data }: { data: WorktreeFileListResponse }) {
   const queryClient = useQueryClient();
   queryClient.setQueryData(listKey(ISSUE_ID), data);
   return (
@@ -165,7 +165,7 @@ function Placement() {
     <FileViewerProvider issueId={ISSUE_ID}>
       <div className="mx-auto max-w-3xl space-y-3 p-6">
         <h3 className="text-sm font-medium text-muted-foreground">Workspace</h3>
-        <IssueWorkspaceCard
+        <IssueWorktreeCard
           issue={{
             companyId: "company-1",
             projectId: "project-1",

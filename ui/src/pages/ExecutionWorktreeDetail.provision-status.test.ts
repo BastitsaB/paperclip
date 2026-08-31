@@ -1,8 +1,8 @@
-import type { WorkspaceOperation } from "@paperclipai/shared";
+import type { WorktreeOperation } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
-import { resolveRuntimeProvisionStatus } from "./ExecutionWorkspaceDetail";
+import { resolveRuntimeProvisionStatus } from "./ExecutionWorktreeDetail";
 
-function operation(overrides: Partial<WorkspaceOperation> = {}): WorkspaceOperation {
+function operation(overrides: Partial<WorktreeOperation> = {}): WorktreeOperation {
   return {
     id: overrides.id ?? "op-1",
     companyId: "company-1",

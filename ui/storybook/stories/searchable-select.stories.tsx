@@ -2,16 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SearchableSelect, type SearchableSelectGroup } from "@/components/SearchableSelect";
 import {
-  buildReusableExecutionWorkspaceOptionGroups,
-  reusableWorkspaceOptionMatches,
-  type ReusableExecutionWorkspaceLike,
-  type ReusableWorkspaceOption,
+  buildReusableExecutionWorktreeOptionGroups,
+  reusableWorktreeOptionMatches,
+  type ReusableExecutionWorktreeLike,
+  type ReusableWorktreeOption,
 } from "@/lib/reusable-execution-workspaces";
 
 const NOW = new Date("2026-06-24T12:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
 
-const WORKSPACES: ReusableExecutionWorkspaceLike[] = [
+const WORKSPACES: ReusableExecutionWorktreeLike[] = [
   {
     id: "ws-auth-refresh",
     name: "auth-token-refresh",
@@ -62,7 +62,7 @@ const WORKSPACES: ReusableExecutionWorkspaceLike[] = [
   },
 ];
 
-const LONG_WORKSPACES: ReusableExecutionWorkspaceLike[] = [
+const LONG_WORKSPACES: ReusableExecutionWorktreeLike[] = [
   {
     id: "ws-long-name",
     name: "paperclip-control-plane-existing-workspace-selector-long-running-validation-branch",
@@ -82,9 +82,9 @@ const LONG_WORKSPACES: ReusableExecutionWorkspaceLike[] = [
   ...WORKSPACES.slice(0, 2),
 ];
 
-const GROUPS = buildReusableExecutionWorkspaceOptionGroups(WORKSPACES, { now: NOW });
+const GROUPS = buildReusableExecutionWorktreeOptionGroups(WORKSPACES, { now: NOW });
 
-const SELECT_GROUPS: SearchableSelectGroup<string, ReusableWorkspaceOption>[] = GROUPS.map((group) => ({
+const SELECT_GROUPS: SearchableSelectGroup<string, ReusableWorktreeOption>[] = GROUPS.map((group) => ({
   id: group.id,
   label: group.label,
   options: group.options,
@@ -104,7 +104,7 @@ function WorkspaceSelect({
   triggerClassName?: string;
   loading?: boolean;
   disabled?: boolean;
-  groups?: SearchableSelectGroup<string, ReusableWorkspaceOption>[];
+  groups?: SearchableSelectGroup<string, ReusableWorktreeOption>[];
   initialValue?: string;
   autoOpen?: boolean;
   autoQuery?: string;
@@ -134,7 +134,7 @@ function WorkspaceSelect({
 
   return (
     <div ref={rootRef}>
-      <SearchableSelect<string, ReusableWorkspaceOption>
+      <SearchableSelect<string, ReusableWorktreeOption>
         value={value}
         groups={groups}
         onValueChange={(next) => setValue(next)}
@@ -145,7 +145,7 @@ function WorkspaceSelect({
         loading={loading}
         disabled={disabled}
         triggerClassName={triggerClassName}
-        filterOption={(option, query) => reusableWorkspaceOptionMatches(option, query)}
+        filterOption={(option, query) => reusableWorktreeOptionMatches(option, query)}
         renderOption={(option, { selected }) => (
           <span className="flex min-w-0 flex-col">
             <span className={`truncate ${selected ? "font-medium" : ""}`}>{option.label}</span>
@@ -213,7 +213,7 @@ export const LongNamesAndPaths: Story = {
     <div className="w-[280px]">
       <WorkspaceSelect
         triggerClassName={COMPACT_TRIGGER}
-        groups={buildReusableExecutionWorkspaceOptionGroups(LONG_WORKSPACES, { now: NOW })}
+        groups={buildReusableExecutionWorktreeOptionGroups(LONG_WORKSPACES, { now: NOW })}
         autoOpen
       />
     </div>

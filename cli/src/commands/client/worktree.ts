@@ -24,21 +24,25 @@ interface OrgOutputOptions extends CompanyOptions {
   out?: string;
 }
 
-export function registerWorkspaceCommands(program: Command): void {
+// Legacy-wire boundary: aliases and HTTP resource paths retain "workspace".
+export function registerWorktreeCommands(program: Command): void {
   const org = program.command("org").description("Organization chart operations");
   addCompanyGet(org, "get", "Get org chart data", "org");
   addBinaryCompanyGet(org, "svg", "Download org chart SVG", "org.svg");
   addBinaryCompanyGet(org, "png", "Download org chart PNG", "org.png");
   addCompanyGet(program.command("agent-config").description("Agent configuration summaries"), "list", "List agent configurations", "agent-configurations");
 
-  const workspace = program.command("workspace").description("Execution workspace operations");
-  addCompanyGet(workspace, "list", "List execution workspaces", "execution-workspaces");
-  addIdGet(workspace, "get", "Get an execution workspace", "execution-workspaces");
-  addIdGet(workspace, "close-readiness", "Check execution workspace close readiness", "execution-workspaces", "close-readiness");
-  addIdGet(workspace, "operations", "List execution workspace operations", "execution-workspaces", "workspace-operations");
-  addPatchJson(workspace, "update", "Update an execution workspace", "execution-workspaces");
-  addRuntimeAction(workspace, "runtime-service", "Control an execution workspace runtime service", "execution-workspaces", "runtime-services");
-  addRuntimeAction(workspace, "runtime-command", "Run an execution workspace runtime command", "execution-workspaces", "runtime-commands");
+  const executionWorktree = program
+    .command("execution-worktree")
+    .aliases(["execution-workspace", "workspace"])
+    .description("Execution worktree operations");
+  addCompanyGet(executionWorktree, "list", "List execution worktrees", "execution-workspaces");
+  addIdGet(executionWorktree, "get", "Get an execution worktree", "execution-workspaces");
+  addIdGet(executionWorktree, "close-readiness", "Check execution worktree close readiness", "execution-workspaces", "close-readiness");
+  addIdGet(executionWorktree, "operations", "List execution worktree operations", "execution-workspaces", "workspace-operations");
+  addPatchJson(executionWorktree, "update", "Update an execution worktree", "execution-workspaces");
+  addRuntimeAction(executionWorktree, "runtime-service", "Control an execution worktree runtime service", "execution-workspaces", "runtime-services");
+  addRuntimeAction(executionWorktree, "runtime-command", "Run an execution worktree runtime command", "execution-workspaces", "runtime-commands");
 
   const environment = program.command("environment").description("Environment operations");
   addCompanyGet(environment, "list", "List environments", "environments");
@@ -66,11 +70,11 @@ export function registerWorkspaceCommands(program: Command): void {
   addPostEmpty(environment, "probe", "Probe an environment", "environments", "probe");
   addCompanyPostJson(environment, "probe-config", "Probe an environment config", "environments/probe-config");
 
-  const projectWorkspace = program.command("project-workspace").description("Project workspace operations");
+  const projectWorktree = program.command("project-worktree").alias("project-workspace").description("Project worktree operations");
   addCommonClientOptions(
-    projectWorkspace
+    projectWorktree
       .command("list")
-      .description("List project workspaces")
+      .description("List project worktrees")
       .argument("<projectId>", "Project ID")
       .action(async (projectId: string, opts: BaseClientOptions) => {
         try {
@@ -82,14 +86,14 @@ export function registerWorkspaceCommands(program: Command): void {
         }
       }),
   );
-  addProjectWorkspaceJson(projectWorkspace, "create", "Create a project workspace", "post");
-  addProjectWorkspaceJson(projectWorkspace, "update", "Update a project workspace", "patch");
+  addProjectWorkspaceJson(projectWorktree, "create", "Create a project worktree", "post");
+  addProjectWorkspaceJson(projectWorktree, "update", "Update a project worktree", "patch");
   addCommonClientOptions(
-    projectWorkspace
+    projectWorktree
       .command("delete")
-      .description("Delete a project workspace")
+      .description("Delete a project worktree")
       .argument("<projectId>", "Project ID")
-      .argument("<workspaceId>", "Workspace ID")
+      .argument("<workspaceId>", "Worktree ID")
       .action(async (projectId: string, workspaceId: string, opts: BaseClientOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
@@ -100,8 +104,8 @@ export function registerWorkspaceCommands(program: Command): void {
         }
       }),
   );
-  addProjectRuntimeAction(projectWorkspace, "runtime-service", "Control a project workspace runtime service", "runtime-services");
-  addProjectRuntimeAction(projectWorkspace, "runtime-command", "Run a project workspace runtime command", "runtime-commands");
+  addProjectRuntimeAction(projectWorktree, "runtime-service", "Control a project worktree runtime service", "runtime-services");
+  addProjectRuntimeAction(projectWorktree, "runtime-command", "Run a project worktree runtime command", "runtime-commands");
 }
 
 function addCompanyGet(parent: Command, name: string, description: string, path: string): void {

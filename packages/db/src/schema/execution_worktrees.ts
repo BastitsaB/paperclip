@@ -9,16 +9,16 @@ import {
 } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
-import { projectWorkspaces } from "./project_workspaces.js";
+import { projectWorktrees } from "./project_worktrees.js";
 import { projects } from "./projects.js";
 
-export const executionWorkspaces = pgTable(
+export const executionWorktrees = pgTable(
   "execution_workspaces",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-    projectWorkspaceId: uuid("project_workspace_id").references(() => projectWorkspaces.id, { onDelete: "set null" }),
+    projectWorkspaceId: uuid("project_workspace_id").references(() => projectWorktrees.id, { onDelete: "set null" }),
     sourceIssueId: uuid("source_issue_id").references((): AnyPgColumn => issues.id, { onDelete: "set null" }),
     mode: text("mode").notNull(),
     strategyType: text("strategy_type").notNull(),
@@ -31,7 +31,7 @@ export const executionWorkspaces = pgTable(
     providerType: text("provider_type").notNull().default("local_fs"),
     providerRef: text("provider_ref"),
     derivedFromExecutionWorkspaceId: uuid("derived_from_execution_workspace_id")
-      .references((): AnyPgColumn => executionWorkspaces.id, { onDelete: "set null" }),
+      .references((): AnyPgColumn => executionWorktrees.id, { onDelete: "set null" }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
     closedAt: timestamp("closed_at", { withTimezone: true }),

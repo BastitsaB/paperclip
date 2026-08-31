@@ -3,8 +3,8 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceAccessCard } from "./WorkspaceAccessCard";
-import type { WorkspaceAccessState } from "../lib/workspace-access-state";
+import { WorktreeAccessCard } from "./WorkspaceAccessCard";
+import type { WorktreeAccessState } from "../lib/workspace-access-state";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,18 +13,18 @@ function act(callback: () => void) {
   flushSync(callback);
 }
 
-function accessState(overrides: Partial<WorkspaceAccessState> = {}): WorkspaceAccessState {
+function accessState(overrides: Partial<WorktreeAccessState> = {}): WorktreeAccessState {
   return {
     state: "ready",
     title: "Ready",
-    description: "Opening the workspace signs you in to the cloned board without a password.",
-    action: { kind: "open", label: "Open workspace" },
+    description: "Opening the worktree signs you in to the cloned board without a password.",
+    action: { kind: "open", label: "Open worktree" },
     handoffAvailable: true,
     ...overrides,
   };
 }
 
-describe("WorkspaceAccessCard", () => {
+describe("WorktreeAccessCard", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
@@ -36,7 +36,7 @@ describe("WorkspaceAccessCard", () => {
     document.body.innerHTML = "";
   });
 
-  function renderCard(props: Partial<Parameters<typeof WorkspaceAccessCard>[0]> = {}) {
+  function renderCard(props: Partial<Parameters<typeof WorktreeAccessCard>[0]> = {}) {
     const handlers = {
       onOpen: vi.fn(),
       onStart: vi.fn(),
@@ -45,7 +45,7 @@ describe("WorkspaceAccessCard", () => {
     };
     const root = createRoot(container);
     act(() => {
-      root.render(<WorkspaceAccessCard access={accessState()} {...handlers} {...props} />);
+      root.render(<WorktreeAccessCard access={accessState()} {...handlers} {...props} />);
     });
     const button = container.querySelector("button");
     return { ...handlers, root, button };
@@ -64,7 +64,7 @@ describe("WorkspaceAccessCard", () => {
     expect(container.textContent).toContain("Ready");
     expect(container.textContent).toContain("single-use login handoff");
 
-    const button = findButton("Open workspace");
+    const button = findButton("Open worktree");
     expect(button).toBeDefined();
     act(() => button!.click());
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -83,7 +83,7 @@ describe("WorkspaceAccessCard", () => {
       }),
     });
 
-    const openButton = findButton("Open workspace");
+    const openButton = findButton("Open worktree");
     const logButton = findButton("View repair log");
     expect(openButton).toBeDefined();
     expect(logButton).toBeDefined();
@@ -115,18 +115,18 @@ describe("WorkspaceAccessCard", () => {
         access: accessState({
           state: "provisioning" as const,
           title: "Provisioning database",
-          action: { kind: "start" as const, label: "Start workspace" },
+          action: { kind: "start" as const, label: "Start worktree" },
         }),
-        label: "Start workspace",
+        label: "Start worktree",
         handlerKey: "onStart" as const,
       },
       {
         access: accessState({
           state: "degraded" as const,
-          title: "Workspace is degraded",
-          action: { kind: "repair" as const, label: "Repair workspace" },
+          title: "Worktree is degraded",
+          action: { kind: "repair" as const, label: "Repair worktree" },
         }),
-        label: "Repair workspace",
+        label: "Repair worktree",
         handlerKey: "onRepair" as const,
       },
       {
@@ -157,7 +157,7 @@ describe("WorkspaceAccessCard", () => {
     const { root } = renderCard({
       access: accessState({
         state: "repairing",
-        title: "Repairing workspace database",
+        title: "Repairing worktree database",
         action: { kind: "wait", label: "Repair in progress" },
       }),
     });
@@ -174,21 +174,21 @@ describe("WorkspaceAccessCard", () => {
         state: "failed",
         title: "Database provisioning failed",
         description: "The clone failed during restore. Repairing replaces only the isolated database.",
-        action: { kind: "repair", label: "Repair workspace" },
+        action: { kind: "repair", label: "Repair worktree" },
       }),
-      errorMessage: "Failed to open the workspace.",
+      errorMessage: "Failed to open the worktree.",
     });
     expect(container.textContent).toContain("Database provisioning failed");
     expect(container.textContent).toContain("failed during restore");
     expect(
       container.querySelector("[data-testid='workspace-access-error']")?.textContent,
-    ).toContain("Failed to open the workspace.");
+    ).toContain("Failed to open the worktree.");
     act(() => root.unmount());
   });
 
   it("disables the action while the caller reports it busy", () => {
     const { root } = renderCard({ isBusy: true });
-    expect(findButton("Open workspace")?.disabled).toBe(true);
+    expect(findButton("Open worktree")?.disabled).toBe(true);
     act(() => root.unmount());
   });
 });

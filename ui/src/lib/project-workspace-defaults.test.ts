@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  defaultExecutionWorkspaceModeForProject,
-  defaultProjectWorkspaceIdForProject,
-  issueExecutionWorkspaceModeForExistingWorkspace,
+  defaultExecutionWorktreeModeForProject,
+  defaultProjectWorktreeIdForProject,
+  issueExecutionWorktreeModeForExistingWorktree,
 } from "./project-workspace-defaults";
 
 describe("project workspace defaults", () => {
   it("prefers the execution policy default workspace over the primary workspace", () => {
-    expect(defaultProjectWorkspaceIdForProject({
+    expect(defaultProjectWorktreeIdForProject({
       executionWorkspacePolicy: { defaultProjectWorkspaceId: "workspace-policy" },
       workspaces: [
         { id: "workspace-primary", isPrimary: true },
@@ -17,7 +17,7 @@ describe("project workspace defaults", () => {
   });
 
   it("falls back to the primary workspace, then the first workspace", () => {
-    expect(defaultProjectWorkspaceIdForProject({
+    expect(defaultProjectWorktreeIdForProject({
       executionWorkspacePolicy: null,
       workspaces: [
         { id: "workspace-one", isPrimary: false },
@@ -25,18 +25,18 @@ describe("project workspace defaults", () => {
       ],
     })).toBe("workspace-two");
 
-    expect(defaultProjectWorkspaceIdForProject({
+    expect(defaultProjectWorktreeIdForProject({
       executionWorkspacePolicy: null,
       workspaces: [{ id: "workspace-one", isPrimary: false }],
     })).toBe("workspace-one");
   });
 
   it("maps project and reusable execution workspace modes to issue settings modes", () => {
-    expect(defaultExecutionWorkspaceModeForProject({
+    expect(defaultExecutionWorktreeModeForProject({
       executionWorkspacePolicy: { enabled: true, defaultMode: "adapter_default" },
     })).toBe("agent_default");
 
-    expect(issueExecutionWorkspaceModeForExistingWorkspace("cloud_sandbox")).toBe("agent_default");
-    expect(issueExecutionWorkspaceModeForExistingWorkspace("isolated_workspace")).toBe("isolated_workspace");
+    expect(issueExecutionWorktreeModeForExistingWorktree("cloud_sandbox")).toBe("agent_default");
+    expect(issueExecutionWorktreeModeForExistingWorktree("isolated_workspace")).toBe("isolated_workspace");
   });
 });

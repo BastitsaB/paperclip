@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IsolatedWorkspacesRouteGate } from "./IsolatedWorkspacesRouteGate";
+import { IsolatedWorktreesRouteGate } from "./IsolatedWorktreesRouteGate";
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
@@ -29,7 +29,7 @@ async function flushReact() {
   flushSync(() => {});
 }
 
-describe("IsolatedWorkspacesRouteGate", () => {
+describe("IsolatedWorktreesRouteGate", () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
 
@@ -41,7 +41,7 @@ describe("IsolatedWorkspacesRouteGate", () => {
     flushSync(() => {
       root!.render(
         <QueryClientProvider client={queryClient}>
-          <IsolatedWorkspacesRouteGate />
+          <IsolatedWorktreesRouteGate />
         </QueryClientProvider>,
       );
     });
@@ -62,7 +62,7 @@ describe("IsolatedWorkspacesRouteGate", () => {
     vi.clearAllMocks();
   });
 
-  it("redirects to the dashboard when isolated workspaces are disabled", async () => {
+  it("redirects to the dashboard when isolated worktrees are disabled", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
     await renderGate();
 
@@ -72,7 +72,7 @@ describe("IsolatedWorkspacesRouteGate", () => {
     expect(container.querySelector('[data-testid="workspace-route"]')).toBeNull();
   });
 
-  it("renders the workspace routes when isolated workspaces are enabled", async () => {
+  it("renders the worktree routes when isolated worktrees are enabled", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
     await renderGate();
 

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { HeartbeatRun } from "@paperclipai/shared";
 import { useNavigate } from "@/lib/router";
 import { issuesApi } from "../api/issues";
-import { executionWorkspacesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-workspaces";
 import { accessApi } from "../api/access";
 import { queryKeys } from "../lib/queryKeys";
 import { useToastActions } from "../context/ToastContext";
@@ -14,7 +14,7 @@ import {
 } from "./IssueRecoveryActionCard";
 import {
   canBoardManageRuntime,
-  readRecoveryReconcileWorkspaceId,
+  readRecoveryReconcileWorktreeId,
 } from "../lib/recovery-reconcile";
 
 /** The run errorCode Paperclip stamps when it declines a run over a git workspace it can't validate. */
@@ -51,25 +51,25 @@ function readRunIssueId(run: HeartbeatRun): string | null {
  * Renders nothing unless the run is a workspace-validation failure whose source issue still carries
  * a live `workspace_validation` recovery action.
  */
-export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
+export function RunWorktreeRecoverySurface({ run }: { run: HeartbeatRun }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
 
-  const isWorkspaceValidationFailure =
+  const isWorktreeValidationFailure =
     run.status === "failed" && run.errorCode === WORKSPACE_VALIDATION_RUN_ERROR_CODE;
   const issueId = readRunIssueId(run);
 
   const { data: issue } = useQuery({
     queryKey: queryKeys.issues.detail(issueId ?? "__none__"),
     queryFn: () => issuesApi.get(issueId!),
-    enabled: Boolean(isWorkspaceValidationFailure && issueId),
+    enabled: Boolean(isWorktreeValidationFailure && issueId),
   });
 
   const { data: boardAccess } = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
     queryFn: () => accessApi.getCurrentBoardAccess(),
-    enabled: Boolean(isWorkspaceValidationFailure && issueId),
+    enabled: Boolean(isWorktreeValidationFailure && issueId),
     retry: false,
   });
 
@@ -77,8 +77,8 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
   const canManageBoardRuntime = canBoardManageRuntime(run.companyId, boardAccess);
   // Prefer the workspace pinned by the recovery action's evidence (the workspace that actually
   // diverged) over the page-level id, which can drift after a re-issue rebinds the issue.
-  const reconcileWorkspaceId =
-    readRecoveryReconcileWorkspaceId(recoveryAction) ?? issue?.executionWorkspaceId ?? null;
+  const reconcileWorktreeId =
+    readRecoveryReconcileWorktreeId(recoveryAction) ?? issue?.executionWorkspaceId ?? null;
 
   const invalidate = useCallback(() => {
     if (issueId) {
@@ -96,19 +96,19 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
         | { workspaceId: string; mode: "quarantine_restore" },
     ) => {
       const { workspaceId, ...body } = input;
-      return executionWorkspacesApi.reconcile(workspaceId, body);
+      return executionWorktreesApi.reconcile(workspaceId, body);
     },
     onSuccess: (_result, variables) => {
       invalidate();
       pushToast(
         variables.mode === "quarantine_restore"
           ? {
-              title: "Workspace repaired",
+              title: "Worktree repaired",
               body: "Dirty changes were quarantined onto a rescue branch and the recorded branch restored; the task will resume.",
               tone: "success",
             }
           : {
-              title: "Workspace branch reconciled",
+              title: "Worktree branch reconciled",
               body: "The recorded branch now matches the live branch; the task will resume.",
               tone: "success",
             },
@@ -117,7 +117,7 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
     onError: (err) => {
       pushToast({
         title: "Reconcile failed",
-        body: err instanceof Error ? err.message : "Unable to reconcile the workspace branch.",
+        body: err instanceof Error ? err.message : "Unable to reconcile the worktree branch.",
         tone: "error",
       });
     },
@@ -128,7 +128,7 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
       if (!issue) throw new Error("Task is not loaded yet.");
       const sourceLabel = issue.identifier ?? "the stalled task";
       const descriptionLines = [
-        `Re-issued from ${sourceLabel} on an isolated git worktree after a workspace branch divergence.`,
+        `Re-issued from ${sourceLabel} on an isolated git worktree after a worktree branch divergence.`,
         "",
         `- Base ref (live branch): \`${request.baseRef}\``,
         ...(request.expectedBranch ? [`- Recorded branch: \`${request.expectedBranch}\``] : []),
@@ -160,7 +160,7 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
       pushToast({
         title: "Isolated re-issue created",
         body: created.identifier
-          ? `${created.identifier} will run on a fresh isolated workspace.`
+          ? `${created.identifier} will run on a fresh isolated worktree.`
           : "A fresh isolated re-issue was created.",
         tone: "success",
       });
@@ -202,22 +202,22 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
   });
 
   const handleReconcileForward = useCallback(() => {
-    if (!reconcileWorkspaceId) return;
-    void reconcile.mutateAsync({ workspaceId: reconcileWorkspaceId, mode: "forward" });
-  }, [reconcile, reconcileWorkspaceId]);
+    if (!reconcileWorktreeId) return;
+    void reconcile.mutateAsync({ workspaceId: reconcileWorktreeId, mode: "forward" });
+  }, [reconcile, reconcileWorktreeId]);
 
   const handleBreakGlass = useCallback(
     (reason: string) => {
-      if (!reconcileWorkspaceId) return;
-      void reconcile.mutateAsync({ workspaceId: reconcileWorkspaceId, mode: "override", reason });
+      if (!reconcileWorktreeId) return;
+      void reconcile.mutateAsync({ workspaceId: reconcileWorktreeId, mode: "override", reason });
     },
-    [reconcile, reconcileWorkspaceId],
+    [reconcile, reconcileWorktreeId],
   );
 
   const handleQuarantineRestore = useCallback(() => {
-    if (!reconcileWorkspaceId) return;
-    void reconcile.mutateAsync({ workspaceId: reconcileWorkspaceId, mode: "quarantine_restore" });
-  }, [reconcile, reconcileWorkspaceId]);
+    if (!reconcileWorktreeId) return;
+    void reconcile.mutateAsync({ workspaceId: reconcileWorktreeId, mode: "quarantine_restore" });
+  }, [reconcile, reconcileWorktreeId]);
 
   const handleReissue = useCallback(
     (request: RecoveryReissueRequest) => {
@@ -249,13 +249,13 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
     [resolve],
   );
 
-  if (!isWorkspaceValidationFailure || !issueId) return null;
+  if (!isWorktreeValidationFailure || !issueId) return null;
   if (!recoveryAction || recoveryAction.kind !== "workspace_validation") return null;
 
   return (
     <div className="space-y-2" data-testid="run-workspace-recovery-surface">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-muted-foreground">Workspace recovery</span>
+        <span className="text-xs font-medium text-muted-foreground">Worktree recovery</span>
         {issue?.identifier ? (
           <a
             href={`/issues/${issue.identifier}`}
@@ -286,4 +286,4 @@ export function RunWorkspaceRecoverySurface({ run }: { run: HeartbeatRun }) {
   );
 }
 
-export default RunWorkspaceRecoverySurface;
+export default RunWorktreeRecoverySurface;
