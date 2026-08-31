@@ -31,20 +31,31 @@ and start a Codex-backed native run only through the default-off
 `paperclip_runner` adapter. See
 [`SEMANTIC_ACTIONS.md`](SEMANTIC_ACTIONS.md) for the catalog boundary.
 
-The package has two initial public surfaces:
+The package exposes these public surfaces:
 
 - `@paperclipai/paperclip-runner` contains runtime contracts, validation,
   replay/reducer logic, the semantic catalog, the authorization dispatcher, and
   the Node-only durable server authority.
 - `@paperclipai/paperclip-runner/testing` adds Node-only fixture loading and a
   provider-neutral semantic conformance kit for deterministic test adapters.
+- `@paperclipai/paperclip-runner/live` contains the package-local live-session
+  and runnerd/Codex transport used by the development consoles.
+- `@paperclipai/paperclip-runner/browser` and
+  `@paperclipai/paperclip-runner/react` provide the framework-neutral browser
+  client and optional React components.
+- `@paperclipai/paperclip-runner/devtools` projects bounded diagnostic state
+  for the package-local labs.
+- `@paperclipai/paperclip-runner/standalone` contains the thin standalone demo
+  adapter, and `@paperclipai/paperclip-runner/styles.css` contains its shared
+  presentation tokens.
 
-No SDK, browser, React, eval, live-console, or lab entry point is exported. The
-package remains private in this wave. The server route
-at `/api/runner/v1/connect/:runId` has no authority until the hidden coordinator
-registers an exact existing run binding. Fresh native starts are rejected
-unless the instance `enableNativeRunner` flag is enabled. Existing direct
-adapters keep their original execution path.
+These SDK and lab surfaces stay package-local and do not select a production
+provider or change Paperclip's runtime selection. No eval or managed-provider
+entry point is exported in this slice. The package remains private. The server
+route at `/api/runner/v1/connect/:runId` has no authority until the hidden
+coordinator registers an exact existing run binding. Fresh native starts are
+rejected unless the instance `enableNativeRunner` flag is enabled. Existing
+direct adapters keep their original execution path.
 
 The package build compiles the release `paperclip-runnerd` executable and
 stages it under `dist/bin`. The normal server build vendors that directory, so
