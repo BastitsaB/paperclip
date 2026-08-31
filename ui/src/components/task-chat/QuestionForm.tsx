@@ -24,6 +24,7 @@ import {
   useTaskChatComposerTakeoverActions,
 } from "./TaskChatComposerTakeoverContext";
 import { TaskChatRichInput } from "./TaskChatRichInput";
+import { matchSafeQuestionValidationPattern } from "./question-validation-pattern";
 
 type Question = PaperclipQuestionSet["questions"][number];
 type Answer = PaperclipQuestionResponse["answers"][string];
@@ -71,12 +72,10 @@ function answerError(
   if (validation?.maxLength != null && value.length > validation.maxLength)
     return `Enter no more than ${validation.maxLength} characters.`;
   if (validation?.pattern) {
-    try {
-      if (!new RegExp(validation.pattern).test(value))
-        return "Use the requested format.";
-    } catch {
-      return "This question has an invalid validation pattern.";
-    }
+    const result = matchSafeQuestionValidationPattern(validation.pattern, value);
+    if (result === "unsupported")
+      return "This question has an unsupported validation pattern.";
+    if (result === "no_match") return "Use the requested format.";
   }
   if (
     validation?.inputType === "number" ||

@@ -48,8 +48,13 @@ export type {
   PrpStructuredRunResult,
   PrpTerminalState,
   PrpVerificationReasonCode,
+  PrpWireConnection,
+  QualifiedAcpxAgent,
   ReplayControlPlaneEventsInput,
+  RunnerProcessHandle,
+  RunnerProcessLaunchSpec,
   StrictCompletionContractInput,
+  TransportCloseReason,
 } from "@paperclipai/paperclip-runner";
 export type DurablePrpControlPlane =
   import("@paperclipai/paperclip-runner").DurablePrpControlPlane;
@@ -64,6 +69,8 @@ const runner = await import(sourceUrl.href) as RunnerModule;
 
 export const DurablePrpControlPlane = runner.DurablePrpControlPlane;
 export const PaperclipSemanticDispatcher = runner.PaperclipSemanticDispatcher;
+export const CAPABILITY_SEMANTIC_TOOL_CATALOG =
+  runner.CAPABILITY_SEMANTIC_TOOL_CATALOG;
 export const HarnessRuntimeRequestResolutionError =
   runner.HarnessRuntimeRequestResolutionError;
 export const NATIVE_RUNTIME_ASSET_SCHEMA = runner.NATIVE_RUNTIME_ASSET_SCHEMA;
@@ -75,6 +82,9 @@ export const canonicalNativeRuntimeContextDigest =
 export const createNativeSessionBackend = runner.createNativeSessionBackend;
 export const createPaperclipRunnerAuthorizedToolSet =
   runner.createPaperclipRunnerAuthorizedToolSet;
+export const createRunnerdCodexTransport = runner.createRunnerdCodexTransport;
+export const defaultCapabilityRunnerdBinary =
+  runner.defaultCapabilityRunnerdBinary;
 export const executeNativeSession = runner.executeNativeSession;
 export const nativeRuntimePromptDigest = runner.nativeRuntimePromptDigest;
 export const normalizePrpResultSignals = runner.normalizePrpResultSignals;
@@ -85,6 +95,10 @@ export const parseNativeExecutionInput = runner.parseNativeExecutionInput;
 export const parseNativeRuntimeContext = runner.parseNativeRuntimeContext;
 export const parsePaperclipQuestionSet = runner.parsePaperclipQuestionSet;
 export const parsePaperclipQuestionResponse = runner.parsePaperclipQuestionResponse;
+export const probeQualifiedAcpxEnvironment =
+  runner.probeQualifiedAcpxEnvironment;
+export const resolveQualifiedAcpxProfile = runner.resolveQualifiedAcpxProfile;
+export const resolveSourceCodexHome = runner.resolveSourceCodexHome;
 export const validatePrpEvent = runner.validatePrpEvent;
 export const validatePrpStructuredRunResult =
   runner.validatePrpStructuredRunResult;
