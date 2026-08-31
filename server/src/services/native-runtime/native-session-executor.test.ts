@@ -24,9 +24,11 @@ type BackendFactoryOptions = {
 
 const state = vi.hoisted(() => ({
   execute: vi.fn(),
-  createTransport: vi.fn((_options: { stateDirectory?: string }) => ({
-    transport: {},
-  })),
+  createTransport: vi.fn(
+    (_options: { stateDirectory?: string; runnerBinary?: string }) => ({
+      transport: {},
+    }),
+  ),
   createBackend: vi.fn(
     (_input: NativeExecutionInputV1, _options: BackendFactoryOptions) => ({
       kind: "test",
@@ -34,15 +36,23 @@ const state = vi.hoisted(() => ({
   ),
   cancel: vi.fn(),
   toolAuthorityExecute: vi.fn(),
-  persistActivity: vi.fn(async () => ({
-    activity: { id: "native-cancellation-audit" },
-    publication: {
-      companyId: "company",
-      payload: {},
-      pluginEvent: null,
-    },
-  })),
+  persistActivity: vi.fn(
+    async (_db: unknown, input: { action: string }) => ({
+      activity: {
+        id:
+          input.action === "native.cancellation_intent_recorded"
+            ? "native-cancellation-audit"
+            : "native-cancellation-ack-audit",
+      },
+      publication: {
+        companyId: "company",
+        payload: { action: input.action },
+        pluginEvent: null,
+      },
+    }),
+  ),
   publishActivity: vi.fn(),
+  resolveRunnerBinary: vi.fn(() => "/tmp/paperclip-runnerd"),
   release: null as null | (() => void),
 }));
 
@@ -80,6 +90,10 @@ vi.mock("./paperclip-runner-tool-authority.js", () => ({
 vi.mock("../activity-log.js", () => ({
   persistActivity: state.persistActivity,
   publishActivity: state.publishActivity,
+}));
+
+vi.mock("./native-codex-runner.js", () => ({
+  resolvePaperclipRunnerBinary: state.resolveRunnerBinary,
 }));
 
 import {
@@ -535,6 +549,7 @@ type LeaseCoordinator = {
 function leaseDb(
   boundExecution: NativeExecutionInputV1 = execution,
   coordinatorOverrides: Partial<LeaseCoordinator> = {},
+  runResultJson: Record<string, unknown> = {},
 ): Db {
   const coordinator: LeaseCoordinator = {
     runId: boundExecution.binding.runId,
@@ -560,10 +575,21 @@ function leaseDb(
   });
   const tx = {
     select: () => ({
-      from: () => ({
+      from: (table: unknown) => ({
         where: () => ({
           for: () => ({
-            limit: () => Promise.resolve([coordinator]),
+            limit: () =>
+              Promise.resolve([
+                table === nativeRunFinalizations
+                  ? coordinator
+                  : {
+                      agentId: boundExecution.binding.agentId,
+                      companyId: boundExecution.binding.companyId,
+                      nativeIssueId: boundExecution.binding.issueId,
+                      resultJson: runResultJson,
+                      runtimeMode: "native",
+                    },
+              ]),
           }),
         }),
       }),
@@ -578,7 +604,12 @@ function leaseDb(
 }
 
 function cancellationDb(options?: {
-  coordinator?: { runId: string; assessmentId: string | null } | null;
+  coordinator?: {
+    runId: string;
+    assessmentId: string | null;
+    decisionId?: string | null;
+  } | null;
+  failResultJsonUpdateAt?: number;
 }) {
   const initialRun = {
     id: execution.binding.runId,
@@ -589,9 +620,8 @@ function cancellationDb(options?: {
     contextSnapshot: { issueId: "untrusted-context-issue" },
     resultJson: { staleSnapshot: true },
   };
-  const lockedRun = {
-    ...initialRun,
-    resultJson: { durableReceipt: { operationId: "operation-1" } },
+  let currentResultJson: Record<string, unknown> = {
+    durableReceipt: { operationId: "operation-1" },
   };
   const issue = {
     status: "in_progress",
@@ -602,14 +632,14 @@ function cancellationDb(options?: {
     options && "coordinator" in options
       ? options.coordinator
       : { runId: execution.binding.runId, assessmentId: null };
-  let heartbeatSelectCount = 0;
   let forUpdateCount = 0;
+  let resultJsonUpdateCount = 0;
   const updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
   const select = vi.fn(() => ({
     from: (table: unknown) => {
       const rows =
         table === heartbeatRuns
-          ? [heartbeatSelectCount++ === 0 ? initialRun : lockedRun]
+          ? [{ ...initialRun, resultJson: currentResultJson }]
           : table === issues
             ? [issue]
             : table === nativeRunFinalizations && coordinator
@@ -637,11 +667,21 @@ function cancellationDb(options?: {
     set: (values: Record<string, unknown>) => ({
       where: () => {
         updates.push({ table, values });
+        const updatesResultJson = "resultJson" in values;
+        if (updatesResultJson) resultJsonUpdateCount += 1;
+        const shouldFail =
+          updatesResultJson &&
+          resultJsonUpdateCount === options?.failResultJsonUpdateAt;
+        if (updatesResultJson && !shouldFail) {
+          currentResultJson = values.resultJson as Record<string, unknown>;
+        }
         const result = Promise.resolve([]) as Promise<unknown[]> & {
           returning: () => Promise<Array<{ id: string }>>;
         };
         result.returning = () =>
-          Promise.resolve([{ id: execution.binding.runId }]);
+          shouldFail
+            ? Promise.reject(new Error("post_dispatch_db_failure"))
+            : Promise.resolve([{ id: execution.binding.runId }]);
         return result;
       },
     }),
@@ -657,6 +697,8 @@ function cancellationDb(options?: {
     db,
     updates,
     getForUpdateCount: () => forUpdateCount,
+    getResultJson: () => currentResultJson,
+    getResultJsonUpdateCount: () => resultJsonUpdateCount,
     tx,
   };
 }
@@ -773,15 +815,19 @@ describe("native session cancellation", () => {
       auditId: "native-cancellation-audit",
     });
 
-    expect(persistence.getForUpdateCount()).toBe(1);
-    const cancellationUpdate = persistence.updates.find(
-      (entry) => "resultJson" in entry.values,
-    );
+    expect(persistence.getForUpdateCount()).toBe(2);
+    const cancellationUpdate = persistence.updates
+      .filter((entry) => "resultJson" in entry.values)
+      .at(-1);
     expect(cancellationUpdate?.values.resultJson).toMatchObject({
       durableReceipt: { operationId: "operation-1" },
       nativeCancellation: {
+        schema: "paperclip.native-cancellation.v1",
+        dispatchState: "acknowledged",
         scope: "run",
         dispatched: false,
+        intentAuditId: "native-cancellation-audit",
+        acknowledgementAuditId: "native-cancellation-ack-audit",
       },
     });
     expect(state.persistActivity).toHaveBeenCalledWith(
@@ -792,7 +838,75 @@ describe("native session cancellation", () => {
         runId: execution.binding.runId,
       }),
     );
-    expect(state.publishActivity).toHaveBeenCalledTimes(1);
+    expect(state.publishActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a post-dispatch persistence failure without cancelling the provider twice", async () => {
+    const persistence = cancellationDb({ failResultJsonUpdateAt: 2 });
+    const running = executePaperclipNativeSession({
+      db: leaseDb(),
+      execution,
+      runnerInstanceId: "runner",
+    });
+    await vi.waitFor(() => expect(state.release).toBeTypeOf("function"));
+
+    await expect(
+      cancelNativeSession(execution.binding.runId, "budget hard stop", {
+        db: persistence.db,
+        scope: "run",
+      }),
+    ).rejects.toThrow("post_dispatch_db_failure");
+    expect(state.cancel).toHaveBeenCalledTimes(1);
+    expect(persistence.getResultJson()).toMatchObject({
+      nativeCancellation: {
+        dispatchState: "pending",
+        dispatched: false,
+        intentAuditId: "native-cancellation-audit",
+      },
+    });
+
+    await expect(
+      cancelNativeSession(execution.binding.runId, "budget hard stop", {
+        db: persistence.db,
+        scope: "run",
+      }),
+    ).resolves.toMatchObject({
+      dispatched: true,
+      auditId: "native-cancellation-audit",
+    });
+    expect(state.cancel).toHaveBeenCalledTimes(1);
+    expect(persistence.getResultJsonUpdateCount()).toBe(3);
+    expect(persistence.getResultJson()).toMatchObject({
+      nativeCancellation: {
+        dispatchState: "acknowledged",
+        dispatched: true,
+        intentAuditId: "native-cancellation-audit",
+        acknowledgementAuditId: "native-cancellation-ack-audit",
+      },
+    });
+    expect(
+      state.persistActivity.mock.calls.filter(
+        ([, input]) =>
+          (input as { action?: string }).action ===
+          "native.cancellation_intent_recorded",
+      ),
+    ).toHaveLength(1);
+    const persistedActivities = state.persistActivity.mock.calls.length;
+    await expect(
+      cancelNativeSession(execution.binding.runId, "budget hard stop", {
+        db: persistence.db,
+        scope: "run",
+      }),
+    ).resolves.toMatchObject({
+      dispatched: true,
+      auditId: "native-cancellation-audit",
+    });
+    expect(state.cancel).toHaveBeenCalledTimes(1);
+    expect(persistence.getResultJsonUpdateCount()).toBe(3);
+    expect(state.persistActivity).toHaveBeenCalledTimes(persistedActivities);
+
+    state.release?.();
+    await running;
   });
 
   it("fails closed when the persisted native binding has no coordinator", async () => {
@@ -856,6 +970,45 @@ describe("native session execution lease fencing", () => {
     expect(state.createBackend).not.toHaveBeenCalled();
     expect(state.createTransport).not.toHaveBeenCalled();
   });
+
+  it.each(["pending", "acknowledged"] as const)(
+    "does not reacquire a provider while durable cancellation is %s",
+    async (dispatchState) => {
+      state.execute.mockClear();
+      state.createBackend.mockClear();
+      state.createTransport.mockClear();
+
+      await expect(
+        executePaperclipNativeSession({
+          db: leaseDb(
+            execution,
+            {},
+            {
+              nativeCancellation: {
+                schema: "paperclip.native-cancellation.v1",
+                intentId: "native-cancellation:intent-1",
+                intentAuditId: "native-cancellation-audit",
+                companyId: execution.binding.companyId,
+                runId: execution.binding.runId,
+                issueId: execution.binding.issueId,
+                scope: "run",
+                reasonCode: "cancellation_run_only",
+                effects: ["release_run_resources"],
+                dispatchState,
+                dispatched: dispatchState === "acknowledged",
+                decisionId: null,
+              },
+            },
+          ),
+          execution,
+          runnerInstanceId: "runner",
+        }),
+      ).rejects.toThrow("native_cancellation_pending_recovery");
+      expect(state.execute).not.toHaveBeenCalled();
+      expect(state.createBackend).not.toHaveBeenCalled();
+      expect(state.createTransport).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("native runtime request resolution", () => {
@@ -1595,6 +1748,10 @@ describe("runnerd provider runtime wiring", () => {
       expect(state.createTransport.mock.calls[0]![0].stateDirectory).toBe(
         legacyRoot,
       );
+      expect(state.createTransport.mock.calls[0]![0].runnerBinary).toBe(
+        "/tmp/paperclip-runnerd",
+      );
+      expect(state.resolveRunnerBinary).toHaveBeenCalled();
 
       const unrelatedExecution = {
         ...legacyExecution,

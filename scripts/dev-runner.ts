@@ -522,6 +522,22 @@ async function buildPluginSdk() {
   }
 }
 
+async function buildPaperclipRunner() {
+  console.log("[paperclip] building paperclip runner...");
+  const result = await runPnpm(
+    ["--filter", "@paperclipai/paperclip-runner", "build:typescript"],
+    { stdio: "inherit" },
+  );
+  if (result.signal) {
+    exitForSignal(result.signal);
+    return;
+  }
+  if (result.code !== 0) {
+    console.error("[paperclip] paperclip runner build failed");
+    process.exit(result.code);
+  }
+}
+
 function newestMtimeMs(target: string): number {
   const stat = statSync(target, { throwIfNoEntry: false });
   if (!stat) return 0;
