@@ -103,10 +103,7 @@ fn validates_qualified_policy_and_tool_catalog_before_spawning() {
 
 #[test]
 fn admits_each_exact_qualified_agent_model_pair() {
-    for (agent, model) in [
-        ("codex", "gpt-5.6-sol"),
-        ("claude", "claude-sonnet-5"),
-    ] {
+    for (agent, model) in [("codex", "gpt-5.6-sol"), ("claude", "claude-sonnet-5")] {
         let mut qualified = config("bootstrap");
         qualified.agent = agent.to_owned();
         qualified.model = model.to_owned();
@@ -115,7 +112,11 @@ fn admits_each_exact_qualified_agent_model_pair() {
 
     let mut drifted = config("bootstrap");
     drifted.agent = "claude".to_owned();
-    assert!(drifted.validate().unwrap_err().to_string().contains("exact model"));
+    assert!(drifted
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("exact model"));
 }
 
 #[test]
