@@ -11,6 +11,10 @@ import {
   clearOnboardingDraft,
   seedOnboardingDraft,
 } from "../fixtures/onboardingDraft";
+import {
+  resetOnboardingFixtureState,
+  setOnboardingFixtureState,
+} from "../fixtures/onboardingEnvironment";
 
 /**
  * The onboarding wizard's agent arc: create the agent, connect a model, review.
@@ -101,7 +105,44 @@ export const CreateYourAgent: StoryObj = {
   render: () => <WizardAtStep step={3} />,
 };
 
+/**
+ * The connect step as a signed-out cloud tenant meets it: a managed sandbox
+ * resolves, and the provider sign-in panel is offered because the auth signal
+ * comes back absent.
+ */
 export const ConnectAModel: StoryObj = {
+  beforeEach: () => {
+    setOnboardingFixtureState({ environments: "managed-sandbox", authSignal: "absent" });
+    return resetOnboardingFixtureState;
+  },
+  render: () => <WizardAtStep step={4} />,
+};
+
+/**
+ * The same step once the provider is already authenticated. The sign-in panel
+ * is gone — this is the only difference, and it is worth a story because the
+ * panel's absence is otherwise indistinguishable from it being broken.
+ */
+export const ConnectAModelAlreadySignedIn: StoryObj = {
+  beforeEach: () => {
+    setOnboardingFixtureState({ environments: "managed-sandbox", authSignal: "present" });
+    return resetOnboardingFixtureState;
+  },
+  render: () => <WizardAtStep step={4} />,
+};
+
+/**
+ * No managed sandbox to test against.
+ *
+ * This is the state a walker actually hit on staging, and the step is honest
+ * about it rather than passing and stranding them later. Worth being able to
+ * look at without breaking a stack to get there.
+ */
+export const ConnectAModelNoSandbox: StoryObj = {
+  beforeEach: () => {
+    setOnboardingFixtureState({ environments: "none", authSignal: "unknown" });
+    return resetOnboardingFixtureState;
+  },
   render: () => <WizardAtStep step={4} />,
 };
 

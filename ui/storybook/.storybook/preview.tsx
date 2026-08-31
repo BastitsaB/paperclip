@@ -7,6 +7,11 @@ import {
 } from "@paperclipai/shared";
 import { MemoryRouter } from "@/lib/router";
 import { ONBOARDING_STORAGE_KEY } from "@/components/OnboardingWizard";
+import {
+  storybookAuthSignal,
+  storybookEnvironmentCapabilities,
+  storybookEnvironments,
+} from "../fixtures/onboardingEnvironment";
 import { BreadcrumbProvider } from "@/context/BreadcrumbContext";
 import { CompanyProvider } from "@/context/CompanyContext";
 import { DialogProvider } from "@/context/DialogContext";
@@ -137,6 +142,10 @@ function installStorybookApiFixtures() {
       return Response.json({
         enableIsolatedWorkspaces: true,
         autoRestartDevServerWhenIdle: false,
+        // The cloud-tenant shape, and what the onboarding connect step resolves
+        // its login environment through: without it the step looks for a local
+        // default and never finds the managed sandbox.
+        enableManagedSandboxOnly: true,
       });
     }
 
@@ -144,13 +153,22 @@ function installStorybookApiFixtures() {
       return Response.json({});
     }
 
-    // The onboarding wizard's connect step reads these. An empty environment
-    // list is the cloud-tenant shape — agents run in a managed sandbox rather
-    // than a configured environment — and it is also the state that produces
-    // the "no managed sandbox environment is available" notice, which is worth
-    // being able to look at rather than only meeting it on a live stack.
+    // The connect step's provider sign-in is gated on a *sandbox* environment
+    // resolving, its provider supporting a login PTY, and the auth signal coming
+    // back absent. These three answers decide whether that panel renders at all,
+    // so a story picks them through `onboardingFixtureState` rather than getting
+    // one hard-coded shape — an earlier version returned an empty environment
+    // list here and made the panel invisible everywhere.
     if (/^\/api\/companies\/[^/]+\/environments$/.test(url.pathname)) {
-      return Response.json([]);
+      return Response.json(storybookEnvironments());
+    }
+
+    if (/^\/api\/companies\/[^/]+\/environments\/capabilities$/.test(url.pathname)) {
+      return Response.json(storybookEnvironmentCapabilities());
+    }
+
+    if (/^\/api\/companies\/[^/]+\/adapters\/[^/]+\/auth-signal/.test(url.pathname)) {
+      return Response.json(storybookAuthSignal());
     }
 
     if (/^\/api\/companies\/[^/]+\/adapters\/[^/]+\/models$/.test(url.pathname)) {
@@ -232,6 +250,13 @@ function installStorybookApiFixtures() {
             supportsLocalAgentJwt: true,
             requiresMaterializedRuntimeSkills: false,
             supportsModelProfiles: true,
+            // `useAdapterCapabilities` prefers this listing over its own static
+            // defaults, so an omission here is not a smaller fixture — it is a
+            // capability the adapter loses. Without `login` the onboarding
+            // connect step's provider sign-in silently never renders, which is
+            // indistinguishable from it having been removed. Mirrors
+            // `KNOWN_DEFAULTS` in `use-adapter-capabilities.ts`.
+            login: { panelMode: "submitted_browser_code", timeoutPolicy: "fixed" },
           },
         },
         {
@@ -247,6 +272,7 @@ function installStorybookApiFixtures() {
             supportsLocalAgentJwt: true,
             requiresMaterializedRuntimeSkills: false,
             supportsModelProfiles: true,
+            login: { panelMode: "displayed_code", timeoutPolicy: "caller_bounded" },
           },
         },
       ]);
