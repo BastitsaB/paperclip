@@ -24,7 +24,7 @@ import {
   EXECUTION_WORKSPACE_REOPEN_FAILED_REASON,
   EXECUTION_WORKSPACE_REOPEN_PENDING_METADATA_KEY,
   EXECUTION_WORKSPACE_REOPEN_PENDING_SINCE_METADATA_KEY,
-  executionWorkspaceService,
+  executionWorktreeService,
   metadataHasReopenPendingConsumption,
   readExecutionWorkspaceLifecycleGeneration,
   readMetadataReopenPendingConsumptionSince,
@@ -256,7 +256,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     const workspaceId = await seedClosedWorkspace({ companyId, projectId, projectWorkspaceId, cwd, generation: 3 });
     const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4100 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       issue: { id: issueId, companyId, projectId },
@@ -289,7 +289,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     const firstIssueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4101 });
     const secondIssueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4102 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       issue: { id: firstIssueId, companyId, projectId },
@@ -319,7 +319,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     });
     const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4103 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       issue: { id: issueId, companyId, projectId },
@@ -364,7 +364,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
       });
       const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4305 });
 
-      const svc = executionWorkspaceService(db);
+      const svc = executionWorktreeService(db);
       const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
         workspaceId,
         issue: { id: issueId, companyId, projectId },
@@ -400,7 +400,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
       cwd,
     });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       // The issue belongs to a different company than the workspace.
@@ -429,7 +429,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     });
     const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4104 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const result = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       issue: { id: issueId, companyId, projectId },
@@ -450,7 +450,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     const cwd = await makeExistingDir();
     const workspaceId = await seedClosedWorkspace({ companyId, projectId, projectWorkspaceId, cwd, generation: 7 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
 
     // The captured generation matches, so the destroy callback runs.
     const destroyMatches = vi.fn(async () => "destroyed");
@@ -491,7 +491,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     const workspaceId = await seedClosedWorkspace({ companyId, projectId, projectWorkspaceId, cwd });
     const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4109 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     // The reopen publishes the row as active and sets the reopen-pending flag.
     const reopenResult = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
@@ -553,7 +553,7 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
     const workspaceId = await seedClosedWorkspace({ companyId, projectId, projectWorkspaceId, cwd });
     const issueId = await seedIssue({ companyId, projectId, workspaceId, issueNumber: 4115 });
 
-    const svc = executionWorkspaceService(db);
+    const svc = executionWorktreeService(db);
     const reopenResult = await svc.reopenClosedIsolatedExecutionWorkspaceForIssue({
       workspaceId,
       issue: { id: issueId, companyId, projectId },

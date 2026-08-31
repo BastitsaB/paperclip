@@ -23,10 +23,10 @@ import { resolvePaperclipConfigPath } from "../paths.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
-  executionWorkspaceService,
+  executionWorktreeService,
   heartbeatService,
   logActivity,
-  workspaceOperationService,
+  worktreeOperationService,
   workspaceRuntimeLeaseService,
   LEASED_WORKSPACE_RUNTIME_ACTIONS,
   type WorkspaceRuntimeLeaseClaim,
@@ -40,8 +40,8 @@ import {
   ensurePersistedExecutionWorkspaceAvailable,
   listConfiguredRuntimeServiceEntries,
   runWorkspaceJobForControl,
-  startRuntimeServicesForWorkspaceControl,
-  stopRuntimeServicesForExecutionWorkspace,
+  startRuntimeServicesForWorktreeControl,
+  stopRuntimeServicesForExecutionWorktree,
 } from "../services/worktree-runtime.js";
 import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
@@ -85,9 +85,9 @@ function resolveFallbackSeedSourceConfigPath(baseWorkspaceCwd: string): string |
 
 export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: PluginWorkerManager } = {}) {
   const router = Router();
-  const svc = executionWorkspaceService(db);
+  const svc = executionWorktreeService(db);
   const access = accessService(db);
-  const workspaceOperationsSvc = workspaceOperationService(db);
+  const workspaceOperationsSvc = worktreeOperationService(db);
   const runtimeLeases = workspaceRuntimeLeaseService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
@@ -470,7 +470,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
       if (failedStartReconciled) return;
       failedStartReconciled = true;
       try {
-        await stopRuntimeServicesForExecutionWorkspace({
+        await stopRuntimeServicesForExecutionWorktree({
           db,
           executionWorkspaceId: existing!.id,
           workspaceCwd: workspaceCwd!,
@@ -668,7 +668,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
 
           try {
             await reportRepairPhase("managed_stop", "started");
-            await stopRuntimeServicesForExecutionWorkspace({
+            await stopRuntimeServicesForExecutionWorktree({
               db,
               executionWorkspaceId: existing.id,
               workspaceCwd,
@@ -804,13 +804,13 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
             await reportRepairPhase("full_reseed", "succeeded");
 
             await reportRepairPhase("managed_restart", "started");
-            let startedServices: Awaited<ReturnType<typeof startRuntimeServicesForWorkspaceControl>> = [];
+            let startedServices: Awaited<ReturnType<typeof startRuntimeServicesForWorktreeControl>> = [];
             if (repairRestartsRuntimeServices) {
               const availableWorkspace = await ensureWorkspaceAvailable();
               if (!availableWorkspace) {
                 throw new Error("Execution workspace needs a local path before Paperclip can restart it.");
               }
-              startedServices = await startRuntimeServicesForWorkspaceControl({
+              startedServices = await startRuntimeServicesForWorktreeControl({
                 db,
                 actor: {
                   id: actor.agentId ?? null,
@@ -853,7 +853,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
             throw error;
           }
         } else if (action === "stop" || action === "restart") {
-          await stopRuntimeServicesForExecutionWorkspace({
+          await stopRuntimeServicesForExecutionWorktree({
             db,
             executionWorkspaceId: existing.id,
             workspaceCwd,
@@ -868,7 +868,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
           }
           let startedServices;
           try {
-            startedServices = await startRuntimeServicesForWorkspaceControl({
+            startedServices = await startRuntimeServicesForWorktreeControl({
               db,
               actor: {
                 id: actor.agentId ?? null,
@@ -1279,7 +1279,7 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
               executionWorkspaceId: existing.id,
               failureReason: "execution_workspace_closed",
             });
-            await stopRuntimeServicesForExecutionWorkspace({
+            await stopRuntimeServicesForExecutionWorktree({
               db,
               executionWorkspaceId: existing.id,
               workspaceCwd: existing.cwd,

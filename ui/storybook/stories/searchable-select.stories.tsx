@@ -138,10 +138,10 @@ function WorkspaceSelect({
         value={value}
         groups={groups}
         onValueChange={(next) => setValue(next)}
-        placeholder="Choose an existing workspace"
-        searchPlaceholder="Search workspaces..."
-        emptyMessage="No matching workspaces."
-        loadingMessage="Loading workspaces..."
+        placeholder="Choose an existing worktree"
+        searchPlaceholder="Search worktrees..."
+        emptyMessage="No matching worktrees."
+        loadingMessage="Loading worktrees..."
         loading={loading}
         disabled={disabled}
         triggerClassName={triggerClassName}
@@ -164,7 +164,7 @@ function FormContext({ triggerClassName }: { triggerClassName?: string }) {
     <div className="w-full max-w-sm rounded-md border border-border bg-card p-0">
       <div className="px-4 py-3 space-y-2">
         <div className="space-y-1.5">
-          <div className="text-xs font-medium">Execution workspace</div>
+          <div className="text-xs font-medium">Execution worktree</div>
           <div className="text-[11px] text-muted-foreground">
             Control whether this task runs in the shared workspace, a new isolated workspace, or an existing one.
           </div>
@@ -174,8 +174,8 @@ function FormContext({ triggerClassName }: { triggerClassName?: string }) {
             defaultValue="reuse_existing"
           >
             <option value="shared_workspace">Project default</option>
-            <option value="isolated_workspace">New isolated workspace</option>
-            <option value="reuse_existing">Reuse existing workspace</option>
+            <option value="isolated_workspace">New isolated worktree</option>
+            <option value="reuse_existing">Reuse existing worktree</option>
           </select>
           <WorkspaceSelect triggerClassName={triggerClassName} />
         </div>
@@ -185,7 +185,7 @@ function FormContext({ triggerClassName }: { triggerClassName?: string }) {
 }
 
 const meta = {
-  title: "Components/SearchableSelect/Workspace picker",
+  title: "Components/SearchableSelect/Worktree picker",
   parameters: { layout: "centered" },
 } satisfies Meta;
 
@@ -223,7 +223,7 @@ export const LongNamesAndPaths: Story = {
 export const NoMatches: Story = {
   render: () => (
     <div className="w-80">
-      <WorkspaceSelect triggerClassName={COMPACT_TRIGGER} autoOpen autoQuery="not a workspace" />
+      <WorkspaceSelect triggerClassName={COMPACT_TRIGGER} autoOpen autoQuery="not a worktree" />
     </div>
   ),
 };
@@ -256,7 +256,7 @@ export const DefaultAndCompactSizeComparison: Story = {
   render: () => (
     <div className="flex w-80 flex-col gap-2">
       <select className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-xs outline-none" defaultValue="reuse_existing">
-        <option value="reuse_existing">Reuse existing workspace</option>
+        <option value="reuse_existing">Reuse existing worktree</option>
       </select>
       <WorkspaceSelect />
       <WorkspaceSelect triggerClassName={COMPACT_TRIGGER} />

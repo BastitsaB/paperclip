@@ -16,7 +16,7 @@ import {
   RUNTIME_CONTROL_STALE_AFTER_MS,
   resetWorkspaceRuntimeControlLocksForTests,
   runExclusiveWorkspaceRuntimeControl,
-  workspaceOperationService,
+  worktreeOperationService,
 } from "../services/worktree-operations.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -161,7 +161,7 @@ describeEmbeddedPostgres("workspace operation reconciliation", () => {
       },
     ]);
 
-    const service = workspaceOperationService(db);
+    const service = worktreeOperationService(db);
 
     // Recovery is bounded and cannot steal a live operation (PAP-17249): a `running` control
     // that has signalled recently is left alone even when it carries no ownership stamp, which
@@ -232,7 +232,7 @@ describeEmbeddedPostgres("workspace operation reconciliation", () => {
       cwd: "/tmp/repair-diagnostics-workspace",
     });
 
-    const operation = await workspaceOperationService(db)
+    const operation = await worktreeOperationService(db)
       .createRecorder({ companyId, executionWorkspaceId })
       .recordOperation({
         phase: "workspace_repair",
@@ -267,7 +267,7 @@ describeEmbeddedPostgres("workspace operation reconciliation", () => {
         backupRetained: true,
       },
     });
-    expect((await workspaceOperationService(db).readLog(operation.id)).content).toContain(
+    expect((await worktreeOperationService(db).readLog(operation.id)).content).toContain(
       "Workspace repair target_backup: succeeded.",
     );
   });

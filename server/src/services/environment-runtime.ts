@@ -562,7 +562,7 @@ export interface EnvironmentRuntimeDriver {
   releaseRunLease(input: EnvironmentDriverReleaseInput): Promise<EnvironmentLease | null>;
   resumeRunLease?(input: EnvironmentDriverLeaseInput): Promise<PluginEnvironmentLease | EnvironmentLease | null>;
   destroyRunLease?(input: EnvironmentDriverLeaseInput): Promise<EnvironmentLease | null>;
-  realizeWorkspace?(input: EnvironmentDriverRealizeWorkspaceInput): Promise<PluginEnvironmentRealizeWorkspaceResult>;
+  realizeWorktree?(input: EnvironmentDriverRealizeWorkspaceInput): Promise<PluginEnvironmentRealizeWorkspaceResult>;
   execute?(input: EnvironmentDriverExecuteInput): Promise<PluginEnvironmentExecuteResult>;
   /**
    * Optional native inbound/outbound file transfer, delegated to the plugin
@@ -1029,7 +1029,7 @@ function createLocalEnvironmentDriver(db: Db): EnvironmentRuntimeDriver {
       return await environmentsSvc.releaseLease(input.lease.id, input.status);
     },
 
-    async realizeWorkspace(input) {
+    async realizeWorktree(input) {
       const record = buildWorkspaceRealizationRecordFromDriverInput({
         environment: input.environment,
         lease: input.lease,
@@ -1099,7 +1099,7 @@ function createSshEnvironmentDriver(db: Db): EnvironmentRuntimeDriver {
       return await environmentsSvc.releaseLease(input.lease.id, input.status);
     },
 
-    async realizeWorkspace(input) {
+    async realizeWorktree(input) {
       const record = buildWorkspaceRealizationRecordFromDriverInput({
         environment: input.environment,
         lease: input.lease,
@@ -2358,7 +2358,7 @@ function createSandboxEnvironmentDriver(
 
     flushDeferredOrphanCleanups,
 
-    async realizeWorkspace(input) {
+    async realizeWorktree(input) {
       // Resolve the realized cwd and any provider metadata first, then build ONE
       // workspace-realization record and wrap it the SAME way for every driver. A
       // plugin-backed sandbox provider realizes the workspace remotely and returns its
@@ -3125,7 +3125,7 @@ function createPluginEnvironmentDriver(
       });
     },
 
-    async realizeWorkspace(input) {
+    async realizeWorktree(input) {
       const { plugin, pluginKey, driverKey, driverConfig } = await resolvePluginDriverForRelease({
         environment: input.environment,
         lease: input.lease,
@@ -3689,14 +3689,14 @@ export function environmentRuntimeService(
       return await driver.destroyRunLease(input);
     },
 
-    async realizeWorkspace(
+    async realizeWorktree(
       input: EnvironmentDriverRealizeWorkspaceInput,
     ): Promise<PluginEnvironmentRealizeWorkspaceResult> {
       const driver = requireDriverKey(getLeaseDriverKey(input.lease, input.environment));
-      if (!driver.realizeWorkspace) {
+      if (!driver.realizeWorktree) {
         throw new Error(`Environment driver "${driver.driver}" does not support workspace realization.`);
       }
-      return await driver.realizeWorkspace(input);
+      return await driver.realizeWorktree(input);
     },
 
     async execute(input: EnvironmentDriverExecuteInput): Promise<PluginEnvironmentExecuteResult> {

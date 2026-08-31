@@ -164,8 +164,8 @@ export {
   type MintedEnvironmentCustomImageTerminalSession,
   type ParsedCustomImageSetupSshCommand,
 } from "./environment-custom-image-terminal-sessions.js";
-export { executionWorkspaceService } from "./execution-worktrees.js";
-export { workspaceOperationService } from "./worktree-operations.js";
+export { executionWorktreeService } from "./execution-worktrees.js";
+export { worktreeOperationService } from "./worktree-operations.js";
 export {
   workspaceRuntimeLeaseService,
   buildWorkspaceRuntimeLeaseOwnerKey,

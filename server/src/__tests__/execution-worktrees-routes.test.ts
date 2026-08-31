@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorHandler } from "../middleware/index.js";
 import { executionWorkspaceRoutes } from "../routes/execution-worktrees.js";
 
-const mockExecutionWorkspaceService = vi.hoisted(() => ({
+const mockExecutionWorktreeService = vi.hoisted(() => ({
   list: vi.fn(),
   listOverview: vi.fn(),
   listSummaries: vi.fn(),
@@ -43,10 +43,10 @@ const mockEnvironmentRuntimeService = vi.hoisted(() => ({
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
-  executionWorkspaceService: () => mockExecutionWorkspaceService,
+  executionWorktreeService: () => mockExecutionWorktreeService,
   heartbeatService: () => mockHeartbeatService,
   logActivity: mockLogActivity,
-  workspaceOperationService: () => mockWorkspaceOperationService,
+  worktreeOperationService: () => mockWorkspaceOperationService,
   workspaceRuntimeLeaseService: () => mockWorkspaceRuntimeLeaseService,
   LEASED_WORKSPACE_RUNTIME_ACTIONS: ["start", "stop", "restart", "repair"],
 }));
@@ -56,7 +56,7 @@ vi.mock("../services/environment-runtime.js", () => ({
 }));
 
 const mockWorkspaceRuntimeTeardown = vi.hoisted(() => ({
-  stopRuntimeServicesForExecutionWorkspace: vi.fn(async () => undefined),
+  stopRuntimeServicesForExecutionWorktree: vi.fn(async () => undefined),
   cleanupExecutionWorkspaceArtifacts: vi.fn(async () => ({ cleaned: true, warnings: [] as string[] })),
 }));
 
@@ -64,8 +64,8 @@ vi.mock("../services/worktree-runtime.js", async (importActual) => {
   const actual = await importActual<typeof import("../services/worktree-runtime.js")>();
   return {
     ...actual,
-    stopRuntimeServicesForExecutionWorkspace:
-      mockWorkspaceRuntimeTeardown.stopRuntimeServicesForExecutionWorkspace,
+    stopRuntimeServicesForExecutionWorktree:
+      mockWorkspaceRuntimeTeardown.stopRuntimeServicesForExecutionWorktree,
     cleanupExecutionWorkspaceArtifacts: mockWorkspaceRuntimeTeardown.cleanupExecutionWorkspaceArtifacts,
   };
 });
@@ -97,8 +97,8 @@ describe.sequential("execution workspace routes", () => {
       reason: "allow_test",
       explanation: "Allowed by test mock.",
     });
-    mockExecutionWorkspaceService.list.mockResolvedValue([]);
-    mockExecutionWorkspaceService.listOverview.mockResolvedValue({
+    mockExecutionWorktreeService.list.mockResolvedValue([]);
+    mockExecutionWorktreeService.listOverview.mockResolvedValue({
       items: [],
       total: 0,
       limit: 50,
@@ -106,7 +106,7 @@ describe.sequential("execution workspace routes", () => {
       hasMore: false,
       nextOffset: null,
     });
-    mockExecutionWorkspaceService.listSummaries.mockResolvedValue([
+    mockExecutionWorktreeService.listSummaries.mockResolvedValue([
       {
         id: "workspace-1",
         name: "Alpha",
@@ -114,8 +114,8 @@ describe.sequential("execution workspace routes", () => {
         projectWorkspaceId: null,
       },
     ]);
-    mockExecutionWorkspaceService.getById.mockResolvedValue(null);
-    mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch.mockResolvedValue(null);
+    mockExecutionWorktreeService.getById.mockResolvedValue(null);
+    mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch.mockResolvedValue(null);
     mockHeartbeatService.wakeup.mockResolvedValue(null);
   });
 
@@ -132,14 +132,14 @@ describe.sequential("execution workspace routes", () => {
         projectWorkspaceId: null,
       },
     ]);
-    expect(mockExecutionWorkspaceService.listSummaries).toHaveBeenCalledWith("company-1", {
+    expect(mockExecutionWorktreeService.listSummaries).toHaveBeenCalledWith("company-1", {
       projectId: undefined,
       projectWorkspaceId: undefined,
       issueId: undefined,
       status: undefined,
       reuseEligible: true,
     });
-    expect(mockExecutionWorkspaceService.list).not.toHaveBeenCalled();
+    expect(mockExecutionWorktreeService.list).not.toHaveBeenCalled();
   });
 
   it("delegates bounded workspace overview queries", async () => {
@@ -155,7 +155,7 @@ describe.sequential("execution workspace routes", () => {
       hasMore: false,
       nextOffset: null,
     });
-    expect(mockExecutionWorkspaceService.listOverview).toHaveBeenCalledWith("company-1", {
+    expect(mockExecutionWorktreeService.listOverview).toHaveBeenCalledWith("company-1", {
       status: ["active", "idle"],
       limit: 25,
       offset: 10,
@@ -167,7 +167,7 @@ describe.sequential("execution workspace routes", () => {
       .get("/api/companies/company-1/workspace-overview?limit=1000");
 
     expect(res.status).toBe(422);
-    expect(mockExecutionWorkspaceService.listOverview).not.toHaveBeenCalled();
+    expect(mockExecutionWorktreeService.listOverview).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -175,7 +175,7 @@ describe.sequential("execution workspace routes", () => {
     ["override", { mode: "override", reason: "operator break-glass" }],
     ["quarantine_restore", { mode: "quarantine_restore", reason: "rescue dirty branch" }],
   ])("rejects agent actors for %s branch reconciliation", async (_mode, body) => {
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: "workspace-1",
       companyId: "company-1",
       sourceIssueId: "issue-1",
@@ -192,17 +192,17 @@ describe.sequential("execution workspace routes", () => {
       .send(body);
 
     expect(res.status).toBe(403);
-    expect(mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch).not.toHaveBeenCalled();
+    expect(mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
   it("logs branch reconciliation activity after the service operation succeeds", async () => {
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: "workspace-1",
       companyId: "company-1",
       sourceIssueId: "issue-1",
     });
-    mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
+    mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
       workspace: {
         id: "workspace-1",
         companyId: "company-1",
@@ -233,7 +233,7 @@ describe.sequential("execution workspace routes", () => {
       .send({ mode: "forward" });
 
     expect(res.status).toBe(200);
-    expect(mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch).toHaveBeenCalledWith("workspace-1", {
+    expect(mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch).toHaveBeenCalledWith("workspace-1", {
       mode: "forward",
       reason: null,
       actor: {
@@ -263,12 +263,12 @@ describe.sequential("execution workspace routes", () => {
   });
 
   it("accepts quarantine_restore, logs the rescue ref, and wakes the restored source issue", async () => {
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: "workspace-1",
       companyId: "company-1",
       sourceIssueId: "issue-1",
     });
-    mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
+    mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
       workspace: {
         id: "workspace-1",
         companyId: "company-1",
@@ -313,7 +313,7 @@ describe.sequential("execution workspace routes", () => {
       .send({ mode: "quarantine_restore" });
 
     expect(res.status).toBe(200);
-    expect(mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch).toHaveBeenCalledWith("workspace-1", {
+    expect(mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch).toHaveBeenCalledWith("workspace-1", {
       mode: "quarantine_restore",
       reason: null,
       actor: {
@@ -361,12 +361,12 @@ describe.sequential("execution workspace routes", () => {
   });
 
   it("wakes a restored in_review agent participant after quarantine_restore", async () => {
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: "workspace-1",
       companyId: "company-1",
       sourceIssueId: "issue-1",
     });
-    mockExecutionWorkspaceService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
+    mockExecutionWorktreeService.reconcileExecutionWorkspaceBranch.mockResolvedValue({
       workspace: {
         id: "workspace-1",
         companyId: "company-1",
@@ -429,18 +429,18 @@ describe.sequential("execution workspace routes", () => {
     // terminal. The archive control must return 409 before any lease teardown,
     // runtime-service stop, or artifact cleanup, so it never removes the rebuilt
     // worktree.
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: "workspace-1",
       companyId: "company-1",
       sourceIssueId: "issue-1",
       status: "active",
       mode: "isolated_workspace",
     });
-    mockExecutionWorkspaceService.getCloseReadiness.mockResolvedValue({
+    mockExecutionWorktreeService.getCloseReadiness.mockResolvedValue({
       state: "ready",
       blockingReasons: [],
     });
-    mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
+    mockExecutionWorktreeService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
       outcome: "reopen_pending",
     });
 
@@ -449,9 +449,9 @@ describe.sequential("execution workspace routes", () => {
       .send({ status: "archived" });
 
     expect(res.status).toBe(409);
-    expect(mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock).toHaveBeenCalledTimes(1);
+    expect(mockExecutionWorktreeService.archiveWorkspaceUnderLifecycleLock).toHaveBeenCalledTimes(1);
     // The destruction fence never runs, so no worktree is removed.
-    expect(mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction).not.toHaveBeenCalled();
+    expect(mockExecutionWorktreeService.fenceClosedWorkspaceDestruction).not.toHaveBeenCalled();
   });
 
   it("destroys the reusable sandbox leases inside the destruction fence when the archive wins", async () => {
@@ -467,20 +467,20 @@ describe.sequential("execution workspace routes", () => {
       projectId: null,
       cwd: "/tmp/worktree",
     };
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       ...archivedWorkspace,
       status: "active",
     });
-    mockExecutionWorkspaceService.getCloseReadiness.mockResolvedValue({
+    mockExecutionWorktreeService.getCloseReadiness.mockResolvedValue({
       state: "ready",
       blockingReasons: [],
     });
-    mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
+    mockExecutionWorktreeService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
       outcome: "archived",
       workspace: archivedWorkspace,
       capturedGeneration: 3,
     });
-    mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction.mockImplementation(
+    mockExecutionWorktreeService.fenceClosedWorkspaceDestruction.mockImplementation(
       async ({ destroy }: { destroy: () => Promise<unknown> }) => ({
         skippedReopened: false,
         result: await destroy(),
@@ -518,21 +518,21 @@ describe.sequential("execution workspace routes", () => {
       projectId: null,
       cwd: "/tmp/worktree",
     };
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       ...archivedWorkspace,
       status: "active",
     });
-    mockExecutionWorkspaceService.getCloseReadiness.mockResolvedValue({
+    mockExecutionWorktreeService.getCloseReadiness.mockResolvedValue({
       state: "ready",
       blockingReasons: [],
     });
-    mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
+    mockExecutionWorktreeService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
       outcome: "archived",
       workspace: archivedWorkspace,
       capturedGeneration: 3,
     });
     // The fence detects the reopen and never runs the destroy callback.
-    mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction.mockResolvedValue({
+    mockExecutionWorktreeService.fenceClosedWorkspaceDestruction.mockResolvedValue({
       skippedReopened: true,
     });
 
@@ -541,7 +541,7 @@ describe.sequential("execution workspace routes", () => {
       .send({ status: "archived" });
 
     expect(res.status).toBe(200);
-    expect(mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction).toHaveBeenCalledTimes(1);
+    expect(mockExecutionWorktreeService.fenceClosedWorkspaceDestruction).toHaveBeenCalledTimes(1);
     // The reopen keeps its reusable leases because the fence skipped the destroy.
     expect(mockEnvironmentRuntimeService.destroyReusableSandboxLeases).not.toHaveBeenCalled();
   });

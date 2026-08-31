@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resetRuntimeServicesForTests,
-  startRuntimeServicesForWorkspaceControl,
+  startRuntimeServicesForWorktreeControl,
 } from "../services/worktree-runtime.js";
 import {
   doesLocalServiceCommandLineMatch,
@@ -33,7 +33,7 @@ describe("local service supervision", () => {
 
     let registryRecord: Awaited<ReturnType<typeof listLocalServiceRegistryRecords>>[number] | null = null;
     try {
-      const [service] = await startRuntimeServicesForWorkspaceControl({
+      const [service] = await startRuntimeServicesForWorktreeControl({
         actor: { id: null, name: "Board", companyId: randomUUID() },
         issue: null,
         workspace: {

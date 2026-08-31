@@ -57,7 +57,7 @@ const mockIssueThreadInteractionService = vi.hoisted(() => ({
 const mockEnvironmentService = vi.hoisted(() => ({
   getById: vi.fn(async () => null),
 }));
-const mockExecutionWorkspaceService = vi.hoisted(() => ({}));
+const mockExecutionWorktreeService = vi.hoisted(() => ({}));
 const mockIssueReferenceService = vi.hoisted(() => ({
   deleteDocumentSource: vi.fn(async () => undefined),
   diffIssueReferenceSummary: vi.fn(() => ({
@@ -93,7 +93,7 @@ function registerModuleMocks() {
     }),
     documentAnnotationService: () => ({ remapOpenThreadsForDocument: async () => [] }),
     documentService: () => ({}),
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     goalService: () => ({}),
     heartbeatService: () => mockHeartbeatService,
     issueApprovalService: () => ({}),
@@ -115,7 +115,7 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/execution-worktrees.js", () => ({
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     STALE_REOPEN_PENDING_CONSUMPTION_GRACE_MS: 5 * 60 * 1000,
   }));
 

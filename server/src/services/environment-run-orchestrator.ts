@@ -45,7 +45,7 @@ import {
 } from "@paperclipai/adapter-utils/execution-target";
 import type { DuplexObservabilityRecorder } from "@paperclipai/adapter-utils/duplex-observability";
 import { buildWorkspaceRealizationRequest } from "./worktree-realization.js";
-import { executionWorkspaceService } from "./execution-worktrees.js";
+import { executionWorktreeService } from "./execution-worktrees.js";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
@@ -158,7 +158,7 @@ export function environmentRunOrchestrator(
   } = {},
 ) {
   const environmentsSvc = environmentService(db);
-  const executionWorkspacesSvc = executionWorkspaceService(db);
+  const executionWorkspacesSvc = executionWorktreeService(db);
   const environmentRuntime = options.environmentRuntime ?? environmentRuntimeService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
   });
@@ -389,7 +389,7 @@ export function environmentRunOrchestrator(
           typeof lease.metadata?.remoteCwd === "string" && lease.metadata.remoteCwd.trim().length > 0
             ? lease.metadata.remoteCwd
             : undefined;
-        const workspaceRealizationResult = await environmentRuntime.realizeWorkspace({
+        const workspaceRealizationResult = await environmentRuntime.realizeWorktree({
           environment,
           lease,
           workspace: {
@@ -428,7 +428,7 @@ export function environmentRunOrchestrator(
     // The host `provisionCommand` runs on the host worktree during the
     // `workspace_provision` step, before the run reaches the environment.
     // A `sandbox`-driver environment does not receive the repo tree here. The
-    // sandbox driver `realizeWorkspace` step only creates the remote folder.
+    // sandbox driver `realizeWorktree` step only creates the remote folder.
     // The adapter uploads the provisioned tree later, in its `stage.sync` step.
     // So the host command must not run inside the still-empty sandbox; it fails
     // there (exit 127). Skip the step for `sandbox`, and keep the existing skip

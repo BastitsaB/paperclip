@@ -400,7 +400,7 @@ function ColumnConfigurationMatrix() {
             <span>Assignee</span>
             <span>Kicked off by</span>
             <span>Project</span>
-            <span>Workspace</span>
+            <span>Worktree</span>
             <span>Tags</span>
             <span className="text-right">Updated</span>
           </span>
@@ -716,7 +716,7 @@ function WorkspaceCardWithRuntime() {
             <GitBranch className="h-4 w-4" />
             Runtime status
           </CardTitle>
-          <CardDescription>Branch, path, and running service context paired with the workspace card.</CardDescription>
+          <CardDescription>Branch, path, and running service context paired with the worktree card.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <div className="flex items-center justify-between gap-3">
@@ -794,7 +794,7 @@ function IssueManagementStories() {
             <div className="flex flex-wrap items-start justify-between gap-5">
               <div>
                 <div className="paperclip-story__label">Issue management</div>
-                <h1 className="mt-2 text-3xl font-semibold tracking-tight">List, detail, filters, runs, and workspace states</h1>
+                <h1 className="mt-2 text-3xl font-semibold tracking-tight">List, detail, filters, runs, and worktree states</h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
                   Fixture-backed issue management stories cover the operational states used by the board when reviewing,
                   filtering, handing off, and continuing agent work.
@@ -803,7 +803,7 @@ function IssueManagementStories() {
               <div className="flex flex-wrap gap-2">
                 <Badge variant="outline">7 issues</Badge>
                 <Badge variant="outline">3 agents</Badge>
-                <Badge variant="outline">workspace aware</Badge>
+                <Badge variant="outline">worktree aware</Badge>
               </div>
             </div>
           </section>
@@ -812,7 +812,7 @@ function IssueManagementStories() {
             <div className="mb-3 grid grid-cols-[minmax(0,1fr)_120px_120px_110px] gap-3 rounded-lg border border-border bg-background/70 px-4 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
               <span>Issue</span>
               <span>Assignee</span>
-              <span>Workspace</span>
+              <span>Worktree</span>
               <span className="text-right">Updated</span>
             </div>
             <IssuesList
@@ -895,7 +895,7 @@ function IssueManagementStories() {
             <ModelProfileBadgeLedger />
           </Section>
 
-          <Section eyebrow="IssueWorktreeCard" title="Workspace info card with branch, path, and runtime status">
+          <Section eyebrow="IssueWorktreeCard" title="Worktree info card with branch, path, and runtime status">
             <WorkspaceCardWithRuntime />
           </Section>
 
@@ -907,7 +907,7 @@ function IssueManagementStories() {
             {[
               { icon: LayoutList, label: "List density", detail: "Grouped rows keep status and ownership visible." },
               { icon: Filter, label: "Filtering", detail: "Selected filters are explicit and clearable." },
-              { icon: Rows3, label: "Detail panels", detail: "Properties, documents, runs, and workspaces stay close to the task." },
+              { icon: Rows3, label: "Detail panels", detail: "Properties, documents, runs, and worktrees stay close to the task." },
             ].map((item) => {
               const Icon = item.icon;
               return (

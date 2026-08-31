@@ -80,7 +80,7 @@ function registerModuleMocks() {
     logActivity: vi.fn(),
     secretService: () => ({}),
     syncInstructionsBundleConfigFromFilePath: vi.fn((_agent, config) => config),
-    workspaceOperationService: () => ({}),
+    worktreeOperationService: () => ({}),
   }));
 
   vi.doMock("../adapters/index.js", () => ({

@@ -20,7 +20,7 @@ const mockIssueService = vi.hoisted(() => ({
   addComment: vi.fn(),
 }));
 
-const mockExecutionWorkspaceService = vi.hoisted(() => ({
+const mockExecutionWorktreeService = vi.hoisted(() => ({
   getById: vi.fn(),
   reopenClosedIsolatedExecutionWorkspaceForIssue: vi.fn(),
   clearReopenPendingConsumptionForUnconsumedReopen: vi.fn(async () => ({ cleared: true })),
@@ -67,7 +67,7 @@ function registerServiceMocks() {
   }));
 
   vi.doMock("../services/execution-worktrees.js", () => ({
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     STALE_REOPEN_PENDING_CONSUMPTION_GRACE_MS: 5 * 60 * 1000,
   }));
 
@@ -96,7 +96,7 @@ function registerServiceMocks() {
     }),
     documentAnnotationService: () => ({ remapOpenThreadsForDocument: async () => [] }),
     documentService: () => ({}),
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     feedbackService: () => ({
       listIssueVotesForUser: vi.fn(async () => []),
       saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
@@ -191,7 +191,7 @@ async function assertNoBackgroundClearWithinRetryWindow() {
   } finally {
     vi.useRealTimers();
   }
-  expect(mockExecutionWorkspaceService.clearReopenPendingConsumptionForUnconsumedReopen).not.toHaveBeenCalled();
+  expect(mockExecutionWorktreeService.clearReopenPendingConsumptionForUnconsumedReopen).not.toHaveBeenCalled();
 }
 
 describe.sequential("closed isolated workspace issue routes", () => {
@@ -225,11 +225,11 @@ describe.sequential("closed isolated workspace issue routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIssueService.getById.mockResolvedValue(makeIssue());
-    mockExecutionWorkspaceService.getById.mockResolvedValue(makeClosedWorkspace());
-    mockExecutionWorkspaceService.refreshReopenPendingConsumption.mockResolvedValue({ refreshed: true });
+    mockExecutionWorktreeService.getById.mockResolvedValue(makeClosedWorkspace());
+    mockExecutionWorktreeService.refreshReopenPendingConsumption.mockResolvedValue({ refreshed: true });
     // The guard reopens a closed isolated workspace and lets the request
     // continue. The default is a successful reopen.
-    mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
+    mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
       ok: true,
       reopened: true,
       workspace: { ...makeClosedWorkspace(), status: "active", closedAt: null },
@@ -247,7 +247,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
       .post(`/api/issues/${issueId}/comments`)
       .send({ body: "hello" });
 
-    expect(mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledWith({
+    expect(mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledWith({
       workspaceId: closedWorkspaceId,
       issue: { id: issueId, companyId: "company-1", projectId: null },
       actor: expect.objectContaining({ actorType: "user" }),
@@ -263,7 +263,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
       .patch(`/api/issues/${issueId}`)
       .send({ comment: "hello" });
 
-    expect(mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledTimes(1);
+    expect(mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledTimes(1);
     // The closed-workspace dead end is gone: the update is accepted.
     expect(res.status).toBe(200);
   });
@@ -278,13 +278,13 @@ describe.sequential("closed isolated workspace issue routes", () => {
         expectedStatuses: ["todo", "backlog", "blocked"],
       });
 
-    expect(mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledTimes(1);
+    expect(mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue).toHaveBeenCalledTimes(1);
     // The closed-workspace dead end is gone: the checkout is accepted.
     expect(res.status).toBe(200);
   });
 
   it("returns 409 and blocks the comment when the workspace cannot be reopened", async () => {
-    mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
+    mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
       ok: false,
       code: "not_reopenable",
       message: "Execution workspace is not reopenable",
@@ -299,7 +299,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
   });
 
   it("returns 503 and blocks the checkout when the rebuild fails", async () => {
-    mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
+    mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
       ok: false,
       code: "rebuild_failed",
       message: "Failed to rebuild the execution workspace",
@@ -337,7 +337,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
 
     expect(res.status).toBe(401);
     expect(
-      mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue,
+      mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue,
     ).not.toHaveBeenCalled();
     expect(mockIssueService.checkout).not.toHaveBeenCalled();
   });
@@ -356,7 +356,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
     expect(res.status).toBe(404);
     await vi.waitFor(() => {
       expect(
-        mockExecutionWorkspaceService.clearReopenPendingConsumptionForUnconsumedReopen,
+        mockExecutionWorktreeService.clearReopenPendingConsumptionForUnconsumedReopen,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceId: closedWorkspaceId,
@@ -381,7 +381,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
     expect(res.status).toBe(500);
     await vi.waitFor(() => {
       expect(
-        mockExecutionWorkspaceService.clearReopenPendingConsumptionForUnconsumedReopen,
+        mockExecutionWorktreeService.clearReopenPendingConsumptionForUnconsumedReopen,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceId: closedWorkspaceId,
@@ -416,7 +416,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
     // owns. Otherwise the reaper or the archive route can destroy the rebuilt
     // worktree while the other request still uses it.
     mockIssueService.getById.mockResolvedValue({ ...makeIssue(), status: "done" });
-    mockExecutionWorkspaceService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
+    mockExecutionWorktreeService.reopenClosedIsolatedExecutionWorkspaceForIssue.mockResolvedValue({
       ok: true,
       reopened: false,
       workspace: { ...makeClosedWorkspace(), status: "active", closedAt: null },
@@ -441,7 +441,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
     // first clear must not strand the flag; the guard retries until it succeeds.
     mockIssueService.getById.mockResolvedValue({ ...makeIssue(), status: "done" });
     mockIssueService.update.mockResolvedValue(null);
-    mockExecutionWorkspaceService.clearReopenPendingConsumptionForUnconsumedReopen
+    mockExecutionWorktreeService.clearReopenPendingConsumptionForUnconsumedReopen
       .mockRejectedValueOnce(new Error("transient database error"))
       .mockResolvedValue({ cleared: true });
 
@@ -452,7 +452,7 @@ describe.sequential("closed isolated workspace issue routes", () => {
     expect(res.status).toBe(404);
     await vi.waitFor(() => {
       expect(
-        mockExecutionWorkspaceService.clearReopenPendingConsumptionForUnconsumedReopen.mock.calls.length,
+        mockExecutionWorktreeService.clearReopenPendingConsumptionForUnconsumedReopen.mock.calls.length,
       ).toBeGreaterThanOrEqual(2);
     }, { timeout: REOPEN_PENDING_WAIT_TIMEOUT_MS });
   });

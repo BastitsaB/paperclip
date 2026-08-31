@@ -37,7 +37,7 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
   secretService: () => mockSecretService,
-  workspaceOperationService: () => mockWorkspaceOperationService,
+  worktreeOperationService: () => mockWorkspaceOperationService,
 }));
 
 vi.mock("../services/environments.js", () => ({
@@ -49,7 +49,7 @@ vi.mock("../services/secrets.js", () => ({
 }));
 
 vi.mock("../services/worktree-runtime.js", () => ({
-  startRuntimeServicesForWorkspaceControl: vi.fn(),
+  startRuntimeServicesForWorktreeControl: vi.fn(),
   stopRuntimeServicesForProjectWorkspace: vi.fn(),
 }));
 
@@ -64,7 +64,7 @@ function registerModuleMocks() {
     logActivity: mockLogActivity,
     projectService: () => mockProjectService,
     secretService: () => mockSecretService,
-    workspaceOperationService: () => mockWorkspaceOperationService,
+    worktreeOperationService: () => mockWorkspaceOperationService,
   }));
 
   vi.doMock("../services/environments.js", () => ({
@@ -76,7 +76,7 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/worktree-runtime.js", () => ({
-    startRuntimeServicesForWorkspaceControl: vi.fn(),
+    startRuntimeServicesForWorktreeControl: vi.fn(),
     stopRuntimeServicesForProjectWorkspace: vi.fn(),
   }));
 }

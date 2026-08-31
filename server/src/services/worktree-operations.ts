@@ -248,7 +248,7 @@ export interface WorkspaceOperationRecorder {
   }): Promise<WorkspaceOperation>;
 }
 
-export function workspaceOperationService(db: Db) {
+export function worktreeOperationService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
   const logStore = getWorkspaceOperationLogStore();
 

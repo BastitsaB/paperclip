@@ -133,7 +133,7 @@ function registerModuleMocks() {
     }),
     documentAnnotationService: () => mockDocumentAnnotationService,
     documentService: () => ({}),
-    executionWorkspaceService: () => ({}),
+    executionWorktreeService: () => ({}),
     feedbackService: () => mockFeedbackService,
     goalService: () => ({}),
     heartbeatService: () => mockHeartbeatService,

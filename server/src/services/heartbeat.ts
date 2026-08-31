@@ -150,7 +150,7 @@ import {
   formatManagedGitWorktreeBranchInspection,
   inspectManagedGitWorktreeBranch,
   persistAdapterManagedRuntimeServices,
-  realizeExecutionWorkspace,
+  realizeExecutionWorktree,
   releaseRuntimeServicesForRun,
   isUnresolvedWorkspaceBaseRefError,
   type ExecutionWorkspaceInput,
@@ -188,13 +188,13 @@ import {
   refreshIssueContinuationSummary,
 } from "./issue-continuation-summary.js";
 import { buildDocumentReviewContext, buildPlanReviewContext } from "./plan-review-context.js";
-import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-worktrees.js";
+import { executionWorktreeService, mergeExecutionWorkspaceConfig } from "./execution-worktrees.js";
 import {
   GIT_BRANCH_OWNERSHIP_METADATA_KEY,
   GIT_BRANCH_OWNERSHIP_METADATA_VERSION,
   isRuntimeOwnedGitBranch,
 } from "./execution-worktree-branch-ownership.js";
-import { workspaceOperationService, type WorkspaceOperationRecorder } from "./worktree-operations.js";
+import { worktreeOperationService, type WorkspaceOperationRecorder } from "./worktree-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
 import {
   HEARTBEAT_RUN_SCRATCH_MARKER,
@@ -4764,7 +4764,7 @@ export async function provisionExecutionWorkspaceForFreshnessDecision<T extends 
   runId: string;
   workspaceConfigFreshness: ExecutionWorkspaceConfigFreshnessDecision;
   restoreExistingWorkspace?: (() => Promise<T | null>) | null;
-  realizeWorkspace: () => Promise<T>;
+  realizeWorktree: () => Promise<T>;
 }): Promise<{
   executionWorkspace: T;
   reusedExecutionWorkspace: T | null;
@@ -4776,7 +4776,7 @@ export async function provisionExecutionWorkspaceForFreshnessDecision<T extends 
   });
 
   if (!policy.shouldRestoreExistingWorkspace) {
-    const executionWorkspace = await input.realizeWorkspace();
+    const executionWorkspace = await input.realizeWorktree();
     return {
       executionWorkspace,
       reusedExecutionWorkspace: null,
@@ -7043,7 +7043,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
-  const executionWorkspacesSvc = executionWorkspaceService(db);
+  const executionWorkspacesSvc = executionWorktreeService(db);
   const environmentsSvc = environmentService(db);
   const environmentRuntime = options.environmentRuntime ?? environmentRuntimeService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
@@ -7052,7 +7052,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     pluginWorkerManager: options.pluginWorkerManager,
     environmentRuntime,
   });
-  const workspaceOperationsSvc = workspaceOperationService(db);
+  const workspaceOperationsSvc = worktreeOperationService(db);
   const liveRunExecutions = {
     has(id: string) {
       return runningProcesses.has(id) || activeRunExecutions.has(id);
@@ -15472,7 +15472,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               resolveGitAuth: workspaceGitAuthProvider,
             })
           : null,
-        realizeWorkspace: () => realizeExecutionWorkspace({
+        realizeWorktree: () => realizeExecutionWorktree({
           db,
           base: executionWorkspaceBase,
           config: hostExecutionWorkspaceConfig,

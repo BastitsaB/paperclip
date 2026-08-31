@@ -61,7 +61,7 @@ export function resolveEffectiveWorkspaceStrategyType(
   if (type === "project_primary" || type === "git_worktree" || type === "adapter_managed" || type === "cloud_sandbox") {
     return type;
   }
-  // Default mirrors workspace-runtime.ts realizeExecutionWorkspace: missing type -> "project_primary".
+  // Default mirrors workspace-runtime.ts realizeExecutionWorktree: missing type -> "project_primary".
   // agent_default is a metadata-only mode that never creates a worktree, so it keeps "adapter_managed".
   return mode === "agent_default" ? "adapter_managed" : "project_primary";
 }

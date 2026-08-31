@@ -7,7 +7,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockExecutionWorkspaceService = vi.hoisted(() => ({
+const mockExecutionWorktreeService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
 }));
@@ -47,12 +47,12 @@ vi.mock("../telemetry.js", () => ({ getTelemetryClient: mockGetTelemetryClient }
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
   environmentService: () => mockEnvironmentService,
-  executionWorkspaceService: () => mockExecutionWorkspaceService,
+  executionWorktreeService: () => mockExecutionWorktreeService,
   heartbeatService: () => mockHeartbeatService,
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
   secretService: () => mockSecretService,
-  workspaceOperationService: () => mockWorkspaceOperationService,
+  worktreeOperationService: () => mockWorkspaceOperationService,
   workspaceRuntimeLeaseService: () => ({
     claim: mockClaimRuntimeLease,
     release: mockReleaseRuntimeLease,
@@ -66,8 +66,8 @@ vi.mock("../services/worktree-runtime.js", () => ({
   ensurePersistedExecutionWorkspaceAvailable: mockEnsurePersistedExecutionWorkspaceAvailable,
   listConfiguredRuntimeServiceEntries: mockListConfiguredRuntimeServiceEntries,
   runWorkspaceJobForControl: vi.fn(),
-  startRuntimeServicesForWorkspaceControl: mockStartRuntimeServices,
-  stopRuntimeServicesForExecutionWorkspace: mockStopRuntimeServicesForExecutionWorkspace,
+  startRuntimeServicesForWorktreeControl: mockStartRuntimeServices,
+  stopRuntimeServicesForExecutionWorktree: mockStopRuntimeServicesForExecutionWorkspace,
   stopRuntimeServicesForProjectWorkspace: vi.fn(),
 }));
 
@@ -184,7 +184,7 @@ function createRegisteredRepairFixture(
     attemptId: "previous",
   }));
   registeredProjectWorkspace = { id: projectWorkspaceId, cwd: baseCwd, metadata: null };
-  mockExecutionWorkspaceService.getById.mockResolvedValue(buildExecutionWorkspace({
+  mockExecutionWorktreeService.getById.mockResolvedValue(buildExecutionWorkspace({
     cwd: workspaceCwd,
     projectId,
     projectWorkspaceId,
@@ -247,8 +247,8 @@ describe.sequential("execution workspace runtime control conflict and failure re
       reason: "allow_test",
       explanation: "Allowed by test mock.",
     });
-    mockExecutionWorkspaceService.getById.mockResolvedValue(buildExecutionWorkspace());
-    mockExecutionWorkspaceService.update.mockResolvedValue(buildExecutionWorkspace());
+    mockExecutionWorktreeService.getById.mockResolvedValue(buildExecutionWorkspace());
+    mockExecutionWorktreeService.update.mockResolvedValue(buildExecutionWorkspace());
     mockAssertCanManageExecutionWorkspaceRuntimeServices.mockResolvedValue(undefined);
     mockWorkspaceOperationService.assertRuntimeControlAvailable.mockResolvedValue(undefined);
     mockBuildWorkspaceRuntimeDesiredStatePatch.mockReturnValue({
@@ -348,7 +348,7 @@ describe.sequential("execution workspace runtime control conflict and failure re
     expect(mockBuildWorkspaceRuntimeDesiredStatePatch).toHaveBeenCalledWith(
       expect.objectContaining({ action: "stop" }),
     );
-    expect(mockExecutionWorkspaceService.update).toHaveBeenCalledWith(
+    expect(mockExecutionWorktreeService.update).toHaveBeenCalledWith(
       executionWorkspaceId,
       expect.objectContaining({ metadata: expect.anything() }),
     );
@@ -361,7 +361,7 @@ describe.sequential("execution workspace runtime control conflict and failure re
       fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(path.join(configDir, "config.json"), "{}\n");
       fs.writeFileSync(path.join(configDir, "seed-manifest.json"), "{ definitely-not-json\n");
-      mockExecutionWorkspaceService.getById.mockResolvedValue(buildExecutionWorkspace({ cwd: workspaceCwd }));
+      mockExecutionWorktreeService.getById.mockResolvedValue(buildExecutionWorkspace({ cwd: workspaceCwd }));
 
       const res = await request(await createApp())
         .post(`/api/execution-workspaces/${executionWorkspaceId}/runtime-commands/repair`)
@@ -444,7 +444,7 @@ describe.sequential("execution workspace runtime control conflict and failure re
         state: "failed",
         attemptId: "previous",
       }));
-      mockExecutionWorkspaceService.getById.mockResolvedValue(buildExecutionWorkspace({ cwd: workspaceCwd }));
+      mockExecutionWorktreeService.getById.mockResolvedValue(buildExecutionWorkspace({ cwd: workspaceCwd }));
 
       const res = await request(await createApp())
         .post(`/api/execution-workspaces/${executionWorkspaceId}/runtime-commands/repair`)
@@ -590,7 +590,7 @@ describe.sequential("execution workspace runtime control conflict and failure re
   it("completes database-only repair when no managed runtime service is configured", async () => {
     const fixture = createRegisteredRepairFixture("paperclip-route-repair-db-only-");
     try {
-      mockExecutionWorkspaceService.getById.mockResolvedValue(buildExecutionWorkspace({
+      mockExecutionWorktreeService.getById.mockResolvedValue(buildExecutionWorkspace({
         cwd: fixture.workspaceCwd,
         projectId,
         projectWorkspaceId,

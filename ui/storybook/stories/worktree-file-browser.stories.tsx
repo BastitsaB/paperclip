@@ -32,7 +32,7 @@ function item(relativePath: string, minutesAgo: number, overrides: Partial<Workt
     title: relativePath.split("/").pop() ?? relativePath,
     relativePath,
     displayPath: relativePath,
-    workspaceLabel: "issue execution workspace · PAP-1953",
+    workspaceLabel: "issue execution worktree · PAP-1953",
     workspaceKind: "execution_workspace",
     workspaceId: "ws-1",
     contentType: "text/plain; charset=utf-8",
@@ -49,7 +49,7 @@ const recentList: WorktreeFileListResponse = {
   state: "available",
   workspace: {
     provider: "git_worktree",
-    workspaceLabel: "issue execution workspace · PAP-1953",
+    workspaceLabel: "issue execution worktree · PAP-1953",
     workspaceKind: "execution_workspace",
     workspaceId: "ws-1",
   },
@@ -84,7 +84,7 @@ const viewedResource: ResolvedWorktreeResource = {
   provider: "git_worktree",
   title: "FileViewerSheet.tsx",
   displayPath: "ui/src/components/FileViewerSheet.tsx",
-  workspaceLabel: "issue execution workspace · PAP-1953",
+  workspaceLabel: "issue execution worktree · PAP-1953",
   workspaceKind: "execution_workspace",
   workspaceId: "ws-1",
   contentType: "text/plain; charset=utf-8",
@@ -164,7 +164,7 @@ function Placement() {
   return (
     <FileViewerProvider issueId={ISSUE_ID}>
       <div className="mx-auto max-w-3xl space-y-3 p-6">
-        <h3 className="text-sm font-medium text-muted-foreground">Workspace</h3>
+        <h3 className="text-sm font-medium text-muted-foreground">Worktree</h3>
         <IssueWorktreeCard
           issue={{
             companyId: "company-1",
@@ -197,7 +197,7 @@ function Placement() {
 }
 
 const meta: Meta = {
-  title: "Issue/Workspace File Browser",
+  title: "Issue/Worktree File Browser",
   parameters: { layout: "fullscreen" },
 };
 export default meta;
