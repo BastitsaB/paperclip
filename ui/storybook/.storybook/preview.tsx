@@ -7,6 +7,7 @@ import {
 } from "@paperclipai/shared";
 import { MemoryRouter } from "@/lib/router";
 import { ONBOARDING_STORAGE_KEY } from "@/components/OnboardingWizard";
+import { STORYBOOK_COMPANY_ID } from "../fixtures/onboardingDraft";
 import {
   STORYBOOK_SANDBOX_ENVIRONMENT_ID,
   storybookAuthSignal,
@@ -28,6 +29,7 @@ import {
   storybookAuthSession,
   storybookCompanies,
   storybookDashboardSummary,
+  storybookHiredAgent,
   storybookIssues,
   storybookLiveRuns,
   storybookProjects,
@@ -253,6 +255,58 @@ function installStorybookApiFixtures() {
       /^\/api\/companies\/[^/]+\/claude-oauth-token-status$/.test(url.pathname)
     ) {
       return new Response(null, { status: 404 });
+    }
+
+    // The hire, and the three calls either side of it.
+    //
+    // These exist so the review step can be reached the way a customer reaches
+    // it — by pressing Connect — rather than by seeding a draft that claims the
+    // hire already happened. The difference is not pedantry: the wizard only
+    // offers Back on a step it walked *forward* into, so a story that starts on
+    // the review step renders it without the control it is supposed to have.
+    //
+    // A passing environment test with no checks. `blocksAgentCreate` stops the
+    // hire on a `fail`, and on a `pass` or `warn` that reports missing
+    // authentication — so an empty check list is the only shape that proceeds.
+    if (
+      /^\/api\/companies\/[^/]+\/adapters\/[^/]+\/test-environment$/.test(
+        url.pathname,
+      )
+    ) {
+      return Response.json({
+        adapterType: "claude_local",
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      });
+    }
+    if (/^\/api\/companies\/[^/]+\/agent-hires$/.test(url.pathname)) {
+      // `approval: null` on purpose. A hire that returns one sends the wizard
+      // through the approvals API before it advances, and this story is about
+      // the step it lands on rather than the path it took.
+      return Response.json({ agent: storybookHiredAgent, approval: null });
+    }
+    const instructionsBundleMatch = url.pathname.match(
+      /^\/api\/agents\/([^/]+)\/instructions-bundle(\/file)?$/,
+    );
+    if (instructionsBundleMatch) {
+      // The wizard seeds the lead's instructions here and swallows a failure —
+      // so an unstubbed route costs nothing but a console warning on every run,
+      // which is the kind of noise that trains people to ignore the console.
+      if (instructionsBundleMatch[2]) {
+        return Response.json({ path: "AGENTS.md", content: "" });
+      }
+      return Response.json({
+        agentId: instructionsBundleMatch[1],
+        companyId: STORYBOOK_COMPANY_ID,
+        mode: "managed",
+        rootPath: null,
+        managedRootPath: `/managed/agents/${instructionsBundleMatch[1]}`,
+        entryFile: "AGENTS.md",
+        resolvedEntryPath: `/managed/agents/${instructionsBundleMatch[1]}/AGENTS.md`,
+        editable: true,
+        warnings: [],
+      });
     }
 
     if (

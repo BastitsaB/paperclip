@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, screen, userEvent, waitFor } from "storybook/test";
 import { useEffect, useState } from "react";
 
 import { OnboardingWizard } from "@/components/OnboardingWizard";
@@ -7,6 +8,7 @@ import { Stepper } from "@/components/onboarding/Stepper";
 import { useCompanyListQuery } from "@/api/companies-query";
 import { useDialog } from "@/context/DialogContext";
 import {
+  ONBOARDING_ARC_ENTRY_STEP,
   STORYBOOK_COMPANY_ID,
   clearOnboardingDraft,
   seedOnboardingDraft,
@@ -37,8 +39,8 @@ const meta = {
 export default meta;
 
 /**
- * Seeds the draft the wizard restores from, opens it, and takes the draft back
- * out again on the way past.
+ * Seeds the draft the wizard restores from, opens it at the arc's first step,
+ * and takes the draft back out again on the way past.
  *
  * Three details the wizard's own design forces:
  *
@@ -53,18 +55,22 @@ export default meta;
  * since localStorage is per-origin and would otherwise hand one account's draft
  * to another.
  *
- * Step 5 is seeded rather than requested: `openOnboarding({ initialStep })`
- * accepts 1–4 only, because the review step is somewhere the wizard arrives
- * rather than somewhere it starts.
+ * Every story enters here, at step 3, and the later ones walk forward. Opening
+ * directly on a later step is the obvious shortcut and it is wrong: `entryStep`
+ * is captured once at mount from exactly this draft, `initialStep` sets both it
+ * and the current step together, and Back is offered only while
+ * `currentStep > entryStep`. A story opened on step 4 is a step 4 that can never
+ * show its Back button — which is not a preview of the step, it is a preview of
+ * a state no customer is ever in.
  *
  * And the cleanup is not housekeeping. That same per-origin storage is shared
  * with every other story in the session: a draft left behind makes the next
  * story restore a saved step ahead of the one it asked for, so the reviewer
  * lands on a screen they did not click on and reads it as a wizard bug.
  */
-function WizardAtStep({ step }: { step: 3 | 4 | 5 }) {
+function WizardArc() {
   const [seeded] = useState(() => {
-    seedOnboardingDraft(step);
+    seedOnboardingDraft();
     return true;
   });
 
@@ -84,25 +90,61 @@ function WizardAtStep({ step }: { step: 3 | 4 | 5 }) {
   const { openOnboarding } = useDialog();
   useEffect(() => {
     if (!seeded || !ready) return;
-    // `initialStep` is deliberately omitted for the review step. An explicit
-    // option overrides the restored draft — "options take precedence over saved
-    // state" is the wizard's rule, not an accident — so passing one here would
-    // clamp 5 to 4 and land on Connect. Steps 3 and 4 pass it because being
-    // explicit is better when the option can express the step; step 5 cannot be
-    // expressed that way, so the draft carries it alone.
-    openOnboarding(
-      step <= 4
-        ? { initialStep: step as 3 | 4, companyId: STORYBOOK_COMPANY_ID }
-        : { companyId: STORYBOOK_COMPANY_ID },
-    );
-  }, [seeded, ready, openOnboarding, step]);
+    openOnboarding({
+      initialStep: ONBOARDING_ARC_ENTRY_STEP,
+      companyId: STORYBOOK_COMPANY_ID,
+    });
+  }, [seeded, ready, openOnboarding]);
 
   if (!ready) return null;
   return <OnboardingWizard />;
 }
 
+/**
+ * Every wait here is given an explicit timeout because the library's default is
+ * one second, and every wait in this file outlasts it: the wizard does not mount
+ * until the companies query settles, the hire runs four requests end to end. A
+ * default-timeout wait gives up, the play function fails, and the story renders
+ * the step it started on — which looks exactly like a story that was written to
+ * open there. That is the failure this whole file exists to avoid, so it is
+ * worth naming rather than inlining.
+ */
+const STEP_TIMEOUT_MS = 15_000;
+
+/**
+ * Presses the wizard's primary button once it is enabled, and waits for the
+ * step it opens.
+ *
+ * The dialog is portalled to `document.body`, so the queries are scoped to the
+ * body rather than to `canvasElement` — a canvas-scoped query finds an empty
+ * mount point and times out.
+ *
+ * Waiting for `toBeEnabled` is not defensive padding. Connect stays disabled
+ * through `adapterEnvLoading` and `missionUnresolvedForHire`, both of which
+ * resolve from queries, so clicking on first paint clicks a dead button and the
+ * story silently stops one step short of where it says it is.
+ *
+ * The button is queried again immediately before the click rather than reused
+ * from the wait above. The wizard re-renders as those queries land, and a node
+ * captured a moment earlier can be detached by the time it is clicked — a click
+ * that raises no error and does nothing.
+ */
+async function advance(from: string, to: string) {
+  await waitFor(
+    () => expect(screen.getByRole("button", { name: from })).toBeEnabled(),
+    { timeout: STEP_TIMEOUT_MS },
+  );
+  await userEvent.click(screen.getByRole("button", { name: from }));
+  await screen.findByRole("button", { name: to }, { timeout: STEP_TIMEOUT_MS });
+}
+
+/**
+ * The arc's first step, and the one place Back is correctly absent: a run
+ * entering here has nowhere behind it that belongs to it — step 1 creates a
+ * company, and this run already holds one.
+ */
 export const CreateYourAgent: StoryObj = {
-  render: () => <WizardAtStep step={3} />,
+  render: () => <WizardArc />,
 };
 
 /**
@@ -112,10 +154,14 @@ export const CreateYourAgent: StoryObj = {
  */
 export const ConnectAModel: StoryObj = {
   beforeEach: () => {
-    setOnboardingFixtureState({ environments: "managed-sandbox", authSignal: "absent" });
+    setOnboardingFixtureState({
+      environments: "managed-sandbox",
+      authSignal: "absent",
+    });
     return resetOnboardingFixtureState;
   },
-  render: () => <WizardAtStep step={4} />,
+  render: () => <WizardArc />,
+  play: () => advance("Next", "Connect"),
 };
 
 /**
@@ -125,10 +171,14 @@ export const ConnectAModel: StoryObj = {
  */
 export const ConnectAModelAlreadySignedIn: StoryObj = {
   beforeEach: () => {
-    setOnboardingFixtureState({ environments: "managed-sandbox", authSignal: "present" });
+    setOnboardingFixtureState({
+      environments: "managed-sandbox",
+      authSignal: "present",
+    });
     return resetOnboardingFixtureState;
   },
-  render: () => <WizardAtStep step={4} />,
+  render: () => <WizardArc />,
+  play: () => advance("Next", "Connect"),
 };
 
 /**
@@ -143,11 +193,31 @@ export const ConnectAModelNoSandbox: StoryObj = {
     setOnboardingFixtureState({ environments: "none", authSignal: "unknown" });
     return resetOnboardingFixtureState;
   },
-  render: () => <WizardAtStep step={4} />,
+  render: () => <WizardArc />,
+  play: () => advance("Next", "Connect"),
 };
 
+/**
+ * The review step, reached by hiring rather than by claiming a hire happened.
+ *
+ * Walking the whole arc is what makes this an honest preview of the step: the
+ * Back button is offered because the run genuinely walked forward into it, and
+ * `launchStateIncomplete` is satisfied because an agent genuinely exists. A
+ * seeded `createdAgentId` would paint over that guard rather than clear it.
+ */
 export const Review: StoryObj = {
-  render: () => <WizardAtStep step={5} />,
+  beforeEach: () => {
+    setOnboardingFixtureState({
+      environments: "managed-sandbox",
+      authSignal: "present",
+    });
+    return resetOnboardingFixtureState;
+  },
+  render: () => <WizardArc />,
+  play: async () => {
+    await advance("Next", "Connect");
+    await advance("Connect", "Get started");
+  },
 };
 
 export const ProgressStrip: StoryObj = {
@@ -197,7 +267,10 @@ export const PillMorph: StoryObj = {
     }, []);
     return (
       <div className="flex flex-col items-center gap-4">
-        <PillGuy state={alive ? "alive" : "dormant"} className="size-(--sz-72px)" />
+        <PillGuy
+          state={alive ? "alive" : "dormant"}
+          className="size-(--sz-72px)"
+        />
         <button
           type="button"
           onClick={() => setAlive((v) => !v)}
