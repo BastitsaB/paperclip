@@ -12,6 +12,7 @@ import {
   STORYBOOK_SANDBOX_ENVIRONMENT_ID,
   storybookAuthSignal,
   storybookEnvironmentCapabilities,
+  storybookEnvironmentTest,
   storybookEnvironments,
 } from "../fixtures/onboardingEnvironment";
 import { BreadcrumbProvider } from "@/context/BreadcrumbContext";
@@ -307,20 +308,13 @@ function installStorybookApiFixtures() {
     // offers Back on a step it walked *forward* into, so a story that starts on
     // the review step renders it without the control it is supposed to have.
     //
-    // A passing environment test with no checks. `blocksAgentCreate` stops the
-    // hire on a `fail`, and on a `pass` or `warn` that reports missing
-    // authentication — so an empty check list is the only shape that proceeds.
-    if (
-      /^\/api\/companies\/[^/]+\/adapters\/[^/]+\/test-environment$/.test(
-        url.pathname,
-      )
-    ) {
-      return Response.json({
-        adapterType: "claude_local",
-        status: "pass",
-        checks: [],
-        testedAt: new Date(0).toISOString(),
-      });
+    // The environment test, which is the hire's gate. It answers from the story's
+    // auth state rather than always passing — see `storybookEnvironmentTest`.
+    const testEnvMatch = url.pathname.match(
+      /^\/api\/companies\/[^/]+\/adapters\/([^/]+)\/test-environment$/,
+    );
+    if (testEnvMatch) {
+      return Response.json(storybookEnvironmentTest(testEnvMatch[1]));
     }
     if (/^\/api\/companies\/[^/]+\/agent-hires$/.test(url.pathname)) {
       // `approval: null` on purpose. A hire that returns one sends the wizard
