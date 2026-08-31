@@ -231,7 +231,11 @@ test.describe("Onboarding wizard", () => {
     });
     await expect(page.getByRole("button", { name: "Use saved login" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: /^Connect/ }).click();
+    // Exact, because the progress strip's segments are buttons too and one of
+    // them is labelled "Connect a model" for assistive tech. An unanchored
+    // /^Connect/ matches both it and this CTA, which is a strict-mode violation
+    // rather than a wrong click — Playwright refuses instead of guessing.
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
 
     // The failed test blocks the hire and shows its own checks.
     await expect(page.getByText("The claude CLI was not found on this host.")).toBeVisible({
