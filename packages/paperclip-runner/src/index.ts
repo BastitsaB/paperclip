@@ -37,6 +37,11 @@ export * from "./drivers/codex/codex-app-server-driver.js";
 export * from "./drivers/opencode/opencode-server-driver.js";
 export * from "./drivers/opencode/mcp-bridge.js";
 export * from "./drivers/acpx/qualified-profiles.js";
+export {
+  probeQualifiedAcpxEnvironment,
+  type ProbeQualifiedAcpxEnvironmentOptions,
+  type QualifiedAcpxEnvironmentProbe,
+} from "./drivers/acpx/codex-acpx-driver.js";
 export * from "./drivers/acpx/acpx-runtime-host.js";
 export * from "./drivers/acpx/acpx-runtime-driver.js";
 export * from "./drivers/acpx/sidecar-protocol.js";
