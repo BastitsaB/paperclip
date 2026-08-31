@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
@@ -11,13 +11,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::process_supervisor::{
-    BoundedLogBuffer, ProcessExitFact, ProcessOutput, SupervisedProcess,
+    read_bounded_line, BoundedLine, BoundedLogBuffer, ProcessExitFact, ProcessOutput,
+    SupervisedProcess,
 };
 
 const RUNNER_STREAM_SCHEMA: &str = "paperclip.runner.stream.v1";
 const RUNNER_COMMAND_SCHEMA: &str = "paperclip.prp.command.v1";
 const HARNESS_COMMAND_SCHEMA: &str = "paperclip.fake_harness.command.v1";
 const HARNESS_MESSAGE_SCHEMA: &str = "paperclip.fake_harness.message.v1";
+const CONTROLLER_COMMAND_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalRunnerError(String);
@@ -46,6 +48,8 @@ pub struct RunnerConfig {
     pub delay_override_ms: Option<u64>,
     pub log_max_lines: usize,
     pub log_max_bytes: usize,
+    pub command_history_limit: usize,
+    pub controller_max_line_bytes: usize,
     pub harness_max_line_bytes: usize,
     pub shutdown_grace: Duration,
 }
@@ -219,6 +223,7 @@ struct RunnerState {
     source_seq: u64,
     next_controller_seq: u64,
     commands: HashMap<String, String>,
+    next_harness_message_seq: u64,
     harness: Option<SupervisedProcess>,
     logs: BoundedLogBuffer,
     semantic_result: Option<Value>,
@@ -236,6 +241,7 @@ impl RunnerState {
             source_seq: 0,
             next_controller_seq: 1,
             commands: HashMap::new(),
+            next_harness_message_seq: 1,
             harness: None,
             semantic_result: None,
             pending_terminal: None,
@@ -360,6 +366,7 @@ impl RunnerState {
             match harness.recv_timeout(remaining) {
                 Ok(ProcessOutput::Stdout(line)) => {
                     let message = parse_harness_message(&line)?;
+                    self.accept_harness_message_sequence(&message)?;
                     if message.message_type == "ready" {
                         self.emit_event(
                             "harness.ready",
@@ -423,6 +430,10 @@ impl RunnerState {
         }
         if command.controller_seq != self.next_controller_seq {
             self.command_receipt(&command, "rejected", "controllerSeq is not contiguous")?;
+            return Ok(());
+        }
+        if self.commands.len() >= self.config.command_history_limit.max(1) {
+            self.command_receipt(&command, "rejected", "command history limit reached")?;
             return Ok(());
         }
         self.commands.insert(command.command_id.clone(), canonical);
@@ -512,6 +523,7 @@ impl RunnerState {
 
     fn handle_harness_line(&mut self, line: &str) -> Result<(), LocalRunnerError> {
         let message = parse_harness_message(line)?;
+        self.accept_harness_message_sequence(&message)?;
         match message.message_type.as_str() {
             "event" => {
                 let event_type = message
@@ -616,6 +628,20 @@ impl RunnerState {
         Ok(())
     }
 
+    fn accept_harness_message_sequence(
+        &mut self,
+        message: &HarnessMessage,
+    ) -> Result<(), LocalRunnerError> {
+        if message.message_seq != self.next_harness_message_seq {
+            return Err(LocalRunnerError::invalid(format!(
+                "fake harness message sequence must be {}; received {}",
+                self.next_harness_message_seq, message.message_seq
+            )));
+        }
+        self.next_harness_message_seq += 1;
+        Ok(())
+    }
+
     fn finish_harness(&mut self) -> Result<(), LocalRunnerError> {
         let exit = self
             .harness
@@ -656,20 +682,24 @@ impl RunnerState {
 }
 
 pub fn run_local_runner(config: RunnerConfig) -> Result<(), LocalRunnerError> {
-    let (command_sender, command_receiver) = mpsc::channel();
+    let controller_max_line_bytes = config.controller_max_line_bytes.max(1);
+    let (command_sender, command_receiver) = mpsc::sync_channel(CONTROLLER_COMMAND_QUEUE_CAPACITY);
     thread::spawn(move || {
         let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            let line = match line {
-                Ok(line) => line,
-                Err(_) => break,
+        let mut reader = stdin.lock();
+        loop {
+            let command = match read_bounded_line(&mut reader, controller_max_line_bytes) {
+                Ok(BoundedLine::Line(line)) if line.trim().is_empty() => continue,
+                Ok(BoundedLine::Line(line)) => serde_json::from_str::<RunnerCommand>(&line)
+                    .map_err(|error| format!("invalid command JSON: {error}")),
+                Ok(BoundedLine::TooLong) => Err(format!(
+                    "controller command exceeded {controller_max_line_bytes} bytes"
+                )),
+                Ok(BoundedLine::Eof) => return,
+                Err(error) => Err(format!("failed to read controller input: {error}")),
             };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let command = serde_json::from_str::<RunnerCommand>(&line);
             if command_sender.send(command).is_err() {
-                break;
+                return;
             }
         }
     });
@@ -678,9 +708,7 @@ pub fn run_local_runner(config: RunnerConfig) -> Result<(), LocalRunnerError> {
     loop {
         match command_receiver.recv_timeout(Duration::from_millis(2)) {
             Ok(Ok(command)) => state.handle_command(command)?,
-            Ok(Err(error)) => {
-                state.diagnostic("error", &format!("invalid command JSON: {error}"))?
-            }
+            Ok(Err(error)) => state.diagnostic("error", &error)?,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 if state.harness.is_none() {

@@ -60,6 +60,7 @@ export * from "./protocol/result-normalization.js";
 export * from "./protocol/semantic-tool-receipts.js";
 export * from "./provider-events.js";
 export * from "./reducer/session-reducer.js";
+export * from "./tracer/replay.js";
 export * from "./generated/capability-contract.js";
 export * from "./semantic-tools/index.js";
 export * as acceptedCapabilitySemanticTools from "./semantic-tools/index.js";
