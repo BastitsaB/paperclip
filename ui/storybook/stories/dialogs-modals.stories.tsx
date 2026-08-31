@@ -9,7 +9,7 @@ import type {
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { DocumentDiffModal } from "@/components/DocumentDiffModal";
-import { ExecutionWorktreeCloseDialog } from "@/components/ExecutionWorkspaceCloseDialog";
+import { ExecutionWorktreeCloseDialog } from "@/components/ExecutionWorktreeCloseDialog";
 import { ImageGalleryModal } from "@/components/ImageGalleryModal";
 import { NewAgentDialog } from "@/components/NewAgentDialog";
 import { NewGoalDialog } from "@/components/NewGoalDialog";
@@ -646,7 +646,7 @@ function ExecutionWorkspaceDialogStory({ blocked }: { blocked?: boolean }) {
   const workspace = storybookExecutionWorkspaces[0]!;
   return (
     <DialogStory
-      eyebrow="ExecutionWorkspaceCloseDialog"
+      eyebrow="ExecutionWorktreeCloseDialog"
       title={blocked ? "Blocked workspace close confirmation" : "Workspace close confirmation"}
       description="The close dialog exposes linked issues, git state, runtime services, and planned cleanup actions before archiving an execution workspace."
       badges={blocked ? ["blocked", "dirty worktree", "linked issue"] : ["ready with warnings", "cleanup actions"]}

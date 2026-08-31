@@ -22,7 +22,7 @@ vi.mock("../api/instanceSettings", () => ({
   },
 }));
 
-vi.mock("./IssueWorkspaceCard", async () => {
+vi.mock("./IssueWorktreeCard", async () => {
   const React = await import("react");
 
   return {

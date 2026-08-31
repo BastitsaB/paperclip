@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "../../api/access";
 import { agentsApi } from "../../api/agents";
 import { authApi } from "../../api/auth";
-import { executionWorktreesApi } from "../../api/execution-workspaces";
+import { executionWorktreesApi } from "../../api/execution-worktrees";
 import { instanceSettingsApi } from "../../api/instanceSettings";
 import { issuesApi } from "../../api/issues";
 import { useIssuePlanDocument } from "@/hooks/useIssuePlanDocument";
@@ -81,7 +81,7 @@ import {
   buildWorktreeRuntimeControlSections,
   WorktreeRuntimeQuickControls,
   type WorktreeRuntimeControlRequest,
-} from "../WorkspaceRuntimeControls";
+} from "../WorktreeRuntimeControls";
 import { ExternalObjectRows } from "./external-object-rows";
 import {
   asRecord,

@@ -96,7 +96,7 @@ vi.mock("@/api/access", () => ({
   accessApi: mockAccessApi,
 }));
 
-vi.mock("../api/execution-workspaces", () => ({
+vi.mock("../api/execution-worktrees", () => ({
   executionWorktreesApi: mockExecutionWorktreesApi,
 }));
 

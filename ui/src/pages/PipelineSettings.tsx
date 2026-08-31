@@ -41,7 +41,7 @@ import {
 import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
-import { executionWorktreesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-worktrees";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
 import { secretsApi } from "../api/secrets";
@@ -96,8 +96,8 @@ import {
   defaultExecutionWorktreeModeForProject,
   defaultProjectWorktreeIdForProject,
   issueExecutionWorktreeModeForExistingWorktree,
-} from "../lib/project-workspace-defaults";
-import { orderReusableExecutionWorktrees } from "../lib/reusable-execution-workspaces";
+} from "../lib/project-worktree-defaults";
+import { orderReusableExecutionWorktrees } from "../lib/reusable-execution-worktrees";
 import { cn, relativeTime } from "../lib/utils";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";

@@ -424,7 +424,7 @@ export type {
   WorktreeOperation,
   WorktreeOperationPhase,
   WorktreeOperationStatus,
-} from "./workspace-operation.js";
+} from "./worktree-operation.js";
 export { WORKSPACE_READINESS_STATES } from "./worktree-readiness.js";
 export type {
   WorktreeLoginHandoffTicketResponse,
@@ -452,7 +452,7 @@ export type {
   WorktreeFileSelector,
   WorktreeFileWorktreeKind,
   ResolvedWorktreeResource,
-} from "./workspace-file-resource.js";
+} from "./worktree-file-resource.js";
 export type {
   ToolActionRequest,
   ToolAccessDecision,

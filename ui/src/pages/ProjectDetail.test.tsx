@@ -49,7 +49,7 @@ vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/budgets", () => ({ budgetsApi: mockBudgetsApi }));
-vi.mock("../api/execution-workspaces", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
+vi.mock("../api/execution-worktrees", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
 vi.mock("../api/instanceSettings", () => ({ instanceSettingsApi: mockInstanceSettingsApi }));
 vi.mock("../api/assets", () => ({ assetsApi: mockAssetsApi }));
 vi.mock("../api/resourceMemberships", () => ({ resourceMembershipsApi: mockResourceMembershipsApi }));
@@ -92,7 +92,7 @@ vi.mock("../components/InlineEditor", () => ({
     <span>{value || placeholder || null}</span>
   ),
 }));
-vi.mock("../components/ProjectWorkspacesContent", () => ({
+vi.mock("../components/ProjectWorktreesContent", () => ({
   ProjectWorkspacesContent: () => <div data-testid="project-workspaces" />,
 }));
 vi.mock("../components/SummarySlotCard", () => ({

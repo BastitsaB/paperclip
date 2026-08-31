@@ -36,7 +36,7 @@ const mockRouteLocation = vi.hoisted(() => ({
   search: "",
 }));
 
-vi.mock("../api/execution-workspaces", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
+vi.mock("../api/execution-worktrees", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -92,19 +92,19 @@ vi.mock("../components/SummarySlotCard", () => ({
     return <div data-testid="summary-slot-card" />;
   },
 }));
-vi.mock("../components/ExecutionWorkspaceCloseDialog", () => ({
+vi.mock("../components/ExecutionWorktreeCloseDialog", () => ({
   ExecutionWorkspaceCloseDialog: () => null,
 }));
 vi.mock("../components/RoutineRunVariablesDialog", () => ({
   RoutineRunVariablesDialog: () => null,
 }));
-vi.mock("../components/WorkspaceRuntimeControls", () => ({
+vi.mock("../components/WorktreeRuntimeControls", () => ({
   buildWorkspaceRuntimeControlSections: () => [],
   buildWorkspaceServiceControlEntries: () => [],
   resolveWorkspaceServiceControlRequests: () => [],
   WorkspaceRuntimeControls: () => <div data-testid="runtime-controls" />,
 }));
-vi.mock("../components/WorkspaceServiceControlBar", () => ({
+vi.mock("../components/WorktreeServiceControlBar", () => ({
   WorkspaceServiceControlBar: () => <div data-testid="service-control-bar" />,
 }));
 vi.mock("../components/PageTabBar", () => ({

@@ -8,7 +8,7 @@ import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
-import { executionWorktreesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-worktrees";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";

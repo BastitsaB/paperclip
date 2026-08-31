@@ -112,7 +112,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { MarkdownBody, type MarkdownExternalReferenceMap } from "./MarkdownBody";
 import type { TaskChatIssueBrief } from "./task-chat/TaskChatDescriptionBubble";
-import { WorktreeFileMarkdownBody } from "./WorkspaceFileMarkdownBody";
+import { WorktreeFileMarkdownBody } from "./WorktreeFileMarkdownBody";
 import { MarkdownEditor, type MentionOption, type MarkdownEditorRef } from "./MarkdownEditor";
 import { Identity } from "./Identity";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";

@@ -52,7 +52,7 @@ vi.mock("../context/CompanyContext", () => ({
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: mockSetBreadcrumbs }) }));
 vi.mock("../components/PathInstructionsModal", () => ({ ChoosePathButton: () => null }));
-vi.mock("../components/WorkspaceRuntimeControls", () => ({
+vi.mock("../components/WorktreeRuntimeControls", () => ({
   buildWorkspaceRuntimeControlSections: () => [],
   WorkspaceRuntimeControls: () => <div data-testid="runtime-controls" />,
 }));

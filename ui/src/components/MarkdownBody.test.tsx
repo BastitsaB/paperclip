@@ -15,7 +15,7 @@ import {
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
 import { queryKeys } from "../lib/queryKeys";
-import type { WorktreeFileAvailabilityTarget } from "../lib/workspace-file-availability";
+import type { WorktreeFileAvailabilityTarget } from "../lib/worktree-file-availability";
 
 /** Stands in for a server-confirmed openable reference in the issue's workspace. */
 const OPENABLE_AUTO_TARGET: WorktreeFileAvailabilityTarget = {

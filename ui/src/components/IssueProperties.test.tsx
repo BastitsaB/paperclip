@@ -80,7 +80,7 @@ vi.mock("../api/projects", () => ({
   projectsApi: mockProjectsApi,
 }));
 
-vi.mock("../api/execution-workspaces", () => ({
+vi.mock("../api/execution-worktrees", () => ({
   executionWorktreesApi: mockExecutionWorktreesApi,
 }));
 

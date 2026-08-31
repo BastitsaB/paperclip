@@ -16,7 +16,7 @@ import {
   buildWorktreeRuntimeControlSections,
   WorktreeRuntimeControls,
   type WorktreeRuntimeControlRequest,
-} from "../components/WorkspaceRuntimeControls";
+} from "../components/WorktreeRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useManagedSandboxOnly } from "../hooks/useManagedSandboxOnly";

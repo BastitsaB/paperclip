@@ -19,7 +19,7 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({ getExperimental: vi.fn() }))
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSummarySlotCard = vi.hoisted(() => vi.fn());
 
-vi.mock("../api/execution-workspaces", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
+vi.mock("../api/execution-worktrees", () => ({ executionWorktreesApi: mockExecutionWorktreesApi }));
 vi.mock("../api/instanceSettings", () => ({ instanceSettingsApi: mockInstanceSettingsApi }));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1" }),

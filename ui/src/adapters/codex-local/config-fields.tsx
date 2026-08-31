@@ -7,7 +7,7 @@ import {
   help,
 } from "../../components/agent-config-primitives";
 import { ChoosePathButton } from "../../components/PathInstructionsModal";
-import { LocalWorktreeRuntimeFields } from "../local-workspace-runtime-fields";
+import { LocalWorktreeRuntimeFields } from "../local-worktree-runtime-fields";
 import {
   CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS,
   isCodexLocalFastModeSupported,

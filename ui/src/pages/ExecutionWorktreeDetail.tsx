@@ -10,11 +10,11 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyText } from "../components/CopyText";
-import { ExecutionWorktreeCloseDialog } from "../components/ExecutionWorkspaceCloseDialog";
+import { ExecutionWorktreeCloseDialog } from "../components/ExecutionWorktreeCloseDialog";
 import { MissingPluginTabPlaceholder } from "../components/MissingPluginTabPlaceholder";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
-import { executionWorktreesApi } from "../api/execution-workspaces";
+import { executionWorktreesApi } from "../api/execution-worktrees";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -34,9 +34,9 @@ import {
   resolveWorktreeServiceControlRequests,
   WorktreeRuntimeControls,
   type WorktreeRuntimeControlRequest,
-} from "../components/WorkspaceRuntimeControls";
-import { WorktreeServiceControlBar } from "../components/WorkspaceServiceControlBar";
-import { WorktreeAccessCard } from "../components/WorkspaceAccessCard";
+} from "../components/WorktreeRuntimeControls";
+import { WorktreeServiceControlBar } from "../components/WorktreeServiceControlBar";
+import { WorktreeAccessCard } from "../components/WorktreeAccessCard";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useManagedSandboxOnly } from "../hooks/useManagedSandboxOnly";
@@ -47,12 +47,12 @@ import { cn, formatDateTime, issueUrl, projectRouteRef, projectWorktreeUrl } fro
 import {
   resolveWorktreeAccessState,
   type WorktreeLoginHandoffFailureInfo,
-} from "../lib/workspace-access-state";
+} from "../lib/worktree-access-state";
 import {
   getWorktreeSpecificRoutineVariableNames,
   routineHasWorktreeSpecificVariables,
   sortWorktreeRoutinesByName,
-} from "../lib/workspace-routines";
+} from "../lib/worktree-routines";
 
 type WorktreeFormState = {
   name: string;

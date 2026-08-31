@@ -45,8 +45,8 @@ import {
   useRequiredFileViewer,
   type FileViewerUrlState,
 } from "@/context/FileViewerContext";
-import { WorktreeFileBrowser } from "@/components/WorkspaceFileBrowser";
-import { WorktreeFileMarkdownBody } from "@/components/WorkspaceFileMarkdownBody";
+import { WorktreeFileBrowser } from "@/components/WorktreeFileBrowser";
+import { WorktreeFileMarkdownBody } from "@/components/WorktreeFileMarkdownBody";
 import type {
   ResolvedWorktreeResource,
   WorktreeFileContent,
