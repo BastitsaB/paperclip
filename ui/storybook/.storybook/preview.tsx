@@ -186,6 +186,48 @@ function installStorybookApiFixtures() {
       return Response.json([]);
     }
 
+    // Codex's login, which is a different flow on different routes.
+    //
+    // Claude signs in through the setup-token routes below; every other adapter
+    // uses these generic per-adapter ones. Only the Claude half was stubbed at
+    // first, so pressing Sign in on the Codex tile fell through to the dev
+    // server and came back 404 — which reads as a broken product rather than as
+    // a missing fixture, and the two are not distinguishable from the panel.
+    //
+    // Its panel mode is `displayed_code`, not Claude's `submitted_browser_code`:
+    // the server shows a URL *and* a code to type into it, and nothing is typed
+    // back here. So this is a genuinely different card, and the canvas holding it
+    // has to size to it too.
+    const adapterLoginMatch = url.pathname.match(
+      /^\/api\/companies\/[^/]+\/adapters\/([^/]+)\/login-sessions(?:\/([^/]+))?(\/cancel)?$/,
+    );
+    if (adapterLoginMatch) {
+      const session = {
+        sessionId: "adapter-login-storybook",
+        environmentId: STORYBOOK_SANDBOX_ENVIRONMENT_ID,
+        // `waiting_for_user` is the state this panel is worth looking at in: the
+        // session is live and the customer is being asked for something.
+        status: "waiting_for_user",
+        expiresAt: null,
+        failure: null,
+      };
+      if (adapterLoginMatch[3]) return Response.json({ ...session, status: "cancelled" });
+      // The prompt rides the owner read of the session rather than a route of
+      // its own — the shape that differs from Claude's, where it is guarded
+      // separately. Returning it only on the read with a session id keeps that
+      // distinction rather than flattening the two flows into one.
+      if (adapterLoginMatch[2]) {
+        return Response.json({
+          ...session,
+          prompt: {
+            url: "https://auth.openai.com/device",
+            code: "STORY-BOOK",
+          },
+        });
+      }
+      return Response.json(session);
+    }
+
     // Claude's setup-token login, enough of it to watch the panel expand.
     //
     // The point is not the login — it is what the panel does to the card around
