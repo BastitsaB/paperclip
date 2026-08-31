@@ -2,7 +2,6 @@ import { useState } from "react";
 import { MotionConfig } from "motion/react";
 
 import { Checkbox } from "../ui/checkbox";
-import { OpenCodeLogoIcon } from "../OpenCodeLogoIcon";
 import { AgentPreview } from "./AgentPreview";
 import { CredentialModeLink } from "./CredentialModeLink";
 import { FooterNav } from "./FooterNav";
@@ -36,6 +35,14 @@ import { Stepper } from "./Stepper";
  * every piece it composes is presentational.
  */
 
+/**
+ * The two sources the step offers, matching the shipped step's own list.
+ *
+ * Claude Code and Codex are the only adapters the display registry marks
+ * `recommended`, and the real step builds its row from exactly that filter — so
+ * a third tile here would be a design the wizard could never render. OpenCode
+ * was drawn at one point and is deliberately gone.
+ */
 const MODEL_SOURCES: ModelSource[] = [
   {
     id: "claude_local",
@@ -46,16 +53,6 @@ const MODEL_SOURCES: ModelSource[] = [
     id: "codex_local",
     label: "Codex",
     icon: <img src="/brands/codex-color.svg" alt="" className="size-full" />,
-  },
-  {
-    id: "opencode_local",
-    label: "OpenCode",
-    // Sized to 85% of the slot the other two fill. The OpenCode mark is a
-    // filled square where the Claude and Codex marks are open shapes with air
-    // around them, so at matched box sizes it carries noticeably more weight
-    // than either. Set as a share of the slot rather than a pixel size, so it
-    // stays 15% down on its neighbours if the slot ever changes.
-    icon: <OpenCodeLogoIcon className="size-(--sz-85pct)" />,
   },
 ];
 

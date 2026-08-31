@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import type { CSSProperties } from "react";
+import type { ComponentType, CSSProperties } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MotionConfig, motion } from "motion/react";
 import type {
@@ -92,6 +92,7 @@ import {
   onboardingStepPositionFor,
 } from "./onboarding/Stepper";
 import { AgentPreview } from "./onboarding/AgentPreview";
+import { ModelSourceTiles } from "./onboarding/ModelSourceTiles";
 import { FooterNav } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
 import { DEFAULT_AGENT_ROLE } from "../lib/onboarding-agent-role";
@@ -166,6 +167,35 @@ function adapterConfigHasAnthropicApiKey(config: Record<string, unknown>): boole
     return typeof binding.value === "string" && binding.value.trim().length > 0;
   }
   return binding.type === "secret_ref" || binding.type === "user_secret_ref";
+}
+
+/**
+ * Full-colour brand marks for the sources this step offers.
+ *
+ * The registry's own icons are monochrome, drawn to sit in dense config UI
+ * where a row of saturated logos would be noise. This step is the opposite
+ * case: two large tiles carrying the whole choice, where the brand is the
+ * fastest thing to recognise.
+ *
+ * Keyed by adapter type with a fallback, so the row stays registry-driven. An
+ * adapter with no brand file here still renders — with its registry icon —
+ * rather than a gap where a tile should be.
+ */
+const MODEL_SOURCE_BRAND_MARKS: Record<string, string> = {
+  claude_local: "/brands/claude-color.svg",
+  codex_local: "/brands/codex-color.svg",
+};
+
+function ModelSourceMark({
+  type,
+  Fallback,
+}: {
+  type: string;
+  Fallback: ComponentType<{ className?: string }>;
+}) {
+  const brand = MODEL_SOURCE_BRAND_MARKS[type];
+  if (!brand) return <Fallback className="size-full" />;
+  return <img src={brand} alt="" className="size-full" />;
 }
 
 // Exported so tests write/read the exact key the component uses, instead of
@@ -2246,40 +2276,40 @@ function OnboardingWizardInner({
                       eyebrow above them named the mechanism rather than the
                       choice. */}
                   <div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {recommendedAdapters.map((opt) => (
-                        <button
-                          key={opt.type}
-                          className={cn(
-                            "flex flex-col items-center gap-1.5 rounded-md border p-3 text-xs transition-colors relative",
-                            adapterType === opt.type
-                              ? "border-foreground bg-accent"
-                              : "border-border hover:bg-accent/50"
-                          )}
-                          onClick={() => {
-                            const nextType = opt.type;
-                            setAdapterType(nextType);
-                            if (nextType === "codex_local") {
-                              return;
-                            }
-                            if (nextType === "opencode_local") {
-                              setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
-                              return;
-                            }
-                            setModel("");
-                          }}
-                        >
-                          {/* No "Recommended" badge: it sat on both options,
-                              so it recommended nothing and only added the one
-                              saturated colour on the screen. */}
-                          <opt.icon className="h-4 w-4" />
-                          <span className="font-medium">{opt.label}</span>
-                          <span className="text-muted-foreground text-(length:--text-nano)">
-                            {opt.description}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
+                    {/* The row is `ModelSourceTiles`, the same component the
+                        connect-step prototype is drawn with, so the shipped step
+                        and the design under review cannot drift apart.
+
+                        Sources come from `recommendedAdapters`, not a list
+                        written here. That filter is `recommended` in the display
+                        registry, which today means Claude Code and Codex and
+                        nothing else — so the row stays two tiles because the
+                        registry says so, and a third would appear here the day
+                        someone marks one rather than the day someone remembers
+                        to edit this file. */}
+                    <ModelSourceTiles
+                      label="Model source"
+                      sources={recommendedAdapters.map((opt) => ({
+                        id: opt.type,
+                        label: opt.label,
+                        icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
+                      }))}
+                      mode="subscription"
+                      selectedId={
+                        recommendedAdapters.some((opt) => opt.type === adapterType)
+                          ? adapterType
+                          : null
+                      }
+                      onSelect={(id) => {
+                        setAdapterType(id);
+                        if (id === "codex_local") return;
+                        if (id === "opencode_local") {
+                          setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
+                          return;
+                        }
+                        setModel("");
+                      }}
+                    />
 
                     <button
                       className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
