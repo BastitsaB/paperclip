@@ -914,7 +914,7 @@ export function agentRoutes(
 
     let realizedCwd: string | null = null;
     try {
-      const realized = await environmentRuntime.realizeWorktree({
+      const realized = await environmentRuntime.realizeWorkspace({
         environment: testEnvironment,
         lease: leaseRecord.lease,
         // No host workspace to copy for a Test invocation; sandbox/plugin

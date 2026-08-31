@@ -89,11 +89,11 @@ export interface EnvironmentDriverTraits {
   readonly driver: EnvironmentDriver;
   /**
    * True when the driver realizes a workspace through the runtime driver's
-   * `realizeWorktree` method. Read by the run orchestrator
+   * `realizeWorkspace` method. Read by the run orchestrator
    * (`environment-run-orchestrator.ts`, `realizeForRun`) to decide whether to
    * call the driver before it resolves the execution target. The `plugin`
    * driver skips this step: its execution target resolves the workspace
-   * itself, so the orchestrator never calls `realizeWorktree` for it.
+   * itself, so the orchestrator never calls `realizeWorkspace` for it.
    */
   readonly realizesWorkspace: boolean;
   /**

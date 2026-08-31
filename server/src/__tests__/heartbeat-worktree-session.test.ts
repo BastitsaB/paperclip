@@ -1669,7 +1669,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: persistedWorkspaceConfigFingerprint(base),
       nextMetadata: next,
     });
-    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: true,
@@ -1680,9 +1680,9 @@ describe("effective run execution workspace config freshness", () => {
       restoreExistingWorkspace: async () => {
         throw new Error("restore command failed");
       },
-      realizeWorktree,
+      realizeWorkspace,
     })).rejects.toThrow(/restore command failed/);
-    expect(realizeWorktree).not.toHaveBeenCalled();
+    expect(realizeWorkspace).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1708,7 +1708,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: null,
       nextMetadata: metadata,
     });
-    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: reuseRequest.requestedShouldReuseExisting,
@@ -1719,9 +1719,9 @@ describe("effective run execution workspace config freshness", () => {
       restoreExistingWorkspace: reuseRequest.existingExecutionWorkspaceAvailable
         ? async () => ({ id: "workspace-old", warnings: [] })
         : null,
-      realizeWorktree,
+      realizeWorkspace,
     })).rejects.toThrow(/could not be restored/);
-    expect(realizeWorktree).not.toHaveBeenCalled();
+    expect(realizeWorkspace).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1750,7 +1750,7 @@ describe("effective run execution workspace config freshness", () => {
         existingWorkspaceMetadata: null,
         nextMetadata: metadata,
       });
-      const realizeWorktree = vi.fn(async () => ({ id: "pinned-branch-workspace", warnings: [] }));
+      const realizeWorkspace = vi.fn(async () => ({ id: "pinned-branch-workspace", warnings: [] }));
       const restoreExistingWorkspace = vi.fn(async () => ({ id: "workspace-old", warnings: [] }));
 
       const result = await provisionExecutionWorkspaceForFreshnessDecision({
@@ -1760,7 +1760,7 @@ describe("effective run execution workspace config freshness", () => {
         runId: "run-1",
         workspaceConfigFreshness: decision,
         restoreExistingWorkspace,
-        realizeWorktree,
+        realizeWorkspace,
       });
 
       expect(result.executionWorkspace).toEqual({ id: "pinned-branch-workspace", warnings: [] });
@@ -1790,7 +1790,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: persistedWorkspaceConfigFingerprint(metadata),
       nextMetadata: metadata,
     });
-    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: true,
@@ -1799,9 +1799,9 @@ describe("effective run execution workspace config freshness", () => {
       runId: "run-1",
       workspaceConfigFreshness: decision,
       restoreExistingWorkspace: async () => null,
-      realizeWorktree,
+      realizeWorkspace,
     })).rejects.toThrow(/could not be restored/);
-    expect(realizeWorktree).not.toHaveBeenCalled();
+    expect(realizeWorkspace).not.toHaveBeenCalled();
   });
 
   it("formats a safe workspace operation payload for config drift decisions", () => {

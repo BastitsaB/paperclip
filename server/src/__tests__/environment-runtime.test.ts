@@ -3462,7 +3462,7 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
         },
       ],
     };
-    const realized = await runtimeWithPlugin.realizeWorktree({
+    const realized = await runtimeWithPlugin.realizeWorkspace({
       environment,
       lease: acquired.lease,
       workspace: {
@@ -3488,7 +3488,7 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
   });
 
   it("builds the workspace-realization record with referenced sources for a built-in sandbox realize", async () => {
-    // The sandbox driver `realizeWorktree` has two exits: a plugin-backed provider and a
+    // The sandbox driver `realizeWorkspace` has two exits: a plugin-backed provider and a
     // built-in provider. Both must build the same workspace-realization record, so the
     // referenced (mentioned) project sources reach the adapter through `realization.additional`.
     // The test above covers the plugin exit. This test covers the built-in exit (no provider
@@ -3541,7 +3541,7 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
         },
       ],
     };
-    const realized = await runtime.realizeWorktree({
+    const realized = await runtime.realizeWorkspace({
       environment,
       lease: acquired.lease,
       workspace: {
@@ -6589,7 +6589,7 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
       environment,
       lease: acquired.lease,
     });
-    const realized = await runtimeWithPlugin.realizeWorktree({
+    const realized = await runtimeWithPlugin.realizeWorkspace({
       environment,
       lease: acquired.lease,
       workspace: {

@@ -285,7 +285,7 @@ async function pushRemoteOnlyBranch(
   return sha;
 }
 
-function realizeWorktreeForTest(repoRoot: string, repoRef: string | null) {
+function realizeWorkspaceForTest(repoRoot: string, repoRef: string | null) {
   return realizeExecutionWorktree({
     base: {
       baseCwd: repoRoot,
@@ -997,7 +997,7 @@ describe("realizeExecutionWorktree", () => {
     const localHead = await readGit(repoRoot, ["rev-parse", "master"]);
     expect(localHead).not.toBe(originHead);
 
-    const workspace = await realizeWorktreeForTest(repoRoot, null);
+    const workspace = await realizeWorkspaceForTest(repoRoot, null);
 
     expect(workspace.baseRefSha).toBe(originHead);
     expect(await readGit(workspace.cwd, ["rev-parse", "HEAD"])).toBe(originHead);
@@ -1013,7 +1013,7 @@ describe("realizeExecutionWorktree", () => {
     const localHead = await readGit(repoRoot, ["rev-parse", "master"]);
     expect(localHead).not.toBe(originHead);
 
-    const workspace = await realizeWorktreeForTest(repoRoot, "master");
+    const workspace = await realizeWorkspaceForTest(repoRoot, "master");
 
     expect(workspace.repoRef).toBe("origin/master");
     expect(workspace.baseRefSha).toBe(originHead);
@@ -1023,13 +1023,13 @@ describe("realizeExecutionWorktree", () => {
   it("fast-forwards an unstarted reused worktree to the advanced origin/master", async () => {
     const { sourceRepo, remotePath, repoRoot } = await createClonedRepoWithRemote();
 
-    const initial = await realizeWorktreeForTest(repoRoot, null);
+    const initial = await realizeWorkspaceForTest(repoRoot, null);
     const initialHead = await readGit(initial.cwd, ["rev-parse", "HEAD"]);
 
     const advancedHead = await advanceRemoteMaster(sourceRepo, remotePath, "auth-fix.txt");
     expect(advancedHead).not.toBe(initialHead);
 
-    const reused = await realizeWorktreeForTest(repoRoot, null);
+    const reused = await realizeWorkspaceForTest(repoRoot, null);
 
     expect(reused.created).toBe(false);
     expect(reused.cwd).toBe(initial.cwd);
@@ -1041,7 +1041,7 @@ describe("realizeExecutionWorktree", () => {
   it("does not reset a reused worktree that already has task commits", async () => {
     const { sourceRepo, remotePath, repoRoot } = await createClonedRepoWithRemote();
 
-    const initial = await realizeWorktreeForTest(repoRoot, null);
+    const initial = await realizeWorkspaceForTest(repoRoot, null);
     await fs.writeFile(path.join(initial.cwd, "task-work.txt"), "in progress\n", "utf8");
     await runGit(initial.cwd, ["add", "task-work.txt"]);
     await runGit(initial.cwd, ["commit", "-m", "Task work in progress"]);
@@ -1049,7 +1049,7 @@ describe("realizeExecutionWorktree", () => {
 
     await advanceRemoteMaster(sourceRepo, remotePath, "auth-fix.txt");
 
-    const reused = await realizeWorktreeForTest(repoRoot, null);
+    const reused = await realizeWorkspaceForTest(repoRoot, null);
 
     expect(reused.created).toBe(false);
     expect(await readGit(reused.cwd, ["rev-parse", "HEAD"])).toBe(taskHead);
@@ -1061,13 +1061,13 @@ describe("realizeExecutionWorktree", () => {
   it("does not reset a reused worktree with untracked changes", async () => {
     const { sourceRepo, remotePath, repoRoot } = await createClonedRepoWithRemote();
 
-    const initial = await realizeWorktreeForTest(repoRoot, null);
+    const initial = await realizeWorkspaceForTest(repoRoot, null);
     const initialHead = await readGit(initial.cwd, ["rev-parse", "HEAD"]);
     await fs.writeFile(path.join(initial.cwd, "scratch.txt"), "uncommitted scratch\n", "utf8");
 
     await advanceRemoteMaster(sourceRepo, remotePath, "auth-fix.txt");
 
-    const reused = await realizeWorktreeForTest(repoRoot, null);
+    const reused = await realizeWorkspaceForTest(repoRoot, null);
 
     expect(reused.created).toBe(false);
     expect(await readGit(reused.cwd, ["rev-parse", "HEAD"])).toBe(initialHead);
@@ -1082,7 +1082,7 @@ describe("realizeExecutionWorktree", () => {
   it("does not reset a reused worktree with untracked changes when status.showUntrackedFiles=no", async () => {
     const { sourceRepo, remotePath, repoRoot } = await createClonedRepoWithRemote();
 
-    const initial = await realizeWorktreeForTest(repoRoot, null);
+    const initial = await realizeWorkspaceForTest(repoRoot, null);
     const initialHead = await readGit(initial.cwd, ["rev-parse", "HEAD"]);
     // Without `--untracked-files=all`, this config hides untracked files from
     // `git status --porcelain`, which would let the clean-tree guard pass and a
@@ -1092,7 +1092,7 @@ describe("realizeExecutionWorktree", () => {
 
     await advanceRemoteMaster(sourceRepo, remotePath, "auth-fix.txt");
 
-    const reused = await realizeWorktreeForTest(repoRoot, null);
+    const reused = await realizeWorkspaceForTest(repoRoot, null);
 
     expect(reused.created).toBe(false);
     expect(await readGit(reused.cwd, ["rev-parse", "HEAD"])).toBe(initialHead);
@@ -1112,7 +1112,7 @@ describe("realizeExecutionWorktree", () => {
     await expect(readGit(repoRoot, ["rev-parse", "--verify", "fix/foo"])).rejects.toThrow();
     await expect(readGit(repoRoot, ["rev-parse", "--verify", "origin/fix/foo"])).rejects.toThrow();
 
-    const workspace = await realizeWorktreeForTest(repoRoot, "fix/foo");
+    const workspace = await realizeWorkspaceForTest(repoRoot, "fix/foo");
 
     expect(workspace.created).toBe(true);
     expect(workspace.repoRef).toBe("origin/fix/foo");
@@ -1126,7 +1126,7 @@ describe("realizeExecutionWorktree", () => {
 
     await expect(readGit(repoRoot, ["rev-parse", "--verify", "origin/fix/bar"])).rejects.toThrow();
 
-    const workspace = await realizeWorktreeForTest(repoRoot, "origin/fix/bar");
+    const workspace = await realizeWorkspaceForTest(repoRoot, "origin/fix/bar");
 
     expect(workspace.created).toBe(true);
     expect(workspace.repoRef).toBe("origin/fix/bar");
@@ -1137,7 +1137,7 @@ describe("realizeExecutionWorktree", () => {
   it("stops before git worktree add when the base ref is absent on origin", async () => {
     const { repoRoot } = await createClonedRepoWithRemote();
 
-    const error = await realizeWorktreeForTest(repoRoot, "fix/does-not-exist").then(
+    const error = await realizeWorkspaceForTest(repoRoot, "fix/does-not-exist").then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -1159,17 +1159,17 @@ describe("realizeExecutionWorktree", () => {
     // The unqualified form and the remote-tracking form name the same remote
     // branch. Both must map to one `recoveryIdentityRef`, so recovery does not
     // treat a spelling change as a new blocker.
-    const unqualified = await realizeWorktreeForTest(repoRoot, "fix/absent").then(
+    const unqualified = await realizeWorkspaceForTest(repoRoot, "fix/absent").then(
       () => null,
       (caught: unknown) => caught,
     );
-    const remoteTracking = await realizeWorktreeForTest(repoRoot, "origin/fix/absent").then(
+    const remoteTracking = await realizeWorkspaceForTest(repoRoot, "origin/fix/absent").then(
       () => null,
       (caught: unknown) => caught,
     );
     // The full remote-tracking spelling names the same branch as well. It must
     // map to the same canonical recovery identity, not to its raw spelling.
-    const fullRemoteTracking = await realizeWorktreeForTest(repoRoot, "refs/remotes/origin/fix/absent").then(
+    const fullRemoteTracking = await realizeWorkspaceForTest(repoRoot, "refs/remotes/origin/fix/absent").then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -1196,7 +1196,7 @@ describe("realizeExecutionWorktree", () => {
     // fails, so the ref never resolves and the resolver reports the fetch error.
     await runGit(repoRoot, ["remote", "set-url", "origin", path.join(os.tmpdir(), "paperclip-missing-remote.git")]);
 
-    const error = await realizeWorktreeForTest(repoRoot, "fix/unreachable").then(
+    const error = await realizeWorkspaceForTest(repoRoot, "fix/unreachable").then(
       () => null,
       (caught: unknown) => caught,
     );

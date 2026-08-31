@@ -47,7 +47,7 @@ const mockEnvironmentService = vi.hoisted(() => ({
 
 const mockEnvironmentRuntime = vi.hoisted(() => ({
   acquireRunLease: vi.fn(),
-  realizeWorktree: vi.fn(),
+  realizeWorkspace: vi.fn(),
   getDriver: vi.fn(() => ({ releaseRunLease: vi.fn(async () => undefined) })),
 }));
 

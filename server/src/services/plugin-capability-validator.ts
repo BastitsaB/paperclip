@@ -140,7 +140,7 @@ const OPERATION_CAPABILITIES: Record<string, readonly PluginCapability[]> = {
   "environment.resumeLease": ["environment.drivers.register"],
   "environment.releaseLease": ["environment.drivers.register"],
   "environment.destroyLease": ["environment.drivers.register"],
-  "environment.realizeWorktree": ["environment.drivers.register"],
+  "environment.realizeWorkspace": ["environment.drivers.register"],
   "environment.execute": ["environment.drivers.register"],
   "environment.startInteractiveSetup": ["environment.drivers.register"],
   "environment.getInteractiveSetup": ["environment.drivers.register"],

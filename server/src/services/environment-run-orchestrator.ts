@@ -389,7 +389,7 @@ export function environmentRunOrchestrator(
           typeof lease.metadata?.remoteCwd === "string" && lease.metadata.remoteCwd.trim().length > 0
             ? lease.metadata.remoteCwd
             : undefined;
-        const workspaceRealizationResult = await environmentRuntime.realizeWorktree({
+        const workspaceRealizationResult = await environmentRuntime.realizeWorkspace({
           environment,
           lease,
           workspace: {
@@ -428,7 +428,7 @@ export function environmentRunOrchestrator(
     // The host `provisionCommand` runs on the host worktree during the
     // `workspace_provision` step, before the run reaches the environment.
     // A `sandbox`-driver environment does not receive the repo tree here. The
-    // sandbox driver `realizeWorktree` step only creates the remote folder.
+    // sandbox driver `realizeWorkspace` step only creates the remote folder.
     // The adapter uploads the provisioned tree later, in its `stage.sync` step.
     // So the host command must not run inside the still-empty sandbox; it fails
     // there (exit 127). Skip the step for `sandbox`, and keep the existing skip
