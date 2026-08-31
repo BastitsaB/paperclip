@@ -654,6 +654,36 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       await act(async () => root.unmount());
     });
 
+    // The Connect handler reuses a passing probe instead of re-running it, so the
+    // effect that clears the cache has to name every input to the configuration
+    // the probe tested. `credentialMode` and `apiKey` were missing from it, and
+    // the gap is reachable: the probe and the hire share one try/catch, so a hire
+    // that throws leaves the pass in state. Switching to a key and pressing
+    // Connect again then hired against a key nothing had tested.
+    it("re-probes rather than reusing a pass when the credential mode changes", async () => {
+      mockAgentsApi.testEnvironment.mockResolvedValue({
+        adapterType: "claude_local",
+        status: "pass" as const,
+        checks: [],
+        testedAt: new Date().toISOString(),
+      });
+      // The hire fails, which is what leaves the passing probe behind.
+      mockAgentsApi.hire.mockRejectedValueOnce(new Error("network went away"));
+
+      const { root, clickByText } = await openConnectStep();
+
+      await clickByText((t) => t.startsWith("Connect"));
+      expect(mockAgentsApi.testEnvironment).toHaveBeenCalledTimes(1);
+
+      // Switch to API keys, which changes the configuration the hire will send.
+      await clickByText((t) => t.startsWith("Use API keys"));
+      await clickByText((t) => t.startsWith("Connect"));
+
+      expect(mockAgentsApi.testEnvironment).toHaveBeenCalledTimes(2);
+
+      await act(async () => root.unmount());
+    });
+
     it("does not open the create path on a cached warn result that holds adapter_auth_missing", async () => {
       mockAgentsApi.testEnvironment.mockResolvedValue({
         adapterType: "claude_local",

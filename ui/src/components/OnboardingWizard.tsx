@@ -1048,12 +1048,22 @@ function OnboardingWizardInner({
     command.trim() ||
     (COMMAND_PLACEHOLDERS[adapterType] ?? adapterType.replace(/_local$/, ""));
 
+  // Throw the cached probe away whenever the thing it probed changes. Every
+  // input to `buildAdapterConfig` belongs in this list, `credentialMode` and
+  // `apiKey` included: the Connect handler reuses a passing result instead of
+  // re-probing, so a dependency missing here is a hire that skips the check.
+  //
+  // That is reachable rather than theoretical. The hire runs after the probe
+  // inside one try/catch, so a hire that fails — a network error, a server
+  // error — leaves the pass sitting in state. Switch to an API key, paste one,
+  // press Connect again, and without these two the wizard would hire against a
+  // key nothing ever tested.
   useEffect(() => {
     if (step !== 4) return;
     setAdapterEnvResult(null);
     adapterEnvResultAppliedStoredLoginRef.current = false;
     setAdapterEnvError(null);
-  }, [step, adapterType, model, command, args, url]);
+  }, [step, adapterType, model, command, args, url, credentialMode, apiKey]);
 
   const selectedModel = (adapterModels ?? []).find((m) => m.id === model);
   const hasAnthropicApiKeyOverrideCheck =
