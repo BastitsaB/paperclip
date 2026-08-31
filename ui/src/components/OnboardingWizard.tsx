@@ -2449,12 +2449,18 @@ function OnboardingWizardInner({
                         }}
                       />
                     ) : (
-                      /* Already authenticated for this source. Saying so is
-                         better than an empty card: the canvas is open because a
-                         source is selected, and a blank one reads as something
-                         that failed to load. */
+                      /* No panel to show, and the two reasons for that are not
+                         the same news. Saying either is better than an empty
+                         card — the canvas is open because a source is selected,
+                         and a blank one reads as something that failed to load —
+                         but they must not be conflated: telling someone with no
+                         sandbox that they are "already signed in" on it is
+                         false, and it hides the one thing actually blocking
+                         them. */
                       <p className="text-xs text-muted-foreground">
-                        This source is already signed in on the managed sandbox.
+                        {canShowAdapterLogin
+                          ? "This source is already signed in on the managed sandbox."
+                          : "No managed sandbox is available to sign in against yet."}
                       </p>
                     )}
                   </ConnectInputCanvas>
