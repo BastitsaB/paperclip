@@ -616,7 +616,7 @@ function OnboardingWizardInner({
    * customer on the step to try again — and without this each press would store
    * another copy of the same credential.
    */
-  const apiKeySecretRef = useRef<{ key: string; secretId: string } | null>(null);
+  const apiKeySecretRef = useRef<{ key: string } | null>(null);
   createdCompanyIdRef.current = createdCompanyId;
 
   // The mission of the company actually in hand, which is not always the one
@@ -1269,36 +1269,66 @@ function OnboardingWizardInner({
   }
 
   /**
-   * Store the typed key as a company secret and return its id, so the hire can
-   * reference it instead of carrying it.
+   * Store the typed key as the customer's own user secret, and report whether it
+   * is in place.
    *
-   * Returns null on failure, and sets the error. Callers must treat null as a
-   * stop: there is deliberately no path here that hands back the raw key, because
+   * A user secret rather than a company one, to match the subscription half of
+   * this very step: signing in stores the Claude token as a user secret and
+   * binds a `user_secret_ref`. Two credential modes on one step that scoped
+   * their secrets differently would be hard to justify and easy to get wrong
+   * later. It also keeps the key to the person who typed it instead of exposing
+   * it to everyone with company secret access, and agent runs still resolve it
+   * through the company's responsible user.
+   *
+   * A user secret needs a definition to hang off. The Claude token's is fixed
+   * and server-owned; there is no such definition for API keys, so onboarding
+   * creates one on first use. That needs company owner or admin rights, which
+   * whoever just created this company in onboarding has.
+   *
+   * Returns false on failure, having set the error. Callers must treat false as
+   * a stop: there is deliberately no path that hands the raw key back, because
    * the only thing left to do with it would be to embed it.
    */
-  async function storeApiKeySecret(companyId: string): Promise<string | null> {
+  async function storeApiKeyUserSecret(companyId: string): Promise<boolean> {
     const key = apiKey.trim();
-    const remembered = apiKeySecretRef.current;
-    if (remembered && remembered.key === key) return remembered.secretId;
+    const envKey = apiKeyEnvKeyFor(adapterType);
+    if (apiKeySecretRef.current?.key === key) return true;
     try {
-      const created = await secretsApi.create(companyId, {
-        name: apiKeyEnvKeyFor(adapterType),
-        value: key,
-        description: "Added while connecting a model during onboarding.",
-      });
-      apiKeySecretRef.current = { key, secretId: created.id };
-      return created.id;
+      const entries = await secretsApi.listMyUserSecrets(companyId);
+      const existing = entries.find((entry) => entry.definition.key === envKey);
+      const definitionId =
+        existing?.definition.id ??
+        (
+          await secretsApi.createUserSecretDefinition(companyId, {
+            key: envKey,
+            name: `${envKey} for onboarding`,
+            description: "Created while connecting a model during onboarding.",
+          })
+        ).id;
+      // Rotate rather than create when a value is already stored, because
+      // creating a second value for one definition is what the server refuses.
+      if (existing?.secret) {
+        await secretsApi.rotateMyUserSecret(companyId, existing.secret.id, { value: key });
+      } else {
+        await secretsApi.createMyUserSecret(companyId, {
+          definitionId,
+          definitionKey: envKey,
+          value: key,
+        });
+      }
+      apiKeySecretRef.current = { key };
+      return true;
     } catch (err) {
       setError(
         err instanceof Error
           ? `Could not store the API key: ${err.message}`
           : "Could not store the API key.",
       );
-      return null;
+      return false;
     }
   }
 
-  function buildAdapterConfig(apiKeySecretId?: string | null): Record<string, unknown> {
+  function buildAdapterConfig(bindApiKey = false): Record<string, unknown> {
     const adapter = getUIAdapter(adapterType);
     const config = adapter.buildAdapterConfig({
       ...defaultCreateValues,
@@ -1340,24 +1370,24 @@ function OnboardingWizardInner({
     // config after switching back to a subscription is what the server rejects
     // alongside the Claude OAuth binding.
     //
-    // A `secret_ref`, never the key itself. The adapter configuration is
+    // A reference, never the key itself. The adapter configuration is
     // persisted and revisioned, so a `{ type: "plain", value }` here would leave
     // a live credential at rest in every copy of it. This mirrors
     // `buildFixedClaudeOAuthBinding`, which holds a reference to the stored
     // Claude token for the same reason.
     //
-    // Guarded on the id rather than on the key: the caller stores the secret
-    // first and passes what came back. If that failed there is no id, and the
-    // right outcome is a configuration with no credential — which the hire then
-    // blocks on — rather than one that quietly falls back to embedding the value.
-    if (credentialMode === "api" && apiKeySecretId) {
+    // Guarded on the caller having stored the secret, not on the key being
+    // present. If storing failed this stays false, and the right outcome is a
+    // configuration with no credential — which the hire then blocks on — rather
+    // than one that quietly falls back to embedding the value.
+    if (credentialMode === "api" && bindApiKey) {
       const env =
         typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
           ? { ...(config.env as Record<string, unknown>) }
           : {};
       env[apiKeyEnvKeyFor(adapterType)] = {
-        type: "secret_ref",
-        secretId: apiKeySecretId,
+        type: "user_secret_ref",
+        key: apiKeyEnvKeyFor(adapterType),
         version: "latest",
       };
       config.env = env;
@@ -1679,12 +1709,12 @@ function OnboardingWizardInner({
       // Store the key before anything is built from it, so both the probe and the
       // hire describe it the same way — as a reference. A failure here stops the
       // hire rather than falling through to a configuration with no credential.
-      let apiKeySecretId: string | null = null;
+      let apiKeyStored = false;
       if (credentialMode === "api" && apiKey.trim()) {
-        apiKeySecretId = await storeApiKeySecret(createdCompanyId);
-        if (!apiKeySecretId) return;
+        apiKeyStored = await storeApiKeyUserSecret(createdCompanyId);
+        if (!apiKeyStored) return;
       }
-      const baseAdapterConfig = buildAdapterConfig(apiKeySecretId);
+      const baseAdapterConfig = buildAdapterConfig(apiKeyStored);
       let storedClaudeLogin: ClaudeOAuthTokenStatusResponse | null = null;
       if (
         adapterType === "claude_local" &&

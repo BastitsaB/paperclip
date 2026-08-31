@@ -92,7 +92,10 @@ const mockApprovalsApi = vi.hoisted(() => ({
   create: vi.fn(),
 }));
 const mockSecretsApi = vi.hoisted(() => ({
-  create: vi.fn(),
+  listMyUserSecrets: vi.fn(),
+  createUserSecretDefinition: vi.fn(),
+  createMyUserSecret: vi.fn(),
+  rotateMyUserSecret: vi.fn(),
 }));
 const mockIssuesApi = vi.hoisted(() => ({
   create: vi.fn(),
@@ -680,6 +683,11 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       // canvas, and no field to type into.
       beforeEach(() => {
         mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+        // No definition and no stored value yet: the first customer to type a key.
+        mockSecretsApi.listMyUserSecrets.mockResolvedValue([]);
+        mockSecretsApi.createUserSecretDefinition.mockResolvedValue({ id: "def-1" });
+        mockSecretsApi.createMyUserSecret.mockResolvedValue({ id: "secret-abc" });
+        mockSecretsApi.rotateMyUserSecret.mockResolvedValue({ id: "secret-existing" });
       });
 
       async function connectWithApiKey() {
@@ -696,24 +704,24 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
         return handles;
       }
 
-      it("is stored as a secret and referenced, never carried in the hire", async () => {
-        mockSecretsApi.create.mockResolvedValue({ id: "secret-abc" });
+      it("is stored as the user's own secret and referenced, never carried in the hire", async () => {
         const { root } = await connectWithApiKey();
 
-        expect(mockSecretsApi.create).toHaveBeenCalledTimes(1);
-        const [, createBody] = mockSecretsApi.create.mock.calls.at(-1) as [
+        expect(mockSecretsApi.createMyUserSecret).toHaveBeenCalledTimes(1);
+        const [, createBody] = mockSecretsApi.createMyUserSecret.mock.calls.at(-1) as [
           string,
-          { name: string; value: string },
+          { definitionKey: string; value: string },
         ];
-        expect(createBody.name).toBe("ANTHROPIC_API_KEY");
+        expect(createBody.definitionKey).toBe("ANTHROPIC_API_KEY");
         expect(createBody.value).toBe(KEY);
 
         const hireBody = (mockAgentsApi.hire.mock.calls.at(-1) as unknown[])[1] as {
           adapterConfig: { env?: Record<string, unknown> };
         };
+        // The same binding kind the subscription half of this step produces.
         expect(hireBody.adapterConfig.env?.ANTHROPIC_API_KEY).toEqual({
-          type: "secret_ref",
-          secretId: "secret-abc",
+          type: "user_secret_ref",
+          key: "ANTHROPIC_API_KEY",
           version: "latest",
         });
         // The whole payload, not just that one field: the point is that the key
@@ -723,10 +731,46 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
         await act(async () => root.unmount());
       });
 
+      // Onboarding is the first thing to need this definition, so it creates it.
+      it("creates the definition once, then reuses it", async () => {
+        await connectWithApiKey();
+        expect(mockSecretsApi.createUserSecretDefinition).toHaveBeenCalledTimes(1);
+
+        mockSecretsApi.listMyUserSecrets.mockResolvedValue([
+          { definition: { id: "def-1", key: "ANTHROPIC_API_KEY" }, secret: null },
+        ]);
+        const { root } = await connectWithApiKey();
+
+        expect(mockSecretsApi.createUserSecretDefinition).toHaveBeenCalledTimes(1);
+
+        await act(async () => root.unmount());
+      });
+
+      // A second value against one definition is what the server refuses, so a
+      // customer who already has a key stored must rotate rather than add.
+      it("rotates an existing value instead of storing a second one", async () => {
+        mockSecretsApi.listMyUserSecrets.mockResolvedValue([
+          {
+            definition: { id: "def-1", key: "ANTHROPIC_API_KEY" },
+            secret: { id: "secret-existing" },
+          },
+        ]);
+        const { root } = await connectWithApiKey();
+
+        expect(mockSecretsApi.rotateMyUserSecret).toHaveBeenCalledWith(
+          expect.any(String),
+          "secret-existing",
+          { value: KEY },
+        );
+        expect(mockSecretsApi.createMyUserSecret).not.toHaveBeenCalled();
+
+        await act(async () => root.unmount());
+      });
+
       // The one outcome that must never happen is a hire that falls back to
       // embedding the key because storing it failed.
       it("blocks the hire when the key cannot be stored", async () => {
-        mockSecretsApi.create.mockRejectedValue(new Error("vault unreachable"));
+        mockSecretsApi.createMyUserSecret.mockRejectedValue(new Error("vault unreachable"));
         const { root } = await connectWithApiKey();
 
         expect(mockAgentsApi.hire).not.toHaveBeenCalled();
@@ -736,13 +780,12 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       });
 
       it("stores one secret when Connect is pressed twice with the same key", async () => {
-        mockSecretsApi.create.mockResolvedValue({ id: "secret-abc" });
         mockAgentsApi.hire.mockRejectedValueOnce(new Error("network went away"));
         const { root, clickByText } = await connectWithApiKey();
 
         await clickByText((t) => t.startsWith("Connect"));
 
-        expect(mockSecretsApi.create).toHaveBeenCalledTimes(1);
+        expect(mockSecretsApi.createMyUserSecret).toHaveBeenCalledTimes(1);
 
         await act(async () => root.unmount());
       });
