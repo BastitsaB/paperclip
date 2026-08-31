@@ -118,7 +118,7 @@ import {
   companySkillService,
   companyService,
   companySearchService,
-  executionWorkspaceService,
+  executionWorktreeService,
   goalService,
   heartbeatService,
   issueApprovalService,
@@ -190,7 +190,7 @@ import {
 } from "../services/issue-dependency-wakeups.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import {
-  executionWorkspaceService as executionWorkspaceServiceDirect,
+  executionWorktreeService as executionWorkspaceServiceDirect,
   STALE_REOPEN_PENDING_CONSUMPTION_GRACE_MS,
 } from "../services/execution-worktrees.js";
 import { decisionTrainingService } from "../services/decision-training.js";

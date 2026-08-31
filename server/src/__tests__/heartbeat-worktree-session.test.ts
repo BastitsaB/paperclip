@@ -770,7 +770,7 @@ describe("assertGitWorktreeBaseWorkspaceReady", () => {
   });
 
   it("allows isolated workspace with no explicit strategy type even when base is agent_home", async () => {
-    // No workspaceStrategy.type → realizeExecutionWorkspace defaults to project_primary (not git_worktree),
+    // No workspaceStrategy.type → realizeExecutionWorktree defaults to project_primary (not git_worktree),
     // so the guard must not fire. This prevents false workspace_validation_failed for configs that omit type.
     const fallbackCwd = resolveDefaultAgentWorkspaceDir("agent-1");
     await expect(assertGitWorktreeBaseWorkspaceReady({
@@ -1669,7 +1669,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: persistedWorkspaceConfigFingerprint(base),
       nextMetadata: next,
     });
-    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: true,
@@ -1680,9 +1680,9 @@ describe("effective run execution workspace config freshness", () => {
       restoreExistingWorkspace: async () => {
         throw new Error("restore command failed");
       },
-      realizeWorkspace,
+      realizeWorktree,
     })).rejects.toThrow(/restore command failed/);
-    expect(realizeWorkspace).not.toHaveBeenCalled();
+    expect(realizeWorktree).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1708,7 +1708,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: null,
       nextMetadata: metadata,
     });
-    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: reuseRequest.requestedShouldReuseExisting,
@@ -1719,9 +1719,9 @@ describe("effective run execution workspace config freshness", () => {
       restoreExistingWorkspace: reuseRequest.existingExecutionWorkspaceAvailable
         ? async () => ({ id: "workspace-old", warnings: [] })
         : null,
-      realizeWorkspace,
+      realizeWorktree,
     })).rejects.toThrow(/could not be restored/);
-    expect(realizeWorkspace).not.toHaveBeenCalled();
+    expect(realizeWorktree).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1750,7 +1750,7 @@ describe("effective run execution workspace config freshness", () => {
         existingWorkspaceMetadata: null,
         nextMetadata: metadata,
       });
-      const realizeWorkspace = vi.fn(async () => ({ id: "pinned-branch-workspace", warnings: [] }));
+      const realizeWorktree = vi.fn(async () => ({ id: "pinned-branch-workspace", warnings: [] }));
       const restoreExistingWorkspace = vi.fn(async () => ({ id: "workspace-old", warnings: [] }));
 
       const result = await provisionExecutionWorkspaceForFreshnessDecision({
@@ -1760,7 +1760,7 @@ describe("effective run execution workspace config freshness", () => {
         runId: "run-1",
         workspaceConfigFreshness: decision,
         restoreExistingWorkspace,
-        realizeWorkspace,
+        realizeWorktree,
       });
 
       expect(result.executionWorkspace).toEqual({ id: "pinned-branch-workspace", warnings: [] });
@@ -1790,7 +1790,7 @@ describe("effective run execution workspace config freshness", () => {
       existingWorkspaceMetadata: persistedWorkspaceConfigFingerprint(metadata),
       nextMetadata: metadata,
     });
-    const realizeWorkspace = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
+    const realizeWorktree = vi.fn(async () => ({ id: "fallback-workspace", warnings: [] }));
 
     await expect(provisionExecutionWorkspaceForFreshnessDecision({
       requestedShouldReuseExisting: true,
@@ -1799,9 +1799,9 @@ describe("effective run execution workspace config freshness", () => {
       runId: "run-1",
       workspaceConfigFreshness: decision,
       restoreExistingWorkspace: async () => null,
-      realizeWorkspace,
+      realizeWorktree,
     })).rejects.toThrow(/could not be restored/);
-    expect(realizeWorkspace).not.toHaveBeenCalled();
+    expect(realizeWorktree).not.toHaveBeenCalled();
   });
 
   it("formats a safe workspace operation payload for config drift decisions", () => {

@@ -33,7 +33,7 @@ import {
   listConfiguredRuntimeServiceEntries,
   normalizeAdapterManagedRuntimeServices,
   reconcilePersistedRuntimeServicesOnStartup,
-  realizeExecutionWorkspace,
+  realizeExecutionWorktree,
   refreshRemoteTrackingBaseRef,
   releaseRuntimeServicesForRun,
   UnresolvedWorkspaceBaseRefError,
@@ -45,8 +45,8 @@ import {
   resolveShell,
   sanitizeRuntimeServiceBaseEnv,
   setWorkspaceRuntimeExposureDepsForTests,
-  startRuntimeServicesForWorkspaceControl,
-  stopRuntimeServicesForExecutionWorkspace,
+  startRuntimeServicesForWorktreeControl,
+  stopRuntimeServicesForExecutionWorktree,
   stopRuntimeServicesForProjectWorkspace,
   WORKSPACE_RUNTIME_PORT_ALLOCATION_ATTEMPTS,
   type RealizedExecutionWorkspace,
@@ -286,7 +286,7 @@ async function pushRemoteOnlyBranch(
 }
 
 function realizeWorktreeForTest(repoRoot: string, repoRef: string | null) {
-  return realizeExecutionWorkspace({
+  return realizeExecutionWorktree({
     base: {
       baseCwd: repoRoot,
       source: "project_primary",
@@ -765,7 +765,7 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
   });
 });
 
-describe("realizeExecutionWorkspace", () => {
+describe("realizeExecutionWorktree", () => {
   it("defaults new git worktrees to freshly fetched origin/master", async () => {
     const sourceRepo = await createTempRepo("master");
     const remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-remote-"));
@@ -785,7 +785,7 @@ describe("realizeExecutionWorkspace", () => {
     const expectedRemoteHead = await readGit(sourceRepo, ["rev-parse", "master"]);
     expect(await readGit(repoRoot, ["rev-parse", "origin/master"])).not.toBe(expectedRemoteHead);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -844,9 +844,9 @@ describe("realizeExecutionWorkspace", () => {
         name: "Codex Coder",
         companyId: "company-1",
       },
-    } satisfies Parameters<typeof realizeExecutionWorkspace>[0];
+    } satisfies Parameters<typeof realizeExecutionWorktree>[0];
 
-    const first = await realizeExecutionWorkspace(realizationInput);
+    const first = await realizeExecutionWorktree(realizationInput);
 
     expect(first.strategy).toBe("git_worktree");
     expect(first.created).toBe(true);
@@ -855,7 +855,7 @@ describe("realizeExecutionWorkspace", () => {
     expect(first.cwd).toContain(path.join(".paperclip", "worktrees"));
     await expect(fs.stat(path.join(first.cwd, ".git"))).resolves.toBeTruthy();
 
-    const second = await realizeExecutionWorkspace({
+    const second = await realizeExecutionWorktree({
       ...realizationInput,
       recordedBranchOwnership: {
         branchName: first.branchName!,
@@ -886,7 +886,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/provision-worktree.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add repository worktree provisioner"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -921,7 +921,7 @@ describe("realizeExecutionWorkspace", () => {
   it("warns when reusing a git worktree whose base ref has advanced", async () => {
     const repoRoot = await createTempRepo();
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -953,7 +953,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "server-auth-fix.txt"]);
     await runGit(repoRoot, ["commit", "-m", "Add auth runtime fix"]);
 
-    const reused = await realizeExecutionWorkspace({
+    const reused = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1216,7 +1216,7 @@ describe("realizeExecutionWorkspace", () => {
     await fs.mkdir(poisonedPath, { recursive: true });
 
     await expect(
-      realizeExecutionWorkspace({
+      realizeExecutionWorktree({
         base: {
           baseCwd: repoRoot,
           source: "project_primary",
@@ -1253,7 +1253,7 @@ describe("realizeExecutionWorkspace", () => {
     await fs.mkdir(path.dirname(currentWorktree), { recursive: true });
     await execFileAsync("git", ["worktree", "add", "-b", branchName, currentWorktree, "HEAD"], { cwd: repoRoot });
 
-    const realized = await realizeExecutionWorkspace({
+    const realized = await realizeExecutionWorktree({
       base: {
         baseCwd: currentWorktree,
         source: "project_primary",
@@ -1290,7 +1290,7 @@ describe("realizeExecutionWorkspace", () => {
     const repoRoot = await createTempRepo();
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1319,7 +1319,7 @@ describe("realizeExecutionWorkspace", () => {
 
     await runGit(initial.cwd, ["checkout", "-b", "unexpected-branch"]);
 
-    const repaired = await realizeExecutionWorkspace({
+    const repaired = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1376,7 +1376,7 @@ describe("realizeExecutionWorkspace", () => {
     await fs.mkdir(path.dirname(existingWorktree), { recursive: true });
     await execFileAsync("git", ["worktree", "add", "-b", branchName, existingWorktree, "HEAD"], { cwd: repoRoot });
 
-    const realized = await realizeExecutionWorkspace({
+    const realized = await realizeExecutionWorktree({
       base: {
         baseCwd: existingWorktree,
         source: "project_primary",
@@ -1422,7 +1422,7 @@ describe("realizeExecutionWorkspace", () => {
   it("slugifies unsafe issue titles for branch names and worktree folders", async () => {
     const repoRoot = await createTempRepo();
 
-    const realized = await realizeExecutionWorkspace({
+    const realized = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1459,7 +1459,7 @@ describe("realizeExecutionWorkspace", () => {
   it("preserves intentional slashes and dots from the branch template", async () => {
     const repoRoot = await createTempRepo();
 
-    const realized = await realizeExecutionWorkspace({
+    const realized = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1507,7 +1507,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/provision.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add worktree provision script"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1545,7 +1545,7 @@ describe("realizeExecutionWorkspace", () => {
       "true\n",
     );
 
-    const reused = await realizeExecutionWorkspace({
+    const reused = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1591,7 +1591,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/provision.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add initial provision script"]);
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1635,7 +1635,7 @@ describe("realizeExecutionWorkspace", () => {
 
     await expect(fs.readFile(path.join(initial.cwd, "scripts", "provision.sh"), "utf8")).resolves.toContain("v1");
 
-    const reused = await realizeExecutionWorkspace({
+    const reused = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -1791,8 +1791,8 @@ describe("realizeExecutionWorkspace", () => {
           name: "Codex Coder",
           companyId: "company-1",
         },
-      } satisfies Parameters<typeof realizeExecutionWorkspace>[0];
-      const workspace = await realizeExecutionWorkspace(workspaceInput);
+      } satisfies Parameters<typeof realizeExecutionWorktree>[0];
+      const workspace = await realizeExecutionWorktree(workspaceInput);
 
       const configPath = path.join(workspace.cwd, ".paperclip", "config.json");
       const envPath = path.join(workspace.cwd, ".paperclip", ".env");
@@ -1842,7 +1842,7 @@ describe("realizeExecutionWorkspace", () => {
       );
       await fs.writeFile(envPath, `${envContents}PAPERCLIP_WORKTREE_COLOR="#112233"\n`, "utf8");
 
-      const reusedWorkspace = await realizeExecutionWorkspace(workspaceInput);
+      const reusedWorkspace = await realizeExecutionWorktree(workspaceInput);
       const reusedConfigContents = JSON.parse(await fs.readFile(configPath, "utf8"));
       const reusedEnvContents = await fs.readFile(envPath, "utf8");
 
@@ -1938,7 +1938,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "."]);
     await runGit(repoRoot, ["commit", "-m", "Add pnpm workspace fixture"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2019,7 +2019,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "package.json", "pnpm-lock.yaml", "scripts/provision-worktree.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add minimal provision fixture"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2436,7 +2436,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "."]);
     await runGit(repoRoot, ["commit", "-m", "Add pnpm workspace fixture"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2493,7 +2493,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/provision.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add recorder provision script"]);
 
-    await realizeExecutionWorkspace({
+    await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2547,7 +2547,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/noisy.js"]);
     await runGit(repoRoot, ["commit", "-m", "Add noisy provision script"]);
 
-    await realizeExecutionWorkspace({
+    await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2596,7 +2596,7 @@ describe("realizeExecutionWorkspace", () => {
     const expectedHead = (await execFileAsync("git", ["rev-parse", branchName], { cwd: repoRoot })).stdout.trim();
     await runGit(repoRoot, ["checkout", "main"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2653,7 +2653,7 @@ describe("realizeExecutionWorkspace", () => {
     const expectedHead = (await execFileAsync("git", ["rev-parse", branchName], { cwd: repoRoot })).stdout.trim();
     await runGit(repoRoot, ["checkout", "main"]);
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2979,7 +2979,7 @@ describe("realizeExecutionWorkspace", () => {
   it("adopts an existing persisted git worktree when the checked-out branch is forward of the recorded branch", async () => {
     const repoRoot = await createTempRepo();
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3432,7 +3432,7 @@ describe("realizeExecutionWorkspace", () => {
     await runGit(repoRoot, ["add", "scripts/restore.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add reprovision script"]);
 
-    const initial = await realizeExecutionWorkspace({
+    const initial = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3610,7 +3610,7 @@ describe("realizeExecutionWorkspace", () => {
 
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3662,7 +3662,7 @@ describe("realizeExecutionWorkspace", () => {
 
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3700,7 +3700,7 @@ describe("realizeExecutionWorkspace", () => {
   it("removes a created git worktree and branch during cleanup", async () => {
     const repoRoot = await createTempRepo();
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3789,13 +3789,13 @@ describe("realizeExecutionWorkspace", () => {
         name: "Codex Coder",
         companyId: "company-1",
       },
-    } satisfies Parameters<typeof realizeExecutionWorkspace>[0];
+    } satisfies Parameters<typeof realizeExecutionWorktree>[0];
 
-    const initial = await realizeExecutionWorkspace(realizationInput);
+    const initial = await realizeExecutionWorktree(realizationInput);
     expect(initial.branchCreatedByRuntime).toBe(true);
     const verifiedBranchTip = await readGit(initial.cwd, ["rev-parse", "HEAD"]);
 
-    const reused = await realizeExecutionWorkspace({
+    const reused = await realizeExecutionWorktree({
       ...realizationInput,
       recordedBranchOwnership: {
         branchName: initial.branchName!,
@@ -3841,7 +3841,7 @@ describe("realizeExecutionWorkspace", () => {
 
   it("keeps a runtime-created branch when its tip changes after guarded worktree removal", async () => {
     const repoRoot = await createTempRepo();
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3906,7 +3906,7 @@ describe("realizeExecutionWorkspace", () => {
   it("keeps an unmerged runtime-created branch and warns instead of force deleting it", async () => {
     const repoRoot = await createTempRepo();
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -3973,7 +3973,7 @@ describe("realizeExecutionWorkspace", () => {
     const repoRoot = await createTempRepo();
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -4140,8 +4140,8 @@ describe("ensureRuntimeServicesForRun", () => {
 
     try {
       const [first, second] = await Promise.all([
-        startRuntimeServicesForWorkspaceControl(runtimeProvisionStartInput({ workspace, config, recorder })),
-        startRuntimeServicesForWorkspaceControl(runtimeProvisionStartInput({ workspace, config, recorder })),
+        startRuntimeServicesForWorktreeControl(runtimeProvisionStartInput({ workspace, config, recorder })),
+        startRuntimeServicesForWorktreeControl(runtimeProvisionStartInput({ workspace, config, recorder })),
       ]);
 
       expect(first).toHaveLength(1);
@@ -4149,17 +4149,17 @@ describe("ensureRuntimeServicesForRun", () => {
       expect((await fs.readFile(counterPath, "utf8")).trim().split("\n")).toEqual(["run"]);
       expect(operations.filter((operation) => operation.phase === "workspace_runtime_provision")).toHaveLength(1);
 
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
-      await startRuntimeServicesForWorkspaceControl(
+      await startRuntimeServicesForWorktreeControl(
         runtimeProvisionStartInput({ workspace, config, recorder }),
       );
       expect((await fs.readFile(counterPath, "utf8")).trim().split("\n")).toEqual(["run", "run"]);
       expect(operations.filter((operation) => operation.phase === "workspace_runtime_provision")).toHaveLength(2);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4191,12 +4191,12 @@ describe("ensureRuntimeServicesForRun", () => {
 
     try {
       await expect(
-        startRuntimeServicesForWorkspaceControl(
+        startRuntimeServicesForWorktreeControl(
           runtimeProvisionStartInput({ workspace, config, recorder, onLog }),
         ),
       ).rejects.toThrow(/runtime seed exploded/);
 
-      const services = await startRuntimeServicesForWorkspaceControl(
+      const services = await startRuntimeServicesForWorktreeControl(
         runtimeProvisionStartInput({ workspace, config, recorder, onLog }),
       );
       expect(services).toHaveLength(1);
@@ -4211,7 +4211,7 @@ describe("ensureRuntimeServicesForRun", () => {
           .map((operation) => operation.result.status),
       ).toEqual(["failed", "succeeded"]);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4248,7 +4248,7 @@ describe("ensureRuntimeServicesForRun", () => {
 
     try {
       await expect(
-        startRuntimeServicesForWorkspaceControl(
+        startRuntimeServicesForWorktreeControl(
           runtimeProvisionStartInput({ workspace, config, recorder }),
         ),
       ).rejects.toThrow(/without a verified manifest.*source_validation/);
@@ -4269,7 +4269,7 @@ describe("ensureRuntimeServicesForRun", () => {
         }),
       ]);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4295,7 +4295,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
     try {
-      const services = await startRuntimeServicesForWorkspaceControl(
+      const services = await startRuntimeServicesForWorktreeControl(
         runtimeProvisionStartInput({ workspace, config, recorder }),
       );
 
@@ -4312,7 +4312,7 @@ describe("ensureRuntimeServicesForRun", () => {
         }),
       ]);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4329,13 +4329,13 @@ describe("ensureRuntimeServicesForRun", () => {
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
     try {
-      const services = await startRuntimeServicesForWorkspaceControl(
+      const services = await startRuntimeServicesForWorktreeControl(
         runtimeProvisionStartInput({ workspace, config, recorder }),
       );
       expect(services).toHaveLength(1);
       expect(operations).toEqual([]);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4352,7 +4352,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const config = runtimeProvisionTestConfig({});
 
     try {
-      const services = await startRuntimeServicesForWorkspaceControl({
+      const services = await startRuntimeServicesForWorktreeControl({
         ...runtimeProvisionStartInput({ workspace, config }),
         runtimeServiceId,
         serviceIndex: 0,
@@ -4361,7 +4361,7 @@ describe("ensureRuntimeServicesForRun", () => {
       expect(services).toHaveLength(1);
       expect(services[0]?.id).toBe(runtimeServiceId);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-1",
         workspaceCwd: workspaceRoot,
       });
@@ -4452,7 +4452,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const actor = { id: "agent-1", name: "Codex Coder", companyId: "company-1" };
 
     try {
-      const [first] = await startRuntimeServicesForWorkspaceControl({
+      const [first] = await startRuntimeServicesForWorktreeControl({
         actor,
         issue: null,
         workspace: firstWorkspace,
@@ -4460,7 +4460,7 @@ describe("ensureRuntimeServicesForRun", () => {
         config,
         adapterEnv: {},
       });
-      const [second] = await startRuntimeServicesForWorkspaceControl({
+      const [second] = await startRuntimeServicesForWorktreeControl({
         actor,
         issue: null,
         workspace: secondWorkspace,
@@ -4475,11 +4475,11 @@ describe("ensureRuntimeServicesForRun", () => {
       await expect(fetch(`http://127.0.0.1:${second!.port}/origin`).then((response) => response.text()))
         .resolves.toBe("https://pap-17121-second.tail29c1aa.ts.net");
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-first",
         workspaceCwd: firstRoot,
       });
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-second",
         workspaceCwd: secondRoot,
       });
@@ -4567,19 +4567,19 @@ describe("ensureRuntimeServicesForRun", () => {
       adapterEnv: {},
     };
     try {
-      const [first] = await startRuntimeServicesForWorkspaceControl(input);
+      const [first] = await startRuntimeServicesForWorktreeControl(input);
       await expect(fetch(`${first!.url}/misreport`)).resolves.toMatchObject({ ok: true });
       await expect(fetch(`${first!.url}/api/health`)).resolves.toMatchObject({ ok: true });
       const [[replacement], [concurrentReuse]] = await Promise.all([
-        startRuntimeServicesForWorkspaceControl(input),
-        startRuntimeServicesForWorkspaceControl(input),
+        startRuntimeServicesForWorktreeControl(input),
+        startRuntimeServicesForWorktreeControl(input),
       ]);
       expect(replacement?.id).not.toBe(first?.id);
       expect(replacement?.reused).toBe(false);
       expect(concurrentReuse?.id).toBe(replacement?.id);
       expect(concurrentReuse?.reused).toBe(true);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-health",
         workspaceCwd: workspaceRoot,
       });
@@ -4610,13 +4610,13 @@ describe("ensureRuntimeServicesForRun", () => {
       adapterEnv: {},
     };
     try {
-      const [first] = await startRuntimeServicesForWorkspaceControl(input);
+      const [first] = await startRuntimeServicesForWorktreeControl(input);
       await expect(fetch(`${first!.url}/fail-next`)).resolves.toMatchObject({ ok: true });
-      const [reused] = await startRuntimeServicesForWorkspaceControl(input);
+      const [reused] = await startRuntimeServicesForWorktreeControl(input);
       expect(reused?.id).toBe(first?.id);
       expect(reused?.reused).toBe(true);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         executionWorkspaceId: "execution-workspace-transient-health",
         workspaceCwd: workspaceRoot,
       });
@@ -4993,7 +4993,7 @@ describe("ensureRuntimeServicesForRun", () => {
     });
 
     expect(services[0]?.url).toBeTruthy();
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: "execution-workspace-stop",
       workspaceCwd: workspace.cwd,
     });
@@ -5051,7 +5051,7 @@ describe("ensureRuntimeServicesForRun", () => {
       adapterEnv: {},
     });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: "execution-workspace-target",
       workspaceCwd: targetWorkspaceRoot,
     });
@@ -5067,7 +5067,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-control-start-"));
     const workspace = buildWorkspace(workspaceRoot);
 
-    const services = await startRuntimeServicesForWorkspaceControl({
+    const services = await startRuntimeServicesForWorktreeControl({
       actor: {
         id: "agent-1",
         name: "Codex Coder",
@@ -5118,7 +5118,7 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(services[0]?.serviceName).toBe("worker");
     await expect(fetch(services[0]!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: "execution-workspace-control-start",
       workspaceCwd: workspace.cwd,
     });
@@ -5128,7 +5128,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-control-stop-"));
     const workspace = buildWorkspace(workspaceRoot);
 
-    const services = await startRuntimeServicesForWorkspaceControl({
+    const services = await startRuntimeServicesForWorktreeControl({
       actor: {
         id: "agent-1",
         name: "Codex Coder",
@@ -5184,7 +5184,7 @@ describe("ensureRuntimeServicesForRun", () => {
     const web = services.find((service) => service.serviceName === "web");
     const worker = services.find((service) => service.serviceName === "worker");
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: "execution-workspace-control-stop",
       workspaceCwd: workspace.cwd,
       runtimeServiceId: web?.id ?? null,
@@ -5193,7 +5193,7 @@ describe("ensureRuntimeServicesForRun", () => {
     await expect(fetch(web!.url!)).rejects.toThrow();
     await expect(fetch(worker!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: "execution-workspace-control-stop",
       workspaceCwd: workspace.cwd,
       runtimeServiceId: worker?.id ?? null,
@@ -5633,7 +5633,7 @@ describe("readLocalServicePortOwner", () => {
         port,
       })).resolves.toBeNull();
 
-      await expect(startRuntimeServicesForWorkspaceControl({
+      await expect(startRuntimeServicesForWorktreeControl({
         actor: { id: "agent-1", name: "Codex Coder", companyId: "company-1" },
         issue: null,
         workspace: buildWorkspace(targetWorkspace),
@@ -6542,7 +6542,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       throw new Error(`Timed out waiting for persisted runtime service status ${status}`);
     };
 
-    const startPromise = startRuntimeServicesForWorkspaceControl({
+    const startPromise = startRuntimeServicesForWorktreeControl({
       db,
       invocationId: randomUUID(),
       actor: {
@@ -6641,7 +6641,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       ]);
     } finally {
       await startPromise.catch(() => undefined);
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: workspaceRoot,
@@ -6881,7 +6881,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     });
 
     try {
-      const started = (await startRuntimeServicesForWorkspaceControl({
+      const started = (await startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -6903,7 +6903,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
         exposure: { state: "ready" },
       });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -6959,7 +6959,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     });
 
     try {
-      await expect(startRuntimeServicesForWorkspaceControl({
+      await expect(startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -6973,7 +6973,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       if (foreignHmr) {
         await new Promise<void>((resolve) => foreignHmr!.close(() => resolve()));
       }
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -6995,7 +6995,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
 
     try {
       const [first, second] = await Promise.all(fixture.workspaces.map(async (workspace) => {
-        const result = await startRuntimeServicesForWorkspaceControl({
+        const result = await startRuntimeServicesForWorktreeControl({
           db,
           actor: fixture.actor,
           issue: null,
@@ -7044,7 +7044,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     } finally {
       await Promise.all(startedWorkspaceIds.map(async (executionWorkspaceId) => {
         const workspace = fixture.workspaces.find((entry) => entry.id === executionWorkspaceId)!;
-        await stopRuntimeServicesForExecutionWorkspace({
+        await stopRuntimeServicesForExecutionWorktree({
           db,
           executionWorkspaceId,
           workspaceCwd: workspace.cwd,
@@ -7078,10 +7078,10 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(serverScript)}`;
     const config = fixedPortRuntimeConfig(basePort, command);
     config.workspaceRuntime.services[0]!.readiness.timeoutSec = 70;
-    let startPromise: ReturnType<typeof startRuntimeServicesForWorkspaceControl> | null = null;
+    let startPromise: ReturnType<typeof startRuntimeServicesForWorktreeControl> | null = null;
 
     try {
-      startPromise = startRuntimeServicesForWorkspaceControl({
+      startPromise = startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7135,7 +7135,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     } finally {
       await fs.writeFile(releaseMarkerPath, "release").catch(() => undefined);
       await startPromise?.catch(() => undefined);
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -7152,7 +7152,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     const config = fixedPortRuntimeConfig(await findFreePort());
 
     try {
-      const first = (await startRuntimeServicesForWorkspaceControl({
+      const first = (await startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7161,13 +7161,13 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
         config,
         adapterEnv: {},
       }))[0]!;
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
       });
 
-      const restarted = (await startRuntimeServicesForWorkspaceControl({
+      const restarted = (await startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7182,7 +7182,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       expect(restarted.url).toBe(first.url);
       await expect(fetch(restarted.url!)).resolves.toMatchObject({ ok: true });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -7223,7 +7223,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(raceScript)}`;
 
     try {
-      const started = (await startRuntimeServicesForWorkspaceControl({
+      const started = (await startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7244,7 +7244,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
         .then((rows) => rows[0] ?? null);
       expect(persisted).toMatchObject({ port: started.port, url: started.url, status: "running" });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -7274,7 +7274,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     process.env.PATH = `${fakeBin}${path.delimiter}${previousPath ?? ""}`;
 
     try {
-      await expect(startRuntimeServicesForWorkspaceControl({
+      await expect(startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7293,7 +7293,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -7319,7 +7319,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     const config = fixedPortRuntimeConfig(reservation.basePort);
 
     try {
-      const first = (await startRuntimeServicesForWorkspaceControl({
+      const first = (await startRuntimeServicesForWorktreeControl({
         db,
         actor: fixture.actor,
         issue: null,
@@ -7332,7 +7332,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
 
       let sameCompanyError: unknown;
       try {
-        await startRuntimeServicesForWorkspaceControl({
+        await startRuntimeServicesForWorktreeControl({
           db,
           actor: fixture.actor,
           issue: null,
@@ -7358,7 +7358,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
 
       let otherCompanyError: unknown;
       try {
-        await startRuntimeServicesForWorkspaceControl({
+        await startRuntimeServicesForWorktreeControl({
           db,
           actor: otherCompanyFixture.actor,
           issue: null,
@@ -7385,7 +7385,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       });
       expect(JSON.stringify(otherCompanyError)).not.toContain(firstWorkspace.id);
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: firstWorkspace.id,
         workspaceCwd: firstWorkspace.cwd,
@@ -7408,7 +7408,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     try {
       let sharedWorkspaceError: unknown;
       try {
-        await startRuntimeServicesForWorkspaceControl({
+        await startRuntimeServicesForWorktreeControl({
           db,
           actor: fixture.actor,
           issue: null,
@@ -7425,7 +7425,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
 
       const identitylessCwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-identityless-"));
       try {
-        await expect(startRuntimeServicesForWorkspaceControl({
+        await expect(startRuntimeServicesForWorktreeControl({
           actor: { id: null, name: "Board", companyId: fixture.companyId },
           issue: null,
           workspace: buildWorkspace(identitylessCwd),
@@ -7443,7 +7443,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       expect(rows.every((row) => row.port === occupiedPort)).toBe(true);
     } finally {
       await closeNetServer(occupant);
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -7613,7 +7613,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     let registryOnlyServiceId: string | null = null;
 
     try {
-      const persisted = await startRuntimeServicesForWorkspaceControl({
+      const persisted = await startRuntimeServicesForWorktreeControl({
         db,
         actor,
         issue: null,
@@ -7624,7 +7624,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
         serviceIndex: 0,
       });
       stoppedServiceId = persisted[0]?.id ?? null;
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: workspaceRoot,
@@ -7634,7 +7634,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       // reconcile below can adopt the lingering process instead of restarting it.
       await waitForLoopbackPortFree(stoppedPort);
 
-      const registryOnly = await startRuntimeServicesForWorkspaceControl({
+      const registryOnly = await startRuntimeServicesForWorktreeControl({
         actor,
         issue: null,
         workspace,
@@ -7660,7 +7660,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       await expect(fetch(`http://127.0.0.1:${stoppedPort}`)).resolves.toMatchObject({ ok: true });
       await expect(fetch(`http://127.0.0.1:${livePort}`)).resolves.toMatchObject({ ok: true });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: workspaceRoot,
@@ -7812,7 +7812,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     try {
       // ---- Before: the workspace as it exists today, on plain HTTP. ----
       process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS = "off";
-      const before = await startRuntimeServicesForWorkspaceControl({
+      const before = await startRuntimeServicesForWorktreeControl({
         db,
         actor,
         issue: null,
@@ -8202,7 +8202,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       expect(await readLocalServicePortOwner(port)).toBe(child.pid);
       await expect(fetch(`http://127.0.0.1:${port}`)).resolves.toMatchObject({ ok: true });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: workspaceRoot,
@@ -8429,7 +8429,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     } finally {
       leasedRunIds.delete(runId);
       await releaseRuntimeServicesForRun(runId);
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: workspaceRoot,
@@ -8745,7 +8745,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
 
     expect(services[0]?.url).toBeTruthy();
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       db,
       executionWorkspaceId,
       workspaceCwd: workspace.cwd,
@@ -8850,7 +8850,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       },
     });
 
-    const first = await startRuntimeServicesForWorkspaceControl({
+    const first = await startRuntimeServicesForWorktreeControl({
       db,
       actor,
       issue: null,
@@ -8862,14 +8862,14 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(first).toHaveLength(1);
     await expect(fetch(first[0]!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       db,
       executionWorkspaceId,
       workspaceCwd: workspace.cwd,
     });
     await expect(fetch(first[0]!.url!)).rejects.toThrow();
 
-    const second = await startRuntimeServicesForWorkspaceControl({
+    const second = await startRuntimeServicesForWorktreeControl({
       db,
       actor,
       issue: null,
@@ -8885,7 +8885,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(second[0]?.url).toBe(first[0]?.url);
     await expect(fetch(second[0]!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       db,
       executionWorkspaceId,
       workspaceCwd: workspace.cwd,
@@ -8973,7 +8973,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       },
     };
 
-    const first = await startRuntimeServicesForWorkspaceControl({
+    const first = await startRuntimeServicesForWorktreeControl({
       db,
       actor,
       issue: null,
@@ -8986,14 +8986,14 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(first[0]?.port).toBeGreaterThan(0);
     await expect(fetch(first[0]!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       db,
       executionWorkspaceId,
       workspaceCwd: workspace.cwd,
     });
     await expect(fetch(first[0]!.url!)).rejects.toThrow();
 
-    const second = await startRuntimeServicesForWorkspaceControl({
+    const second = await startRuntimeServicesForWorktreeControl({
       db,
       actor,
       issue: null,
@@ -9009,7 +9009,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(second[0]?.url).toBe(first[0]?.url);
     await expect(fetch(second[0]!.url!)).resolves.toMatchObject({ ok: true });
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       db,
       executionWorkspaceId,
       workspaceCwd: workspace.cwd,
@@ -9457,14 +9457,14 @@ describe("workspace realization request additionalSources", () => {
   });
 });
 
-describe("realizeExecutionWorkspace with an exact existing branch", () => {
+describe("realizeExecutionWorktree with an exact existing branch", () => {
   function realizeExistingBranch(
     repoRoot: string,
     existingBranch: string,
     strategyOverrides: Record<string, unknown> = {},
-    recordedBranchOwnership: Parameters<typeof realizeExecutionWorkspace>[0]["recordedBranchOwnership"] = null,
+    recordedBranchOwnership: Parameters<typeof realizeExecutionWorktree>[0]["recordedBranchOwnership"] = null,
   ) {
-    return realizeExecutionWorkspace({
+    return realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -9770,7 +9770,7 @@ describe("realizeExecutionWorkspace with an exact existing branch", () => {
     const repoRoot = await createTempRepo();
     const branchTip = await createBranchWithCommit(repoRoot, "feature/literal-pin", "literal.txt");
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await realizeExecutionWorktree({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",

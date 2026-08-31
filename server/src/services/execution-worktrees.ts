@@ -1268,7 +1268,7 @@ type WorkspaceOverviewIssueRow = WorkspaceOverviewLinkedIssue & {
   executionWorkspaceId: string;
 };
 
-export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServiceOptions = {}) {
+export function executionWorktreeService(db: Db, opts: ExecutionWorkspaceServiceOptions = {}) {
   const recoveryActionsSvc = issueRecoveryActionService(db);
   const resolvePullRequestDetails = opts.resolvePullRequestDetails ?? createPullRequestMergeDetailsResolver(db);
   const now = opts.now ?? (() => new Date());
@@ -1692,9 +1692,9 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       {
         acquireGitWorktreeCleanupLock,
         cleanupExecutionWorkspaceArtifacts,
-        stopRuntimeServicesForExecutionWorkspace,
+        stopRuntimeServicesForExecutionWorktree,
       },
-      { workspaceOperationService },
+      { worktreeOperationService },
     ] = await Promise.all([
       import("./worktree-runtime.js"),
       import("./worktree-operations.js"),
@@ -1725,7 +1725,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       await assertTerminalCleanupGitStateUnchanged(workspace, expectedHeadSha);
       await opts.beforeTerminalWorkspaceCleanup?.(workspace);
       await assertTerminalCleanupGitStateUnchanged(workspace, expectedHeadSha);
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId: workspace.id,
         workspaceCwd: workspace.cwd,
@@ -1735,7 +1735,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         projectWorkspace,
         cleanupCommand: config?.cleanupCommand ?? null,
         teardownCommand: config?.teardownCommand ?? projectPolicy?.workspaceStrategy?.teardownCommand ?? null,
-        recorder: workspaceOperationService(db).createRecorder({
+        recorder: worktreeOperationService(db).createRecorder({
           companyId: workspace.companyId,
           executionWorkspaceId: workspace.id,
         }),
@@ -2944,7 +2944,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
 
         const [
           { ensurePersistedExecutionWorkspaceAvailable },
-          { workspaceOperationService },
+          { worktreeOperationService },
           { ensureManagedProjectWorkspace },
         ] = await Promise.all([
           import("./worktree-runtime.js"),
@@ -2996,7 +2996,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         const nextMetadata = bumpExecutionWorkspaceLifecycleGeneration(
           row.metadata as Record<string, unknown> | null,
         );
-        const recorder = workspaceOperationService(db).createRecorder({
+        const recorder = worktreeOperationService(db).createRecorder({
           companyId: row.companyId,
           executionWorkspaceId: row.id,
         });

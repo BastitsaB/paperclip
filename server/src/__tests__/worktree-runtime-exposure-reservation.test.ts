@@ -47,7 +47,7 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   resetRuntimeServicesForTests,
   setWorkspaceRuntimeExposureDepsForTests,
-  startRuntimeServicesForWorkspaceControl,
+  startRuntimeServicesForWorktreeControl,
 } from "../services/worktree-runtime.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -332,7 +332,7 @@ const GUEST_COMMAND =
       const { broker, calls } = createFakeBroker();
       installDeps(broker);
 
-      const [runtime] = await startRuntimeServicesForWorkspaceControl(
+      const [runtime] = await startRuntimeServicesForWorktreeControl(
         startInput(seed, seed.otherWorkspaceId),
       );
 
@@ -353,7 +353,7 @@ const GUEST_COMMAND =
         isPortAvailable: async (port) => port === LEASED_APP_PORT || port === LEASED_HMR_PORT,
       });
 
-      await expect(startRuntimeServicesForWorkspaceControl(
+      await expect(startRuntimeServicesForWorktreeControl(
         startInput(seed, seed.otherWorkspaceId),
       )).rejects.toThrow(/no free app\/HMR port pair available/);
 
@@ -365,7 +365,7 @@ const GUEST_COMMAND =
       const { broker } = createFakeBroker();
       installDeps(broker);
 
-      const [runtime] = await startRuntimeServicesForWorkspaceControl(
+      const [runtime] = await startRuntimeServicesForWorktreeControl(
         startInput(seed, seed.leasedWorkspaceId),
       );
 
@@ -381,7 +381,7 @@ const GUEST_COMMAND =
       foreignListeners.push({ runtimeId: "runtime-not-ours", port: NEXT_APP_PORT, purpose: "app" });
       installDeps(broker);
 
-      await expect(startRuntimeServicesForWorkspaceControl(
+      await expect(startRuntimeServicesForWorktreeControl(
         startInput(seed, seed.otherWorkspaceId),
       )).rejects.toThrow(/no free app\/HMR port pair available|HTTPS exposure allocation denied/);
     }, 30_000);
@@ -391,7 +391,7 @@ const GUEST_COMMAND =
       const { broker } = createFakeBroker();
       installDeps(broker);
 
-      const [runtime] = await startRuntimeServicesForWorkspaceControl(
+      const [runtime] = await startRuntimeServicesForWorktreeControl(
         startInput(seed, seed.otherWorkspaceId),
       );
 
@@ -435,8 +435,8 @@ const GUEST_COMMAND =
       installDeps(broker);
 
       const [first, second] = await Promise.all([
-        startRuntimeServicesForWorkspaceControl(startInput(seed, seed.otherWorkspaceId)),
-        startRuntimeServicesForWorkspaceControl(startInput(seed, seed.leasedWorkspaceId)),
+        startRuntimeServicesForWorktreeControl(startInput(seed, seed.otherWorkspaceId)),
+        startRuntimeServicesForWorktreeControl(startInput(seed, seed.leasedWorkspaceId)),
       ]);
 
       const ports = [first[0]?.port, second[0]?.port].sort();

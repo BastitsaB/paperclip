@@ -16,7 +16,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 
-const mockExecutionWorkspaceService = vi.hoisted(() => ({
+const mockExecutionWorktreeService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
 }));
@@ -44,10 +44,10 @@ vi.mock("../services/index.js", async () => {
   const leases = await import("../services/worktree-runtime-leases.js");
   return {
     accessService: () => mockAccessService,
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     heartbeatService: () => ({}),
     logActivity: mockLogActivity,
-    workspaceOperationService: () => mockWorkspaceOperationService,
+    worktreeOperationService: () => mockWorkspaceOperationService,
     workspaceRuntimeLeaseService: leases.workspaceRuntimeLeaseService,
     LEASED_WORKSPACE_RUNTIME_ACTIONS: leases.LEASED_WORKSPACE_RUNTIME_ACTIONS,
   };
@@ -63,8 +63,8 @@ vi.mock("../services/worktree-runtime.js", () => ({
   ensurePersistedExecutionWorkspaceAvailable: vi.fn(async () => ({ cwd: "/tmp/lease-route-workspace" })),
   listConfiguredRuntimeServiceEntries: () => [],
   runWorkspaceJobForControl: vi.fn(),
-  startRuntimeServicesForWorkspaceControl: mockStartRuntimeServices,
-  stopRuntimeServicesForExecutionWorkspace: mockStopRuntimeServices,
+  startRuntimeServicesForWorktreeControl: mockStartRuntimeServices,
+  stopRuntimeServicesForExecutionWorktree: mockStopRuntimeServices,
 }));
 
 vi.mock("../routes/worktree-runtime-service-authz.js", () => ({
@@ -165,7 +165,7 @@ describeEmbeddedPostgres("execution workspace runtime control lease enforcement"
       },
     ]);
 
-    mockExecutionWorkspaceService.getById.mockResolvedValue({
+    mockExecutionWorktreeService.getById.mockResolvedValue({
       id: executionWorkspaceId,
       companyId,
       projectId: null,
@@ -185,7 +185,7 @@ describeEmbeddedPostgres("execution workspace runtime control lease enforcement"
       metadata: null,
       runtimeServices: [],
     } as never);
-    mockExecutionWorkspaceService.update.mockResolvedValue({ id: executionWorkspaceId } as never);
+    mockExecutionWorktreeService.update.mockResolvedValue({ id: executionWorkspaceId } as never);
   });
 
   afterEach(async () => {

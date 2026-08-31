@@ -47,7 +47,7 @@ const mockEnvironmentService = vi.hoisted(() => ({
 
 const mockEnvironmentRuntime = vi.hoisted(() => ({
   acquireRunLease: vi.fn(),
-  realizeWorkspace: vi.fn(),
+  realizeWorktree: vi.fn(),
   getDriver: vi.fn(() => ({ releaseRunLease: vi.fn(async () => undefined) })),
 }));
 
@@ -76,7 +76,7 @@ vi.mock("../services/index.js", () => ({
   issueService: () => ({}),
   logActivity: vi.fn(),
   syncInstructionsBundleConfigFromFilePath: vi.fn((_agent, config) => config),
-  workspaceOperationService: () => ({}),
+  worktreeOperationService: () => ({}),
 }));
 
 vi.mock("../services/environments.js", () => ({

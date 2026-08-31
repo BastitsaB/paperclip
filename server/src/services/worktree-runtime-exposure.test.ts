@@ -21,8 +21,8 @@ import {
   type ExposurePortHostState,
   resetRuntimeServicesForTests,
   setWorkspaceRuntimeExposureDepsForTests,
-  startRuntimeServicesForWorkspaceControl,
-  stopRuntimeServicesForExecutionWorkspace,
+  startRuntimeServicesForWorktreeControl,
+  stopRuntimeServicesForExecutionWorktree,
 } from "./worktree-runtime.js";
 
 const EXECUTION_WORKSPACE_ID = "11111111-2222-4333-8444-555566667777";
@@ -370,13 +370,13 @@ describe("workspace runtime tailscale_https lifecycle", () => {
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput());
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput());
     expect(calls.slice(0, 2)).toEqual(["reserve", "expose"]);
     expect(runtime.port).toBeGreaterThanOrEqual(42000);
     expect(runtime.url).toBe(`https://runner.tail123.ts.net:${runtime.port}`);
     expect(runtime.exposure?.state).toBe("ready");
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: EXECUTION_WORKSPACE_ID,
       runtimeServiceId: runtime.id,
     });
@@ -387,7 +387,7 @@ describe("workspace runtime tailscale_https lifecycle", () => {
     const { broker, calls } = createBroker();
     installDeps({ broker, probeHealth: async () => false });
 
-    await expect(startRuntimeServicesForWorkspaceControl(startInput())).rejects.toThrow(/HTTPS exposure failed/);
+    await expect(startRuntimeServicesForWorktreeControl(startInput())).rejects.toThrow(/HTTPS exposure failed/);
     expect(calls).toEqual(["reserve", "expose", "remove"]);
   }, 15_000);
 });
@@ -398,7 +398,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     installDeps({ broker });
 
     // Exactly the persisted pre-feature shape: pinned 45439 + HTTP urlTemplate.
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: LEGACY_HTTP_EXPOSE,
       port: 45_439,
@@ -427,7 +427,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     const lowestFreeAppPort = await findFreeExposureAppPort(RUNTIME_EXPOSURE_APP_PORT_MIN);
     const pinnedPort = await findFreeExposureAppPort(lowestFreeAppPort + 1);
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: LEGACY_HTTP_EXPOSE,
       port: pinnedPort,
@@ -441,7 +441,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: { ...LEGACY_HTTP_EXPOSE, tailscaleHttps: false },
       port: { type: "auto", envKey: "PORT" },
@@ -456,7 +456,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "preview",
       expose: LEGACY_HTTP_EXPOSE,
       port: { type: "auto", envKey: "PORT" },
@@ -471,7 +471,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     const { broker, calls } = createBroker();
     installDeps({ broker, isBrokerAvailable: async () => false });
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: LEGACY_HTTP_EXPOSE,
       port: { type: "auto", envKey: "PORT" },
@@ -494,7 +494,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     installDeps({ broker: failing, isBrokerAvailable: async () => false });
 
     await expect(
-      startRuntimeServicesForWorkspaceControl(startInput({ serviceName: "paperclip-dev" })),
+      startRuntimeServicesForWorktreeControl(startInput({ serviceName: "paperclip-dev" })),
     ).rejects.toThrow();
     expect(calls).toEqual(["reserve"]);
   }, 15_000);
@@ -503,19 +503,19 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const [first] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [first] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: LEGACY_HTTP_EXPOSE,
       port: 45_439,
     }));
     const firstPort = first.port;
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: EXECUTION_WORKSPACE_ID,
       runtimeServiceId: first.id,
     });
     calls.length = 0;
 
-    const [second] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [second] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       expose: LEGACY_HTTP_EXPOSE,
       port: 45_439,
@@ -558,7 +558,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await expect(
-        startRuntimeServicesForWorkspaceControl(startInput({ serviceName: "paperclip-dev" })),
+        startRuntimeServicesForWorktreeControl(startInput({ serviceName: "paperclip-dev" })),
       ).rejects.toThrow(/MagicDNS hostname unavailable/);
     }
 
@@ -580,7 +580,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       // Verbatim the command every failing lane recorded, modulo the fake guest.
       command: `${guestCommand("dev-runner.mjs")} --bind lan`,
@@ -605,7 +605,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     const hmrPort = runtime.port! + 10_000;
     expect(await diagnoseRuntimeListenerBinds([runtime.port!, hmrPort])).toBeNull();
 
-    await stopRuntimeServicesForExecutionWorkspace({
+    await stopRuntimeServicesForExecutionWorktree({
       executionWorkspaceId: EXECUTION_WORKSPACE_ID,
       runtimeServiceId: runtime.id,
     });
@@ -618,7 +618,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
 
     // A guest with no bind flags at all: the argv rewrite cannot reach it, so
     // this is the residual case that must fail loudly rather than expose.
-    await expect(startRuntimeServicesForWorkspaceControl(startInput({
+    await expect(startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       command: guestCommand("dev-runner-legacy.mjs"),
       expose: LEGACY_HTTP_EXPOSE,
@@ -634,7 +634,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     const { broker } = createBroker();
     installDeps({ broker });
 
-    const error = await startRuntimeServicesForWorkspaceControl(startInput({
+    const error = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       command: guestCommand("dev-runner-legacy.mjs"),
       expose: LEGACY_HTTP_EXPOSE,
@@ -655,7 +655,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     installDeps({ broker });
 
     const declared = `${serviceCommand()} -- --bind 127.0.0.1`;
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "https-probe-canary",
       command: declared,
       port: { type: "auto", envKey: "PORT" },
@@ -672,7 +672,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     installDeps({ broker });
 
     const declared = `${guestCommand("dev-runner.mjs")} --bind lan`;
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(startInput({
+    const [runtime] = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       command: declared,
       expose: { ...LEGACY_HTTP_EXPOSE, tailscaleHttps: false },
@@ -687,7 +687,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
     const { broker } = createBroker();
     installDeps({ broker });
 
-    await expect(startRuntimeServicesForWorkspaceControl(startInput({
+    await expect(startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       command: guestCommand("dev-runner-bind-conflict.mjs"),
       expose: LEGACY_HTTP_EXPOSE,
@@ -717,7 +717,7 @@ describe("readiness probes loopback for an exposed runtime (PAP-17256)", () => {
     const service = input.config.workspaceRuntime.services[0] as Record<string, unknown>;
     service.readiness = { type: "http", timeoutSec: 10, intervalMs: 100 };
 
-    const [runtime] = await startRuntimeServicesForWorkspaceControl(input);
+    const [runtime] = await startRuntimeServicesForWorktreeControl(input);
 
     expect(calls.slice(0, 2)).toEqual(["reserve", "expose"]);
     expect(runtime.exposure?.state).toBe("ready");
@@ -733,7 +733,7 @@ describe("the deployed failure shape: loopback app port, wildcard HMR (PAP-17256
     const { broker, calls } = createBroker();
     installDeps({ broker });
 
-    const error = await startRuntimeServicesForWorkspaceControl(startInput({
+    const error = await startRuntimeServicesForWorktreeControl(startInput({
       serviceName: "paperclip-dev",
       command: `${guestCommand("dev-runner-wildcard-hmr.mjs")} --bind lan`,
       expose: LEGACY_HTTP_EXPOSE,
@@ -769,7 +769,7 @@ describe("recovers when a guest loses its assigned exposure port during startup 
     installDeps({ broker: recordingBroker });
 
     const logs: string[] = [];
-    const error = await startRuntimeServicesForWorkspaceControl({
+    const error = await startRuntimeServicesForWorktreeControl({
       ...startInput({
         serviceName: "paperclip-dev",
         command: `${guestCommand("dev-runner-eaddrinuse-synthetic.mjs")} --bind lan`,
@@ -807,7 +807,7 @@ describe("recovers when a guest loses its assigned exposure port during startup 
     installDeps({ broker: recordingBroker });
 
     const logs: string[] = [];
-    const error = await startRuntimeServicesForWorkspaceControl({
+    const error = await startRuntimeServicesForWorktreeControl({
       ...startInput({
         serviceName: "paperclip-dev",
         command: `${guestCommand("dev-runner-eaddrinuse-auxiliary.mjs")} --bind lan`,
@@ -845,7 +845,7 @@ describe("recovers when a guest loses its assigned exposure port during startup 
     installDeps({ broker: recordingBroker });
 
     const logs: string[] = [];
-    const error = await startRuntimeServicesForWorkspaceControl({
+    const error = await startRuntimeServicesForWorktreeControl({
       ...startInput({
         serviceName: "paperclip-dev",
         command: `${guestCommand("dev-runner-eaddrinuse-auxiliary-mixed.mjs")} --bind lan`,

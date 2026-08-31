@@ -20,7 +20,7 @@ function entry(overrides: Partial<WorktreeServiceControlEntry> = {}): WorktreeSe
 }
 
 const meta: Meta<typeof WorktreeServiceControlBar> = {
-  title: "Workspaces/Service control bar",
+  title: "Worktrees/Service control bar",
   component: WorktreeServiceControlBar,
   parameters: {
     layout: "padded",

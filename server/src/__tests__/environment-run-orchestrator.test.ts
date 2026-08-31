@@ -36,7 +36,7 @@ vi.mock("../services/environments.js", () => ({
 }));
 
 vi.mock("../services/execution-worktrees.js", () => ({
-  executionWorkspaceService: vi.fn(() => ({
+  executionWorktreeService: vi.fn(() => ({
     update: mockUpdateExecutionWorkspace,
   })),
 }));
@@ -191,7 +191,7 @@ function makeMockRuntime(overrides: Partial<EnvironmentRuntimeService> = {}): En
       stdout: "",
       stderr: "",
     }),
-    realizeWorkspace: vi.fn().mockResolvedValue({
+    realizeWorktree: vi.fn().mockResolvedValue({
       cwd: "/workspace/project",
       metadata: {
         workspaceRealization: {
@@ -282,7 +282,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
       expect.objectContaining({ version: 1, driver: "local" }),
     );
 
-    expect(runtime.realizeWorkspace).toHaveBeenCalledOnce();
+    expect(runtime.realizeWorktree).toHaveBeenCalledOnce();
     expect(mockResolveEnvironmentExecutionTarget).toHaveBeenCalledOnce();
   });
 
@@ -293,7 +293,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
       remoteCwd: "/copied/workspace",
     });
     const runtime = makeMockRuntime({
-      realizeWorkspace: vi.fn().mockResolvedValue({
+      realizeWorktree: vi.fn().mockResolvedValue({
         cwd: "/app",
         metadata: {
           workspaceRealization: {
@@ -325,9 +325,9 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     }));
   });
 
-  it("realization failure: runtime.realizeWorkspace throws → EnvironmentRunError with code workspace_realization_failed", async () => {
+  it("realization failure: runtime.realizeWorktree throws → EnvironmentRunError with code workspace_realization_failed", async () => {
     const runtime = makeMockRuntime({
-      realizeWorkspace: vi.fn().mockRejectedValue(new Error("sandbox unreachable")),
+      realizeWorktree: vi.fn().mockRejectedValue(new Error("sandbox unreachable")),
     });
     const orchestrator = environmentRunOrchestrator(mockDb, { environmentRuntime: runtime });
 
@@ -369,7 +369,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
       makeRealizeInput({ environment }),
     );
 
-    expect(runtime.realizeWorkspace).not.toHaveBeenCalled();
+    expect(runtime.realizeWorktree).not.toHaveBeenCalled();
     expect(result.workspaceRealization).toEqual({});
     expect(result.executionTarget).toBeNull();
   });
@@ -460,7 +460,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     });
 
     const runtime = makeMockRuntime({
-      realizeWorkspace: vi.fn().mockResolvedValue({
+      realizeWorktree: vi.fn().mockResolvedValue({
         cwd: "/remote/workspace",
         metadata: {
           workspaceRealization: {
@@ -529,7 +529,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     });
 
     const runtime = makeMockRuntime({
-      realizeWorkspace: vi.fn().mockResolvedValue({
+      realizeWorktree: vi.fn().mockResolvedValue({
         cwd: "/remote/workspace",
         metadata: {
           workspaceRealization: {
@@ -645,7 +645,7 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     });
 
     const runtime = makeMockRuntime({
-      realizeWorkspace: vi.fn().mockResolvedValue({
+      realizeWorktree: vi.fn().mockResolvedValue({
         cwd: "/remote/workspace",
         metadata: {
           workspaceRealization: {

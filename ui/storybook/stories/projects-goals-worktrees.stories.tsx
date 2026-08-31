@@ -142,7 +142,7 @@ function ProjectPropertiesMatrix() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium">{archivedProject.name}</div>
-              <div className="text-xs text-muted-foreground">Archived, no workspace configured</div>
+              <div className="text-xs text-muted-foreground">Archived, no worktree configured</div>
             </div>
             <Badge variant="outline" className="gap-1">
               <Archive className="h-3 w-3" />
@@ -159,7 +159,7 @@ function ProjectPropertiesMatrix() {
         <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
           {[
             { label: "Goals linked", value: boardProject.goalIds.length, icon: Network },
-            { label: "Workspaces", value: boardProject.workspaces.length, icon: Boxes },
+            { label: "Worktrees", value: boardProject.workspaces.length, icon: Boxes },
             { label: "Runtime services", value: boardProject.primaryWorkspace?.runtimeServices?.length ?? 0, icon: Play },
           ].map((item) => {
             const Icon = item.icon;
@@ -374,7 +374,7 @@ function RuntimeControlsMatrix() {
             <Play className="h-4 w-4" />
             Stopped remote preview
           </CardTitle>
-          <CardDescription>Startable remote workspace service with URL history.</CardDescription>
+          <CardDescription>Startable remote worktree service with URL history.</CardDescription>
         </CardHeader>
         <CardContent>
           <WorktreeRuntimeControls sections={stoppedSections} onAction={() => undefined} />
@@ -386,12 +386,12 @@ function RuntimeControlsMatrix() {
             <RotateCcw className="h-4 w-4" />
             Missing prerequisites
           </CardTitle>
-          <CardDescription>Disabled runtime controls when no workspace path is available.</CardDescription>
+          <CardDescription>Disabled runtime controls when no worktree path is available.</CardDescription>
         </CardHeader>
         <CardContent>
           <WorktreeRuntimeControls
             sections={disabledSections}
-            disabledHint="Add a workspace path before starting runtime services."
+            disabledHint="Add a worktree path before starting runtime services."
             square
             onAction={() => undefined}
           />
@@ -426,7 +426,7 @@ function WorktreeBannerMatrix() {
       <div className="grid gap-3 md:grid-cols-3">
         {[
           { label: "Branch", value: "PAP-1675-projects-goals-workspaces", icon: GitBranch },
-          { label: "Workspace", value: "Project Storybook worktree", icon: FolderGit2 },
+          { label: "Worktree", value: "Project Storybook worktree", icon: FolderGit2 },
           { label: "Context", value: "visible before layout chrome", icon: Boxes },
         ].map((item) => {
           const Icon = item.icon;
@@ -451,7 +451,7 @@ function ProjectsGoalsWorkspacesStories() {
           <section className="paperclip-story__frame p-6">
             <div className="flex flex-wrap items-start justify-between gap-5">
               <div>
-                <div className="paperclip-story__label">Projects, goals, and workspaces</div>
+                <div className="paperclip-story__label">Projects, goals, and worktrees</div>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight">Hierarchical planning and runtime surfaces</h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
                   Fixture-backed project and goal stories cover editable project properties, local and remote workspace
@@ -461,8 +461,8 @@ function ProjectsGoalsWorkspacesStories() {
               <div className="flex flex-wrap gap-2">
                 <Badge variant="outline">active</Badge>
                 <Badge variant="outline">archived</Badge>
-                <Badge variant="outline">local workspace</Badge>
-                <Badge variant="outline">remote workspace</Badge>
+                <Badge variant="outline">local worktree</Badge>
+                <Badge variant="outline">remote worktree</Badge>
               </div>
             </div>
           </section>
@@ -471,7 +471,7 @@ function ProjectsGoalsWorkspacesStories() {
             <ProjectPropertiesMatrix />
           </Section>
 
-          <Section eyebrow="ProjectWorktreesContent" title="Workspace list with local, remote, cleanup-failed, and empty states">
+          <Section eyebrow="ProjectWorktreesContent" title="Worktree list with local, remote, cleanup-failed, and empty states">
             <WorkspacesMatrix />
           </Section>
 
@@ -497,13 +497,13 @@ function ProjectsGoalsWorkspacesStories() {
 }
 
 const meta = {
-  title: "Product/Projects Goals Workspaces",
+  title: "Product/Projects Goals Worktrees",
   component: ProjectsGoalsWorkspacesStories,
   parameters: {
     docs: {
       description: {
         component:
-          "Projects, goals, and workspaces stories cover project properties, workspace cards/lists, goal hierarchy panels, runtime controls, and worktree branding states.",
+          "Projects, goals, and worktrees stories cover project properties, worktree cards/lists, goal hierarchy panels, runtime controls, and worktree branding states.",
       },
     },
   },

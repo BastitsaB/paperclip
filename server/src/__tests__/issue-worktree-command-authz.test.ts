@@ -25,7 +25,7 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
-const mockExecutionWorkspaceService = vi.hoisted(() => ({
+const mockExecutionWorktreeService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
@@ -80,7 +80,7 @@ function registerRouteMocks() {
   }));
 
   vi.doMock("../services/execution-worktrees.js", () => ({
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     STALE_REOPEN_PENDING_CONSUMPTION_GRACE_MS: 5 * 60 * 1000,
   }));
 
@@ -115,7 +115,7 @@ function registerRouteMocks() {
     }),
     documentAnnotationService: () => ({ remapOpenThreadsForDocument: async () => [] }),
     documentService: () => ({}),
-    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    executionWorktreeService: () => mockExecutionWorktreeService,
     feedbackService: () => mockFeedbackService,
     goalService: () => ({}),
     heartbeatService: () => mockHeartbeatService,
@@ -230,7 +230,7 @@ describe("issue workspace command authorization", () => {
       companyId: "company-1",
       permissions: null,
     });
-    mockExecutionWorkspaceService.getById.mockResolvedValue(null);
+    mockExecutionWorktreeService.getById.mockResolvedValue(null);
     mockFeedbackService.listIssueVotesForUser.mockResolvedValue([]);
     mockFeedbackService.saveIssueVote.mockResolvedValue({
       vote: null,

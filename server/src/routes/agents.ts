@@ -58,7 +58,7 @@ import {
   issueService,
   logActivity,
   syncInstructionsBundleConfigFromFilePath,
-  workspaceOperationService,
+  worktreeOperationService,
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
@@ -493,7 +493,7 @@ export function agentRoutes(
   const secretsSvc = secretService(db);
   const instructions = agentInstructionsService();
   const companySkills = companySkillService(db);
-  const workspaceOperations = workspaceOperationService(db);
+  const workspaceOperations = worktreeOperationService(db);
   const instanceSettings = instanceSettingsService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -914,7 +914,7 @@ export function agentRoutes(
 
     let realizedCwd: string | null = null;
     try {
-      const realized = await environmentRuntime.realizeWorkspace({
+      const realized = await environmentRuntime.realizeWorktree({
         environment: testEnvironment,
         lease: leaseRecord.lease,
         // No host workspace to copy for a Test invocation; sandbox/plugin

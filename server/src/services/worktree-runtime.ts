@@ -61,8 +61,8 @@ import {
   touchLocalServiceRegistryRecord,
   writeLocalServiceRegistryRecord,
 } from "./local-service-supervisor.js";
-import { workspaceOperationService, type WorkspaceOperationRecorder } from "./worktree-operations.js";
-import { executionWorkspaceService, readExecutionWorkspaceConfig } from "./execution-worktrees.js";
+import { worktreeOperationService, type WorkspaceOperationRecorder } from "./worktree-operations.js";
+import { executionWorktreeService, readExecutionWorkspaceConfig } from "./execution-worktrees.js";
 import { isRuntimeOwnedGitBranch } from "./execution-worktree-branch-ownership.js";
 import { logActivity } from "./activity-log.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-worktree-runtime-config.js";
@@ -1198,7 +1198,7 @@ async function findGitWorktreeBranchContention(input: {
   if (!input.db) return null;
   const companyId = await readIssueCompanyId(input.db, input.sourceIssue?.id);
   if (!companyId) return null;
-  return executionWorkspaceService(input.db).findGitWorktreeContention({
+  return executionWorktreeService(input.db).findGitWorktreeContention({
     companyId,
     worktreePath: input.worktreePath,
     liveBranchName: input.actualBranchName,
@@ -2024,7 +2024,7 @@ export async function reconcilePendingForwardBranchAfterPersistence(input: {
   reconcileOperationPhase?: "worktree_prepare" | "workspace_finalize";
   recorder?: WorkspaceOperationRecorder | null;
 }) {
-  const result = await executionWorkspaceService(input.db).reconcileExecutionWorkspaceBranch(
+  const result = await executionWorktreeService(input.db).reconcileExecutionWorkspaceBranch(
     input.executionWorkspaceId,
     {
       mode: "forward",
@@ -2187,7 +2187,7 @@ export async function ensureGitWorktreeBranchCoherent(input: {
         throw branchIncoherenceValidationFailure(evidence);
       }
       try {
-        const result = await executionWorkspaceService(input.db).reconcileExecutionWorkspaceBranch(
+        const result = await executionWorktreeService(input.db).reconcileExecutionWorkspaceBranch(
           input.executionWorkspaceId,
           {
             mode: "forward",
@@ -3195,7 +3195,7 @@ async function resolveGitRepoRootForWorkspaceCleanup(
   return path.dirname(resolvedGitDir);
 }
 
-export async function realizeExecutionWorkspace(input: {
+export async function realizeExecutionWorktree(input: {
   db?: Db | null;
   base: ExecutionWorkspaceInput;
   config: Record<string, unknown>;
@@ -5796,7 +5796,7 @@ async function runRuntimeProvisionWithWorkspaceMutex(input: StartLocalRuntimeSer
   }
 
   const recorder = input.recorder ?? (input.db
-    ? workspaceOperationService(input.db).createRecorder({
+    ? worktreeOperationService(input.db).createRecorder({
         companyId: input.agent.companyId,
         heartbeatRunId: input.startedByRunId === undefined ? input.runId : input.startedByRunId,
         executionWorkspaceId: input.executionWorkspaceId ?? null,
@@ -7899,7 +7899,7 @@ async function startRuntimeServicesForWorkspaceControlInvocation(
   }
 }
 
-export async function startRuntimeServicesForWorkspaceControl(
+export async function startRuntimeServicesForWorktreeControl(
   input: StartRuntimeServicesForWorkspaceControlInput,
 ): Promise<RuntimeServiceRef[]> {
   const services = selectRuntimeServiceEntries({
@@ -7956,7 +7956,7 @@ export async function releaseRuntimeServicesForRun(runId: string) {
   }
 }
 
-export async function stopRuntimeServicesForExecutionWorkspace(input: {
+export async function stopRuntimeServicesForExecutionWorktree(input: {
   db?: Db;
   executionWorkspaceId: string;
   workspaceCwd?: string | null;
@@ -8582,7 +8582,7 @@ export async function restartDesiredRuntimeServicesOnStartup(db: Db) {
     if (runtimeConfig?.desiredState !== "running" || !runtimeConfig.workspaceRuntime || !row.cwd) continue;
 
     try {
-      const refs = await startRuntimeServicesForWorkspaceControl({
+      const refs = await startRuntimeServicesForWorktreeControl({
         db,
         actor: { id: null, name: "Paperclip", companyId: row.companyId },
         issue: null,
@@ -8631,7 +8631,7 @@ export async function restartDesiredRuntimeServicesOnStartup(db: Db) {
     if (config?.desiredState !== "running" || !effectiveRuntimeConfig || !row.cwd) continue;
 
     try {
-      const refs = await startRuntimeServicesForWorkspaceControl({
+      const refs = await startRuntimeServicesForWorktreeControl({
         db,
         actor: { id: null, name: "Paperclip", companyId: row.companyId },
         issue: row.sourceIssueId

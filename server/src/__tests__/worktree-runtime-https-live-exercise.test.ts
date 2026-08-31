@@ -43,7 +43,7 @@ import {
 import {
   reconcilePersistedRuntimeServicesOnStartup,
   resetRuntimeServicesForTests,
-  startRuntimeServicesForWorkspaceControl,
+  startRuntimeServicesForWorktreeControl,
   stopRuntimeServicesForProjectWorkspace,
   type RealizedExecutionWorkspace,
 } from "../services/worktree-runtime.ts";
@@ -167,7 +167,7 @@ if (optedIn && !live) {
     try {
       // ---- Before: the workspace as it exists today, plain HTTP. ----
       process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS = "off";
-      const before = await startRuntimeServicesForWorkspaceControl({
+      const before = await startRuntimeServicesForWorktreeControl({
         db,
         actor: { id: null, name: "Paperclip", companyId },
         issue: null,

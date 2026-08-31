@@ -31,7 +31,7 @@ import {
   EXECUTION_WORKSPACE_LIFECYCLE_GENERATION_METADATA_KEY,
   EXECUTION_WORKSPACE_REOPEN_PENDING_METADATA_KEY,
   EXECUTION_WORKSPACE_REOPEN_PENDING_SINCE_METADATA_KEY,
-  executionWorkspaceService,
+  executionWorktreeService,
   deriveExecutionWorkspaceDeliveryState,
   mergeExecutionWorkspaceConfig,
   metadataHasReopenPendingConsumption,
@@ -40,8 +40,8 @@ import {
 } from "../services/execution-worktrees.ts";
 import { issueService } from "../services/issues.ts";
 import {
-  startRuntimeServicesForWorkspaceControl,
-  stopRuntimeServicesForExecutionWorkspace,
+  startRuntimeServicesForWorktreeControl,
+  stopRuntimeServicesForExecutionWorktree,
 } from "../services/worktree-runtime.ts";
 import { workspaceGitOperationScheduler } from "../services/worktree-git-operation-scheduler.ts";
 
@@ -240,9 +240,9 @@ async function fingerprintWorkspaceBranchIncoherenceForTest(input: {
   return `workspace_incoherence:v1:sha256:${digest}`;
 }
 
-describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
+describeEmbeddedPostgres("executionWorktreeService.getCloseReadiness", () => {
   let db!: ReturnType<typeof createDb>;
-  let svc!: ReturnType<typeof executionWorkspaceService>;
+  let svc!: ReturnType<typeof executionWorktreeService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   const tempDirs = new Set<string>();
   const pullRequestDetailsByKey = new Map<string, {
@@ -254,7 +254,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-execution-workspaces-service-");
     db = createDb(tempDb.connectionString);
-    svc = executionWorkspaceService(db, {
+    svc = executionWorktreeService(db, {
       resolvePullRequestDetails: vi.fn(async (companyId, reference) =>
         pullRequestDetailsByKey.get(`${companyId}:${reference.number}`)
         ?? { state: "unknown", headRef: null, headSha: null }
@@ -689,7 +689,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     // A fresh service starts with an empty scan cursor, so each call inspects
     // one row and advances. A single-row page never lands on the eligible
     // workspace first.
-    const service = executionWorkspaceService(db, {
+    const service = executionWorktreeService(db, {
       resolvePullRequestDetails: async () => ({ state: "unknown", headRef: null, headSha: null }),
       workspaceReaperCooldownDays: 0,
     });
@@ -729,7 +729,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     // and never revisits the eligible workspace. The bound makes each rotation
     // cover a finite set, so the cursor resets and the workspace is archived.
     let clockMs = Date.UTC(2021, 6, 1);
-    const service = executionWorkspaceService(db, {
+    const service = executionWorktreeService(db, {
       resolvePullRequestDetails: async () => ({ state: "unknown", headRef: null, headSha: null }),
       now: () => new Date(clockMs),
       workspaceReaperCooldownDays: 0,
@@ -840,7 +840,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const nowMs = Date.UTC(2026, 5, 1);
 
     function cooldownService(cooldownDays: number) {
-      return executionWorkspaceService(db, {
+      return executionWorktreeService(db, {
         resolvePullRequestDetails: async (companyId, reference) =>
           pullRequestDetailsByKey.get(`${companyId}:${reference.number}`)
           ?? { state: "unknown", headRef: null, headSha: null },
@@ -1067,7 +1067,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         config: { cleanupCommand: "rm -f late-work.txt" },
       },
     }).where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
-    const racingService = executionWorkspaceService(db, {
+    const racingService = executionWorktreeService(db, {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
@@ -1097,7 +1097,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     // overwrites the newer archive lifecycle.
     const seeded = await seedTerminalWorkspace({ mergedPr: true });
     const newerReason = "newer_archive_lifecycle_marker";
-    const racingService = executionWorkspaceService(db, {
+    const racingService = executionWorktreeService(db, {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
@@ -1701,7 +1701,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     // generation. The fenced write must skip, so the newer archive survives.
     const failSeed = await seedTerminalWorkspace({ mergedPr: true });
     const newerReason = "newer_archive_lifecycle_marker";
-    const racingService = executionWorkspaceService(db, {
+    const racingService = executionWorktreeService(db, {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${failSeed.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
@@ -1747,7 +1747,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     }).where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
     let commitFailure = "";
     let refUpdateFailure = "";
-    const lockingService = executionWorkspaceService(db, {
+    const lockingService = executionWorktreeService(db, {
       resolvePullRequestDetails: async (_companyId, reference) =>
         pullRequestDetailsByKey.get(`${seeded.companyId}:${reference.number}`) ?? { state: "unknown" },
       workspaceReaperCooldownDays: 0,
@@ -3675,9 +3675,9 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     ].join(" ");
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(serverScript)}`;
 
-    let startedServices: Awaited<ReturnType<typeof startRuntimeServicesForWorkspaceControl>> = [];
+    let startedServices: Awaited<ReturnType<typeof startRuntimeServicesForWorktreeControl>> = [];
     try {
-      const startPromise = startRuntimeServicesForWorkspaceControl({
+      const startPromise = startRuntimeServicesForWorktreeControl({
         db,
         invocationId: randomUUID(),
         actor: {
@@ -3771,7 +3771,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         },
       });
     } finally {
-      await stopRuntimeServicesForExecutionWorkspace({
+      await stopRuntimeServicesForExecutionWorktree({
         db,
         executionWorkspaceId,
         workspaceCwd: worktreePath,
@@ -3941,7 +3941,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const inspectGitCloseReadiness = vi.fn(async () => {
       throw new Error("collection inventory must not inspect git worktrees");
     });
-    const inventoryService = executionWorkspaceService(db, { inspectGitCloseReadiness });
+    const inventoryService = executionWorktreeService(db, { inspectGitCloseReadiness });
     const inventoryPromise = inventoryService.list(companyId);
     const healthResponsive = await Promise.race([
       db.execute(sql`select 1 as ok`).then(() => true),
