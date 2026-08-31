@@ -130,6 +130,7 @@ import {
   isNativeSessionId,
   materializeLegacyQuestionResponseWakeProjection,
   materializeNativeInteractionResponses,
+  NativeCancellationPendingRecoveryError,
   rebindNativeSessionCheckpoint,
   reconcileNativeFinalizations,
   resolveHeartbeatNativeRuntimeMode,
@@ -21246,6 +21247,13 @@ export function heartbeatService(
           wasFirstHeartbeat: timerClaimWasFirstHeartbeat(run),
         });
       } catch (err) {
+        if (err instanceof NativeCancellationPendingRecoveryError) {
+          await cancelRunInternal(
+            run.id,
+            "Recovered durable native run cancellation",
+          );
+          return;
+        }
         if (err instanceof NativeSessionResumeScheduledError) {
           const retryMessage =
             err.original instanceof Error
@@ -24646,6 +24654,19 @@ export function heartbeatService(
             resultJson: {
               ...persistedCancellationResult,
               ...(resultJson ?? {}),
+              // The native cancellation helper may have advanced a durable
+              // pending intent to its acknowledged state after `run` was
+              // first read. Never let that stale snapshot overwrite the
+              // authoritative post-dispatch acknowledgement.
+              ...(Object.hasOwn(
+                persistedCancellationResult,
+                "nativeCancellation",
+              )
+                ? {
+                    nativeCancellation:
+                      persistedCancellationResult.nativeCancellation,
+                  }
+                : {}),
             },
           }
         : {}),

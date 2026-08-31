@@ -61,6 +61,7 @@ import {
   type NativeStatusDecision,
 } from "./status-arbiter.js";
 import { HttpError } from "../../errors.js";
+import { resolvePaperclipRunnerBinary } from "./native-codex-runner.js";
 import {
   createNativeRunTrace,
   type NativeRunHistoricalSpan,
@@ -77,6 +78,13 @@ class NativeResultPendingFinalizationError extends Error {
   constructor() {
     super("native_result_pending_finalization");
     this.name = "NativeResultPendingFinalizationError";
+  }
+}
+
+export class NativeCancellationPendingRecoveryError extends Error {
+  constructor() {
+    super("native_cancellation_pending_recovery");
+    this.name = "NativeCancellationPendingRecoveryError";
   }
 }
 
@@ -1616,6 +1624,7 @@ export async function cancelNativeSession(
     priorStatus: string;
     priorStatusVersion: number;
     priorDecisionId: string | null;
+    coordinatorDecisionId: string | null;
     agentId: string;
   } | null = null;
   if (options) {
@@ -1649,6 +1658,7 @@ export async function cancelNativeSession(
       const coordinator = await options.db
         .select({
           assessmentId: nativeRunFinalizations.assessmentId,
+          decisionId: nativeRunFinalizations.decisionId,
         })
         .from(nativeRunFinalizations)
         .where(
@@ -1675,7 +1685,184 @@ export async function cancelNativeSession(
         priorStatus: issue.status,
         priorStatusVersion: Number(issue.statusVersion),
         priorDecisionId: issue.lastStatusDecisionId,
+        coordinatorDecisionId: coordinator.decisionId ?? null,
         agentId: run.agentId,
+      };
+    }
+  }
+  let decisionId: string | null = null;
+  let auditId: string | null = null;
+  let cancellationIntentId: string | null = null;
+  let recoveringCancellationIntent = false;
+  let priorCoordinatorDecisionIdAtIntent: string | null = null;
+  if (options && decision && decisionContext) {
+    const cancellationDecision = decision;
+    const cancellationContext = decisionContext;
+    const effects = cancellationDecision.effects.map((effect) => effect.kind);
+    let intentPublication: Parameters<typeof publishActivity>[0] | null = null;
+    const intent = await options.db.transaction(async (tx) => {
+      const lockedRun = await tx
+        .select({
+          agentId: heartbeatRuns.agentId,
+          companyId: heartbeatRuns.companyId,
+          nativeIssueId: heartbeatRuns.nativeIssueId,
+          resultJson: heartbeatRuns.resultJson,
+          runtimeMode: heartbeatRuns.runtimeMode,
+        })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, runId))
+        .for("update")
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (
+        !lockedRun ||
+        lockedRun.runtimeMode !== "native" ||
+        lockedRun.companyId !== cancellationContext.companyId ||
+        lockedRun.agentId !== cancellationContext.agentId ||
+        lockedRun.nativeIssueId !== cancellationContext.issueId
+      ) {
+        throw new Error("native_cancellation_binding_changed");
+      }
+      const coordinator = await tx
+        .select({ runId: nativeRunFinalizations.runId })
+        .from(nativeRunFinalizations)
+        .where(
+          and(
+            eq(nativeRunFinalizations.runId, runId),
+            eq(
+              nativeRunFinalizations.companyId,
+              cancellationContext.companyId,
+            ),
+            eq(nativeRunFinalizations.issueId, cancellationContext.issueId),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (!coordinator)
+        throw new Error("native_cancellation_coordinator_missing");
+
+      const resultJson = record(lockedRun.resultJson);
+      const existing = record(resultJson.nativeCancellation);
+      const existingIntentId =
+        typeof existing.intentId === "string" && existing.intentId.length > 0
+          ? existing.intentId
+          : null;
+      if (existingIntentId) {
+        const matchingIntent =
+          existing.schema === "paperclip.native-cancellation.v1" &&
+          existing.companyId === cancellationContext.companyId &&
+          existing.runId === runId &&
+          existing.issueId === cancellationContext.issueId &&
+          existing.scope === (options.scope ?? "run") &&
+          existing.reasonCode === cancellationDecision.reasonCode &&
+          JSON.stringify(existing.effects) === JSON.stringify(effects);
+        if (!matchingIntent)
+          throw new Error("native_cancellation_intent_conflict");
+        const existingAuditId =
+          typeof existing.intentAuditId === "string" &&
+          existing.intentAuditId.length > 0
+            ? existing.intentAuditId
+            : null;
+        if (!existingAuditId)
+          throw new Error("native_cancellation_intent_audit_missing");
+        return {
+          intentId: existingIntentId,
+          auditId: existingAuditId,
+          acknowledged: existing.dispatchState === "acknowledged",
+          dispatched: existing.dispatched === true,
+          decisionId:
+            typeof existing.decisionId === "string"
+              ? existing.decisionId
+              : null,
+          priorCoordinatorDecisionId:
+            typeof existing.priorCoordinatorDecisionId === "string"
+              ? existing.priorCoordinatorDecisionId
+              : null,
+          existing: true,
+        };
+      }
+
+      const intentId = `native-cancellation:${randomUUID()}`;
+      const activity = await persistActivity(tx as unknown as Db, {
+        companyId: cancellationContext.companyId,
+        actorType: "system",
+        actorId: "native-session-cancellation",
+        action: "native.cancellation_intent_recorded",
+        entityType: "heartbeat_run",
+        entityId: runId,
+        agentId: cancellationContext.agentId,
+        runId,
+        issueId: cancellationContext.issueId,
+        details: {
+          intentId,
+          scope: options.scope ?? "run",
+          reasonCode: cancellationDecision.reasonCode,
+          effects,
+        },
+      });
+      const intentAuditId = activity.activity?.id ?? null;
+      if (!intentAuditId)
+        throw new Error("native_cancellation_intent_audit_missing");
+      const written = await tx
+        .update(heartbeatRuns)
+        .set({
+          resultJson: {
+            ...resultJson,
+            nativeCancellation: {
+              schema: "paperclip.native-cancellation.v1",
+              intentId,
+              intentAuditId,
+              companyId: cancellationContext.companyId,
+              runId,
+              issueId: cancellationContext.issueId,
+              scope: options.scope ?? "run",
+              reasonCode: cancellationDecision.reasonCode,
+              effects,
+              dispatchState: "pending",
+              dispatched: false,
+              decisionId: null,
+              priorCoordinatorDecisionId:
+                cancellationContext.coordinatorDecisionId,
+              recordedAt: new Date().toISOString(),
+            },
+          },
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(heartbeatRuns.id, runId),
+            eq(heartbeatRuns.companyId, cancellationContext.companyId),
+            eq(heartbeatRuns.agentId, cancellationContext.agentId),
+            eq(heartbeatRuns.nativeIssueId, cancellationContext.issueId),
+          ),
+        )
+        .returning({ id: heartbeatRuns.id })
+        .then((rows) => rows[0] ?? null);
+      if (!written) throw new Error("native_cancellation_binding_changed");
+      intentPublication = activity.publication;
+      return {
+        intentId,
+        auditId: intentAuditId,
+        acknowledged: false,
+        dispatched: false,
+        decisionId: null,
+        priorCoordinatorDecisionId:
+          cancellationContext.coordinatorDecisionId,
+        existing: false,
+      };
+    });
+    if (intentPublication) publishActivity(intentPublication);
+    cancellationIntentId = intent.intentId;
+    auditId = intent.auditId;
+    decisionId = intent.decisionId;
+    recoveringCancellationIntent = intent.existing;
+    priorCoordinatorDecisionIdAtIntent = intent.priorCoordinatorDecisionId;
+    if (intent.acknowledged) {
+      return {
+        dispatched: intent.dispatched,
+        decision,
+        decisionId,
+        auditId,
       };
     }
   }
@@ -1722,14 +1909,22 @@ export async function cancelNativeSession(
   }
   if (!options) return dispatched;
 
-  let decisionId: string | null = null;
-  let auditId: string | null = null;
   if (decision && decisionContext) {
     const cancellationDecision = decision;
     const cancellationContext = decisionContext;
+    if (!cancellationIntentId || !auditId)
+      throw new Error("native_cancellation_intent_audit_missing");
+    if (
+      recoveringCancellationIntent &&
+      cancellationContext.coordinatorDecisionId !==
+        priorCoordinatorDecisionIdAtIntent
+    ) {
+      decisionId ??= cancellationContext.coordinatorDecisionId;
+    }
     if (
       cancellationContext.assessmentId &&
-      cancellationDecision.reasonCode !== null
+      cancellationDecision.reasonCode !== null &&
+      !decisionId
     ) {
       const committed = await commitNativeStatusDecision({
         db: options.db,
@@ -1744,8 +1939,7 @@ export async function cancelNativeSession(
       });
       decisionId = committed.decision.id;
     }
-    let auditPublication: Parameters<typeof publishActivity>[0] | null = null;
-    await options.db.transaction(async (tx) => {
+    const acknowledgement = await options.db.transaction(async (tx) => {
       const lockedRun = await tx
         .select({
           agentId: heartbeatRuns.agentId,
@@ -1786,6 +1980,27 @@ export async function cancelNativeSession(
       if (!coordinator)
         throw new Error("native_cancellation_coordinator_missing");
 
+      const resultJson = record(lockedRun.resultJson);
+      const intent = record(resultJson.nativeCancellation);
+      const matchingIntent =
+        intent.schema === "paperclip.native-cancellation.v1" &&
+        intent.intentId === cancellationIntentId &&
+        intent.intentAuditId === auditId &&
+        intent.companyId === cancellationContext.companyId &&
+        intent.runId === runId &&
+        intent.issueId === cancellationContext.issueId;
+      if (!matchingIntent)
+        throw new Error("native_cancellation_intent_conflict");
+      if (intent.dispatchState === "acknowledged") {
+        return {
+          publication: null,
+          decisionId:
+            typeof intent.decisionId === "string"
+              ? intent.decisionId
+              : decisionId,
+        };
+      }
+
       if (
         options.replacementAccepted &&
         cancellationDecision.effects.some(
@@ -1810,19 +2025,41 @@ export async function cancelNativeSession(
             ),
           );
       }
+      const activity = await persistActivity(tx as unknown as Db, {
+        companyId: cancellationContext.companyId,
+        actorType: "system",
+        actorId: "native-session-cancellation",
+        action: "native.cancellation_dispatch_acknowledged",
+        entityType: "heartbeat_run",
+        entityId: runId,
+        agentId: cancellationContext.agentId,
+        runId,
+        issueId: cancellationContext.issueId,
+        details: {
+          intentId: cancellationIntentId,
+          intentAuditId: auditId,
+          scope: options.scope ?? "run",
+          reasonCode: cancellationDecision.reasonCode,
+          effects: cancellationDecision.effects.map((effect) => effect.kind),
+          dispatched,
+          decisionId,
+        },
+      });
+      const acknowledgementAuditId = activity.activity?.id ?? null;
+      if (!acknowledgementAuditId)
+        throw new Error("native_cancellation_ack_audit_missing");
       const cancellationWrite = await tx
         .update(heartbeatRuns)
         .set({
           resultJson: {
-            ...record(lockedRun.resultJson),
+            ...resultJson,
             nativeCancellation: {
-              scope: options.scope ?? "run",
-              reasonCode: cancellationDecision.reasonCode,
-              effects: cancellationDecision.effects.map(
-                (effect) => effect.kind,
-              ),
+              ...intent,
+              dispatchState: "acknowledged",
               dispatched,
               decisionId,
+              acknowledgementAuditId,
+              acknowledgedAt: new Date().toISOString(),
             },
           },
           updatedAt: new Date(),
@@ -1839,30 +2076,11 @@ export async function cancelNativeSession(
         .then((rows) => rows[0] ?? null);
       if (!cancellationWrite)
         throw new Error("native_cancellation_binding_changed");
-      const activity = await persistActivity(tx as unknown as Db, {
-        companyId: cancellationContext.companyId,
-        actorType: "system",
-        actorId: "native-session-cancellation",
-        action: decisionId
-          ? "issue.status_decision_recorded"
-          : "native.cancellation_audited",
-        entityType: "heartbeat_run",
-        entityId: runId,
-        agentId: cancellationContext.agentId,
-        runId,
-        issueId: cancellationContext.issueId,
-        details: {
-          scope: options.scope ?? "run",
-          reasonCode: cancellationDecision.reasonCode,
-          effects: cancellationDecision.effects.map((effect) => effect.kind),
-          dispatched,
-          decisionId,
-        },
-      });
-      auditId = activity.activity?.id ?? null;
-      auditPublication = activity.publication;
+      return { publication: activity.publication, decisionId };
     });
-    if (auditPublication) publishActivity(auditPublication);
+    decisionId = acknowledgement.decisionId;
+    if (acknowledgement.publication)
+      publishActivity(acknowledgement.publication);
   }
   return { dispatched, decision, decisionId, auditId };
 }
@@ -2124,6 +2342,49 @@ export async function executePaperclipNativeSession(input: {
           // provider session and execute the turn a second time.
           if (coordinator.resultId)
             throw new NativeResultPendingFinalizationError();
+          const boundRun = await tx
+            .select({
+              agentId: heartbeatRuns.agentId,
+              companyId: heartbeatRuns.companyId,
+              nativeIssueId: heartbeatRuns.nativeIssueId,
+              resultJson: heartbeatRuns.resultJson,
+              runtimeMode: heartbeatRuns.runtimeMode,
+            })
+            .from(heartbeatRuns)
+            .where(eq(heartbeatRuns.id, input.execution.binding.runId))
+            .for("update")
+            .limit(1)
+            .then((rows) => rows[0] ?? null);
+          if (
+            !boundRun ||
+            boundRun.runtimeMode !== "native" ||
+            boundRun.companyId !== input.execution.binding.companyId ||
+            boundRun.agentId !== input.execution.binding.agentId ||
+            boundRun.nativeIssueId !== input.execution.binding.issueId
+          ) {
+            throw new Error("native_execution_binding_changed");
+          }
+          const cancellationIntent = record(
+            record(boundRun.resultJson).nativeCancellation,
+          );
+          if (
+            cancellationIntent.scope === "run" &&
+            (cancellationIntent.dispatchState === "pending" ||
+              cancellationIntent.dispatchState === "acknowledged")
+          ) {
+            const intentMatchesBinding =
+              cancellationIntent.schema ===
+                "paperclip.native-cancellation.v1" &&
+              cancellationIntent.companyId ===
+                input.execution.binding.companyId &&
+              cancellationIntent.runId === input.execution.binding.runId &&
+              cancellationIntent.issueId === input.execution.binding.issueId;
+            if (!intentMatchesBinding)
+              throw new Error("native_cancellation_intent_conflict");
+            // Run cancellation remains a claim fence after dispatch ack until
+            // the heartbeat cancellation path terminalizes the run.
+            throw new NativeCancellationPendingRecoveryError();
+          }
           if (["committed", "applied"].includes(coordinator.phase))
             throw new Error("native_run_already_committed");
           if (
@@ -2693,10 +2954,14 @@ export async function executePaperclipNativeSession(input: {
         true,
       );
     }
-    if (error instanceof NativeResultPendingFinalizationError) {
+    if (
+      error instanceof NativeResultPendingFinalizationError ||
+      error instanceof NativeCancellationPendingRecoveryError
+    ) {
       // This is not a provider failure and must not overwrite the durable
-      // result/coordinator state. The heartbeat boundary will hand the
-      // already-materialized result to the native finalizer/reconciler.
+      // result/coordinator state. The heartbeat boundary will either hand an
+      // already-materialized result to the finalizer or retain the durable
+      // cancellation intent for cancellation recovery.
       if (taskSettleScope) {
         await trace.end(taskSettleScope, { outcome: "ok" });
       }
@@ -3121,6 +3386,7 @@ export async function createRunnerdBackend(input: {
     dynamicToolHandler: (call) => authority.execute(call),
     codexTransportFactory: (recoveryContext) =>
       createRunnerdCodexTransport({
+        runnerBinary: resolvePaperclipRunnerBinary(),
         stateDirectory: root,
         environment,
         lifecyclePolicy: input.execution.session.lifecyclePolicy,
