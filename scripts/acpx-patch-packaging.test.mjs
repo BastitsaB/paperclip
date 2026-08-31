@@ -125,22 +125,27 @@ test("bundled package staging materializes workspace dependency versions", () =>
 });
 
 test("bundled package staging installs only dependencies included in the tarball", () => {
-  const installManifest = createBundledInstallManifest(
-    {
-      name: "@paperclipai/db",
-      version: "2026.723.0-canary.8",
-      dependencies: {
-        "@paperclipai/shared": "2026.723.0-canary.8",
-        "drizzle-orm": "^0.45.2",
-        "embedded-postgres": "^18.1.0-beta.16",
-      },
-      bundleDependencies: ["embedded-postgres"],
+  const publishManifest = {
+    name: "@paperclipai/db",
+    version: "2026.723.0-canary.8",
+    dependencies: {
+      "@paperclipai/shared": "2026.723.0-canary.8",
+      "drizzle-orm": "^0.45.2",
+      "embedded-postgres": "^18.1.0-beta.16",
     },
-    ["embedded-postgres"],
-  );
+    devDependencies: {
+      "@paperclipai/paperclip-runner": "2026.723.0-canary.8",
+    },
+    bundleDependencies: ["embedded-postgres"],
+  };
+  const installManifest = createBundledInstallManifest(publishManifest, ["embedded-postgres"]);
 
   assert.deepEqual(installManifest.dependencies, {
     "embedded-postgres": "^18.1.0-beta.16",
+  });
+  assert.equal(installManifest.devDependencies, undefined);
+  assert.deepEqual(publishManifest.devDependencies, {
+    "@paperclipai/paperclip-runner": "2026.723.0-canary.8",
   });
   assert.deepEqual(installManifest.bundleDependencies, ["embedded-postgres"]);
 });
@@ -265,6 +270,7 @@ mkdir -p "$destination/node_modules/.pnpm"
 set -euo pipefail
 printf 'npm %s\\n' "$*" >> "$FAKE_CALL_LOG"
 [ "$*" = "install --omit=dev --ignore-scripts --no-audit --no-fund" ]
+node -e 'const pkg = require("./package.json"); if ("devDependencies" in pkg) process.exit(1)'
 mkdir -p node_modules/acpx/dist
 printf 'unpatched runtime\\n' > node_modules/acpx/dist/runtime.js
 printf '{"name":"acpx","version":"0.13.1"}\\n' > node_modules/acpx/package.json
@@ -328,9 +334,15 @@ test("bundled package dry runs preview without querying published versions", () 
   assert.match(releaseScript, /run_bundled_npm_pack pack --pack-destination "\$publish_dir"/);
   assert.match(releaseLib, /BUNDLED_NPM_PACK_VERSION="10\.9\.7"/);
   assert.match(releaseLib, /BUNDLED_NPM_PUBLISH_VERSION="11\.18\.0"/);
-  assert.match(releaseLib, /npx --yes "npm@\$BUNDLED_NPM_PACK_VERSION"/);
-  assert.match(releaseLib, /npx --yes "npm@\$BUNDLED_NPM_PUBLISH_VERSION"/);
-  assert.match(releaseLib, /"\$@" --loglevel verbose/);
+  assert.match(
+    releaseLib,
+    /npx --yes "npm@\$BUNDLED_NPM_PACK_VERSION" "\$@" --ignore-scripts/,
+  );
+  assert.match(
+    releaseLib,
+    /npx --yes "npm@\$BUNDLED_NPM_PUBLISH_VERSION" "\$@" --ignore-scripts/,
+  );
+  assert.match(releaseLib, /"\$@" --ignore-scripts --loglevel verbose/);
   assert.match(releaseLib, /run_bundled_npm_publish publish --tag "\$dist_tag"/);
   assert.doesNotMatch(releaseLib, /run_bundled_npm_publish publish "\.\/\$tarball"/);
 });
