@@ -91,6 +91,9 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockApprovalsApi = vi.hoisted(() => ({
   create: vi.fn(),
 }));
+const mockSecretsApi = vi.hoisted(() => ({
+  create: vi.fn(),
+}));
 const mockIssuesApi = vi.hoisted(() => ({
   create: vi.fn(),
 }));
@@ -122,6 +125,7 @@ vi.mock("../api/companies", () => ({ companiesApi: mockCompaniesApi }));
 vi.mock("../api/goals", () => ({ goalsApi: mockGoalsApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("../api/approvals", () => ({ approvalsApi: mockApprovalsApi }));
+vi.mock("../api/secrets", () => ({ secretsApi: mockSecretsApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
 vi.mock("../api/environments", () => ({ environmentsApi: mockEnvironmentsApi }));
@@ -660,6 +664,90 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
     // the gap is reachable: the probe and the hire share one try/catch, so a hire
     // that throws leaves the pass in state. Switching to a key and pressing
     // Connect again then hired against a key nothing had tested.
+    /**
+     * Typing a key into this step must not put the key into the agent's stored
+     * configuration. That configuration is persisted and revisioned, so a plain
+     * value there is a live credential at rest in every copy of it — which is
+     * what this step did before, and what the Claude token path has always
+     * avoided by holding a `user_secret_ref` instead.
+     */
+    describe("an API key typed on the step", () => {
+      const KEY = "sk-ant-typed-by-the-customer";
+
+      // The canvas holding the key field only opens once a source is selected,
+      // and the tile row that selects one is built from this registry. The
+      // suite's default is empty, which leaves the step with no tiles, no
+      // canvas, and no field to type into.
+      beforeEach(() => {
+        mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+      });
+
+      async function connectWithApiKey() {
+        const handles = await openConnectStep();
+        await handles.clickByText((t) => t.startsWith("Use API keys"));
+        const field = document.body.querySelector(
+          'input[type="password"]',
+        ) as HTMLInputElement;
+        await act(async () => {
+          setControlledValue(field, KEY);
+        });
+        await flushReact();
+        await handles.clickByText((t) => t.startsWith("Connect"));
+        return handles;
+      }
+
+      it("is stored as a secret and referenced, never carried in the hire", async () => {
+        mockSecretsApi.create.mockResolvedValue({ id: "secret-abc" });
+        const { root } = await connectWithApiKey();
+
+        expect(mockSecretsApi.create).toHaveBeenCalledTimes(1);
+        const [, createBody] = mockSecretsApi.create.mock.calls.at(-1) as [
+          string,
+          { name: string; value: string },
+        ];
+        expect(createBody.name).toBe("ANTHROPIC_API_KEY");
+        expect(createBody.value).toBe(KEY);
+
+        const hireBody = (mockAgentsApi.hire.mock.calls.at(-1) as unknown[])[1] as {
+          adapterConfig: { env?: Record<string, unknown> };
+        };
+        expect(hireBody.adapterConfig.env?.ANTHROPIC_API_KEY).toEqual({
+          type: "secret_ref",
+          secretId: "secret-abc",
+          version: "latest",
+        });
+        // The whole payload, not just that one field: the point is that the key
+        // is nowhere in what gets persisted, however it might be nested.
+        expect(JSON.stringify(hireBody)).not.toContain(KEY);
+
+        await act(async () => root.unmount());
+      });
+
+      // The one outcome that must never happen is a hire that falls back to
+      // embedding the key because storing it failed.
+      it("blocks the hire when the key cannot be stored", async () => {
+        mockSecretsApi.create.mockRejectedValue(new Error("vault unreachable"));
+        const { root } = await connectWithApiKey();
+
+        expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+        expect(document.body.textContent).toContain("Could not store the API key");
+
+        await act(async () => root.unmount());
+      });
+
+      it("stores one secret when Connect is pressed twice with the same key", async () => {
+        mockSecretsApi.create.mockResolvedValue({ id: "secret-abc" });
+        mockAgentsApi.hire.mockRejectedValueOnce(new Error("network went away"));
+        const { root, clickByText } = await connectWithApiKey();
+
+        await clickByText((t) => t.startsWith("Connect"));
+
+        expect(mockSecretsApi.create).toHaveBeenCalledTimes(1);
+
+        await act(async () => root.unmount());
+      });
+    });
+
     it("re-probes rather than reusing a pass when the credential mode changes", async () => {
       mockAgentsApi.testEnvironment.mockResolvedValue({
         adapterType: "claude_local",

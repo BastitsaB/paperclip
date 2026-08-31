@@ -11,6 +11,7 @@ import type {
 } from "@paperclipai/shared";
 import { AGENT_ROLES, AGENT_ROLE_LABELS, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
 import { AdapterLoginPanel } from "./AgentConfigForm";
+import { secretsApi } from "../api/secrets";
 import { Label } from "./ui/label";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -609,6 +610,13 @@ function OnboardingWizardInner({
   // the binding cannot answer for a config that now does — see the reuse
   // check in `handleGiveHeartbeat`.
   const adapterEnvResultAppliedStoredLoginRef = useRef(false);
+  /**
+   * The secret a key typed on this step was stored as, remembered for the key it
+   * holds. Connect can be pressed more than once — a hire that fails leaves the
+   * customer on the step to try again — and without this each press would store
+   * another copy of the same credential.
+   */
+  const apiKeySecretRef = useRef<{ key: string; secretId: string } | null>(null);
   createdCompanyIdRef.current = createdCompanyId;
 
   // The mission of the company actually in hand, which is not always the one
@@ -1260,7 +1268,37 @@ function OnboardingWizardInner({
     }
   }
 
-  function buildAdapterConfig(): Record<string, unknown> {
+  /**
+   * Store the typed key as a company secret and return its id, so the hire can
+   * reference it instead of carrying it.
+   *
+   * Returns null on failure, and sets the error. Callers must treat null as a
+   * stop: there is deliberately no path here that hands back the raw key, because
+   * the only thing left to do with it would be to embed it.
+   */
+  async function storeApiKeySecret(companyId: string): Promise<string | null> {
+    const key = apiKey.trim();
+    const remembered = apiKeySecretRef.current;
+    if (remembered && remembered.key === key) return remembered.secretId;
+    try {
+      const created = await secretsApi.create(companyId, {
+        name: apiKeyEnvKeyFor(adapterType),
+        value: key,
+        description: "Added while connecting a model during onboarding.",
+      });
+      apiKeySecretRef.current = { key, secretId: created.id };
+      return created.id;
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Could not store the API key: ${err.message}`
+          : "Could not store the API key.",
+      );
+      return null;
+    }
+  }
+
+  function buildAdapterConfig(apiKeySecretId?: string | null): Record<string, unknown> {
     const adapter = getUIAdapter(adapterType);
     const config = adapter.buildAdapterConfig({
       ...defaultCreateValues,
@@ -1298,15 +1336,30 @@ function OnboardingWizardInner({
     // A key typed on this step is the credential the agent is being hired with,
     // so it has to reach the configuration the hire sends — and the same one the
     // environment test probes, or the test would pass on a config the hire does
-    // not use. Only when the mode asks for it: leaving a stale key in the config
-    // after switching back to a subscription is what the server rejects
+    // not use. Only when the mode asks for it: leaving a stale reference in the
+    // config after switching back to a subscription is what the server rejects
     // alongside the Claude OAuth binding.
-    if (credentialMode === "api" && apiKey.trim()) {
+    //
+    // A `secret_ref`, never the key itself. The adapter configuration is
+    // persisted and revisioned, so a `{ type: "plain", value }` here would leave
+    // a live credential at rest in every copy of it. This mirrors
+    // `buildFixedClaudeOAuthBinding`, which holds a reference to the stored
+    // Claude token for the same reason.
+    //
+    // Guarded on the id rather than on the key: the caller stores the secret
+    // first and passes what came back. If that failed there is no id, and the
+    // right outcome is a configuration with no credential — which the hire then
+    // blocks on — rather than one that quietly falls back to embedding the value.
+    if (credentialMode === "api" && apiKeySecretId) {
       const env =
         typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
           ? { ...(config.env as Record<string, unknown>) }
           : {};
-      env[apiKeyEnvKeyFor(adapterType)] = { type: "plain", value: apiKey.trim() };
+      env[apiKeyEnvKeyFor(adapterType)] = {
+        type: "secret_ref",
+        secretId: apiKeySecretId,
+        version: "latest",
+      };
       config.env = env;
     }
     return config;
@@ -1623,7 +1676,15 @@ function OnboardingWizardInner({
       // configuration the hire sends — a config without the binding can
       // report missing authentication for a user the binding would have
       // covered.
-      const baseAdapterConfig = buildAdapterConfig();
+      // Store the key before anything is built from it, so both the probe and the
+      // hire describe it the same way — as a reference. A failure here stops the
+      // hire rather than falling through to a configuration with no credential.
+      let apiKeySecretId: string | null = null;
+      if (credentialMode === "api" && apiKey.trim()) {
+        apiKeySecretId = await storeApiKeySecret(createdCompanyId);
+        if (!apiKeySecretId) return;
+      }
+      const baseAdapterConfig = buildAdapterConfig(apiKeySecretId);
       let storedClaudeLogin: ClaudeOAuthTokenStatusResponse | null = null;
       if (
         adapterType === "claude_local" &&
