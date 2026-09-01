@@ -8964,11 +8964,25 @@ export function toolAccessService(db: Db, options: ToolAccessServiceOptions = {}
         throw error;
       }
       if (galleryEntry?.slug === COMPOSIO_GALLERY_KEY) {
+        // The Composio broker connection has no tools of its own — only its
+        // per-toolkit children do — so it never goes through refreshCatalog
+        // below, and (unlike the OAuth callback paths above) nothing else on
+        // this route ever promotes it out of "draft". Left there, every
+        // Composio child connection's tools stay permanently invisible to the
+        // tool gateway, which requires an active application row
+        // (connectedMcpToolsForCompany filters on toolApplications.status =
+        // "active"). The health check above already confirmed the API key
+        // works, so promote both rows now.
+        await db.update(toolConnections).set({ status: "active", enabled: true, updatedAt: now() })
+          .where(eq(toolConnections.id, connectionRow.id));
+        await db.update(toolApplications).set({ status: "active", updatedAt: now() })
+          .where(eq(toolApplications.id, applicationRow.id));
         const [application] = await db.select().from(toolApplications).where(eq(toolApplications.id, applicationRow.id));
+        const [activatedConnection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connectionRow.id));
         return {
-          connectionId: health.connection.id,
+          connectionId: activatedConnection.id,
           application: toApplication(application),
-          connection: health.connection,
+          connection: toConnection(activatedConnection),
           catalog: [],
           actions: { readOnly: [], canMakeChanges: [] },
           suggestedDefaults: recommendedDefaultsForApp(galleryEntry, method?.key),
