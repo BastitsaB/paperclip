@@ -74,7 +74,10 @@ export const canonicalNativeRuntimeContextDigest =
 export const createNativeSessionBackend = runner.createNativeSessionBackend;
 export const createPaperclipRunnerAuthorizedToolSet =
   runner.createPaperclipRunnerAuthorizedToolSet;
-export const createRunnerdCodexTransport = runner.createRunnerdCodexTransport;
+export const createRunnerdCodexTransport: (
+  options?: import("@paperclipai/paperclip-runner").RunnerdCodexTransportOptions,
+) => import("@paperclipai/paperclip-runner").RunnerdCodexTransport =
+  runner.createRunnerdCodexTransport;
 export const defaultCapabilityRunnerdBinary =
   runner.defaultCapabilityRunnerdBinary;
 export const executeNativeSession = runner.executeNativeSession;

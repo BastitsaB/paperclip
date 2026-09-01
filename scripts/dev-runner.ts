@@ -6,6 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { createCapturedOutputBuffer, parseJsonResponseWithLimit } from "./dev-runner-output.ts";
+import { paperclipRunnerBinaryNeedsBuild } from "./dev-runner-native-binary.mjs";
 import { applyDevRunnerOptions } from "./dev-runner-options.ts";
 import { collectWatchedSnapshot as collectDevServerWatchedSnapshot, diffSnapshots } from "./dev-runner-snapshot.mjs";
 import { createDevServiceIdentity, repoRoot } from "./dev-service-profile.ts";
@@ -524,17 +525,40 @@ async function buildPluginSdk() {
 
 async function buildPaperclipRunner() {
   console.log("[paperclip] building paperclip runner...");
-  const result = await runPnpm(
+  const typescriptResult = await runPnpm(
     ["--filter", "@paperclipai/paperclip-runner", "build:typescript"],
     { stdio: "inherit" },
   );
-  if (result.signal) {
-    exitForSignal(result.signal);
+  if (typescriptResult.signal) {
+    exitForSignal(typescriptResult.signal);
     return;
   }
-  if (result.code !== 0) {
+  if (typescriptResult.code !== 0) {
     console.error("[paperclip] paperclip runner build failed");
-    process.exit(result.code);
+    process.exit(typescriptResult.code);
+  }
+
+  if (
+    !paperclipRunnerBinaryNeedsBuild({
+      repoRoot,
+      configuredBinary: env.PAPERCLIP_RUNNER_BINARY,
+    })
+  ) {
+    return;
+  }
+
+  console.log("[paperclip] building paperclip runner native binary...");
+  const binaryResult = await runPnpm(
+    ["--filter", "@paperclipai/paperclip-runner", "build:binary"],
+    { stdio: "inherit" },
+  );
+  if (binaryResult.signal) {
+    exitForSignal(binaryResult.signal);
+    return;
+  }
+  if (binaryResult.code !== 0) {
+    console.error("[paperclip] paperclip runner native binary build failed");
+    process.exit(binaryResult.code);
   }
 }
 

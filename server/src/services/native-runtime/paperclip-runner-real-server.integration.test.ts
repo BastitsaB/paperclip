@@ -84,7 +84,9 @@ describe("paperclip-runner real server vertical slice", () => {
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const address = server.address();
     if (address === null || typeof address === "string") throw new Error("Expected a TCP listener.");
-    setupRunnerPrpWebSocketServer(server, { port: address.port });
+    setupRunnerPrpWebSocketServer(server, {
+      apiUrl: `http://127.0.0.1:${address.port}`,
+    });
     const stateDirectory = await mkdtemp(resolve(tmpdir(), "paperclip-runner-real-resume-"));
     const bundle = createRunnerdCodexTransport({
       runnerBinary: defaultCapabilityRunnerdBinary(),

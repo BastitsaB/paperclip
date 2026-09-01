@@ -2490,6 +2490,7 @@ export async function executePaperclipNativeSession(input: {
   let runnerSessionStartupScope: NativeRunSpanScope | null = null;
   let agentTurnScope: NativeRunSpanScope | null = null;
   let taskSettleScope: NativeRunSpanScope | null = null;
+  let committedGovernedWaitResult: PrpStructuredRunResult | null = null;
   const controlPlane = new PaperclipControlPlanePort(
     input.db,
     {
@@ -2687,6 +2688,12 @@ export async function executePaperclipNativeSession(input: {
             );
           }
         }
+        if (
+          event.eventType === "item.completed" ||
+          questionFallback !== null
+        ) {
+          committedGovernedWaitResult = await resolvePendingGovernedWait();
+        }
         await recordPlanSynchronization(
           event as {
             sourceEventId: string;
@@ -2741,7 +2748,7 @@ export async function executePaperclipNativeSession(input: {
       );
     }
   }
-  const resolvePendingGovernedWait = async () => {
+  async function resolvePendingGovernedWait() {
     const continuingInteractionIds = continuingPendingInteractionIds(
       input.execution,
     );
@@ -2783,7 +2790,7 @@ export async function executePaperclipNativeSession(input: {
           completionContract: input.execution.completionContract.contract,
         })
       : null;
-  };
+  }
   const runnerExecution = input.execution;
   const leaseRenewal = startNativeSessionExecutionLeaseRenewal({
     db: input.db,
@@ -2826,10 +2833,10 @@ export async function executePaperclipNativeSession(input: {
             controlPlane,
             runnerInstanceId: effectiveRunnerInstanceId,
             controlPlaneInstanceId,
-            resolveGovernedWait: async ({ event }) =>
+            resolveGovernedWait: ({ event }) =>
               event.eventType === "item.completed" ||
               runtimeQuestionFallbackFromEvent(event) !== null
-                ? resolvePendingGovernedWait()
+                ? committedGovernedWaitResult
                 : null,
             resolveMissingResult: async ({ terminalEvent }) => {
               // A model may correctly create a durable question/confirmation and
@@ -3444,9 +3451,9 @@ export async function createRunnerdBackend(input: {
   return {
     descriptor: () => backend.descriptor(),
     openSession: (sessionInput) => backend.openSession(sessionInput),
-    recoverSession: (snapshot) =>
+    recoverSession: (snapshot, options) =>
       backend.recoverSession
-        ? backend.recoverSession(snapshot)
+        ? backend.recoverSession(snapshot, options)
         : Promise.resolve({
             recovered: false,
             reason: "driver does not support recovery",

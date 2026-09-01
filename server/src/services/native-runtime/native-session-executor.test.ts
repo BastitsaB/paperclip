@@ -565,7 +565,7 @@ function leaseDb(
   const update = () => ({
     set: () => ({
       where: () => {
-        const result = Promise.resolve([]) as Promise<unknown[]> & {
+        const result = Promise.resolve([]) as unknown as Promise<unknown[]> & {
           returning: () => Promise<Array<{ runId: string }>>;
         };
         result.returning = () => Promise.resolve([{ runId: coordinator.runId }]);
@@ -675,7 +675,7 @@ function cancellationDb(options?: {
         if (updatesResultJson && !shouldFail) {
           currentResultJson = values.resultJson as Record<string, unknown>;
         }
-        const result = Promise.resolve([]) as Promise<unknown[]> & {
+        const result = Promise.resolve([]) as unknown as Promise<unknown[]> & {
           returning: () => Promise<Array<{ id: string }>>;
         };
         result.returning = () =>
@@ -1168,7 +1168,7 @@ describe("native runtime request resolution", () => {
 
     expect(second.commandId).not.toBe(first.commandId);
     expect(resolveRuntimeRequest).toHaveBeenCalledTimes(2);
-    state.release?.();
+    (state.release as (() => void) | null)?.();
     await secondSession;
   });
 });
