@@ -79,6 +79,13 @@ describeEmbeddedPostgres("composio session manager", () => {
         label: "Composio API key",
       }],
     }).returning();
+    await db.insert(companySecretBindings).values({
+      companyId,
+      secretId: apiKey.id,
+      targetType: "tool_connection",
+      targetId: parent!.id,
+      configPath: "credentials.apiKey",
+    });
     const [child] = await db.insert(toolConnections).values({
       companyId,
       applicationId: application!.id,
