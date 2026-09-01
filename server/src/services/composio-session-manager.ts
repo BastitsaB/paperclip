@@ -187,9 +187,18 @@ export function createComposioSessionManager(db: Db, options: ComposioSessionMan
       configPath: `${prefix}.url`,
       value: session.mcp.url,
     });
+    // Composio's tool_router/session response does not always echo back an
+    // x-api-key entry in mcp.headers, but the returned MCP endpoint still
+    // requires one on every call ("API key is required...", HTTP 401). Fall
+    // back to the parent connection's own project API key so a session with
+    // no explicit auth headers from Composio is still callable.
+    const mcpHeaders = { ...(session.mcp.headers ?? {}) };
+    if (!Object.keys(mcpHeaders).some((name) => name.toLowerCase() === "x-api-key")) {
+      mcpHeaders["x-api-key"] = apiKey;
+    }
     const priorHeaders = new Map((cached?.headerRefs ?? []).map((ref) => [ref.name.toLowerCase(), ref]));
     const headerRefs: SessionRef[] = [];
-    for (const [name, value] of Object.entries(session.mcp.headers ?? {})) {
+    for (const [name, value] of Object.entries(mcpHeaders)) {
       headerRefs.push(await createOrRotateRef({
         child,
         cached: priorHeaders.get(name.toLowerCase()),
