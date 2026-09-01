@@ -875,6 +875,7 @@ export async function synchronizeCompletedProviderPlan(input: {
     };
   }
   let confirmationId: string;
+  let confirmationPending = false;
   try {
     const confirmation = await issueThreadInteractionService(input.db).create(
       {
@@ -914,6 +915,7 @@ export async function synchronizeCompletedProviderPlan(input: {
       },
     );
     confirmationId = confirmation.id;
+    confirmationPending = confirmation.status === "pending";
   } catch {
     return {
       eventId: input.event.sourceEventId,
@@ -927,38 +929,40 @@ export async function synchronizeCompletedProviderPlan(input: {
       confirmationId: null,
     };
   }
-  try {
-    const currentIssue = await input.db
-      .select({ status: issues.status })
-      .from(issues)
-      .where(eq(issues.id, input.execution.binding.issueId))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    if (currentIssue && currentIssue.status !== "in_review") {
-      await issueService(input.db).update(input.execution.binding.issueId, {
-        status: "in_review",
-        actorAgentId: input.execution.binding.agentId,
-      });
-    }
-  } catch {
-    const settledIssue = await input.db
-      .select({ status: issues.status })
-      .from(issues)
-      .where(eq(issues.id, input.execution.binding.issueId))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    if (settledIssue?.status !== "in_review") {
-      return {
-        eventId: input.event.sourceEventId,
-        planId,
-        providerRevision,
-        status: "approval_failed",
-        baseRevisionId: planningContext.baseRevisionId,
-        digest,
-        documentRevision: revision.revisionNumber,
-        currentRevisionId: revision.id,
-        confirmationId,
-      };
+  if (confirmationPending) {
+    try {
+      const currentIssue = await input.db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(eq(issues.id, input.execution.binding.issueId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (currentIssue && currentIssue.status !== "in_review") {
+        await issueService(input.db).update(input.execution.binding.issueId, {
+          status: "in_review",
+          actorAgentId: input.execution.binding.agentId,
+        });
+      }
+    } catch {
+      const settledIssue = await input.db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(eq(issues.id, input.execution.binding.issueId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (settledIssue?.status !== "in_review") {
+        return {
+          eventId: input.event.sourceEventId,
+          planId,
+          providerRevision,
+          status: "approval_failed",
+          baseRevisionId: planningContext.baseRevisionId,
+          digest,
+          documentRevision: revision.revisionNumber,
+          currentRevisionId: revision.id,
+          confirmationId,
+        };
+      }
     }
   }
   return {
