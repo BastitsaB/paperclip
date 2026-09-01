@@ -8973,9 +8973,18 @@ export function toolAccessService(db: Db, options: ToolAccessServiceOptions = {}
         // (connectedMcpToolsForCompany filters on toolApplications.status =
         // "active"). The health check above already confirmed the API key
         // works, so promote both rows now.
+        //
+        // The application row was also inserted with `type` derived from the
+        // *broker's own* transport ("rest_api" -> "mcp_stdio"), but every
+        // Composio child connection is "mcp_remote". The tool gateway's
+        // connectedMcpToolsForCompany() only accepts the pairings
+        // (mcp_remote, mcp_http) or (local_stdio, mcp_stdio) — "mcp_stdio"
+        // here matches neither, and silently excludes every one of this
+        // application's children regardless of the status fix above. Correct
+        // it to "mcp_http" to match the transport its children actually use.
         await db.update(toolConnections).set({ status: "active", enabled: true, updatedAt: now() })
           .where(eq(toolConnections.id, connectionRow.id));
-        await db.update(toolApplications).set({ status: "active", updatedAt: now() })
+        await db.update(toolApplications).set({ status: "active", type: "mcp_http", updatedAt: now() })
           .where(eq(toolApplications.id, applicationRow.id));
         const [application] = await db.select().from(toolApplications).where(eq(toolApplications.id, applicationRow.id));
         const [activatedConnection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connectionRow.id));
