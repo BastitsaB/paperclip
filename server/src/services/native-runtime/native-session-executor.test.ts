@@ -8,7 +8,10 @@ import {
   nativeRunFinalizations,
   type Db,
 } from "@paperclipai/db";
-import type { NativeExecutionInputV1 } from "@paperclipai/paperclip-runner";
+import type {
+  NativeExecutionInputV1,
+  PrpEvent,
+} from "@paperclipai/paperclip-runner";
 import { createHash } from "node:crypto";
 
 type BackendFactoryOptions = {
@@ -583,7 +586,7 @@ describe("native governed waits", () => {
     const observation = createGovernedWaitEventObservation(
       async () => waitResult,
     );
-    const replayedEvent = {
+    const replayedEvent: PrpEvent = {
       schema: "paperclip.prp.event.v1" as const,
       sourceInstanceId: "runner-recovered",
       sourceEventId: "runner-recovered:item:7",
