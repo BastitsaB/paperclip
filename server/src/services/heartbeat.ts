@@ -3942,6 +3942,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
   db: Db;
   agent: Pick<typeof agents.$inferSelect, "id" | "companyId" | "name">;
   runId: string;
+  failOnUnavailableAssignedConnection?: boolean;
 }): Promise<AdapterRuntimeMcpServer[]> {
   const access = toolAccessService(input.db);
   const effective = await access.getEffectiveProfilesForAgent(
@@ -3985,7 +3986,11 @@ export async function buildPaperclipRuntimeMcpServers(input: {
     && (connection.transport === "mcp_remote" || connection.transport === "local_stdio")
     && (!connection.enabled || connection.status !== "active" || ["degraded", "failed", "error", "missing_secret"].includes(connection.healthStatus)),
   );
-  if (unhealthyConnections.length) throw new Error(`assigned native MCP connection is unavailable: ${unhealthyConnections.map((connection) => connection.id).join(", ")}`);
+  if (input.failOnUnavailableAssignedConnection && unhealthyConnections.length) {
+    throw new Error(
+      `assigned native MCP connection is unavailable: ${unhealthyConnections.map((connection) => connection.id).join(", ")}`,
+    );
+  }
   const service = createToolGatewayService(input.db);
   if (assignedConnections.length === 0) {
     await service.recordRuntimeMcpDeliveryDiagnostic({
@@ -20357,7 +20362,12 @@ export function heartbeatService(
           if (nativeRuntimeResolution.kind === "native") {
             if (!nativeExecution || !nativeRunnerInstanceId)
               throw new Error("native_runtime_selection_not_persisted");
-            const nativeMcpServers = await buildPaperclipRuntimeMcpServers({ db, agent, runId: run.id });
+            const nativeMcpServers = await buildPaperclipRuntimeMcpServers({
+              db,
+              agent,
+              runId: run.id,
+              failOnUnavailableAssignedConnection: true,
+            });
             if (!("runtimeContext" in nativeExecution) && nativeMcpServers.length) {
               throw new Error("historical native runs cannot acquire newly assigned MCP access");
             }
