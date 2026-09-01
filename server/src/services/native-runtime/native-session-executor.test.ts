@@ -594,7 +594,7 @@ describe("native governed waits", () => {
       turnId: "turn-recovered",
       eventType: "item.completed" as const,
       schemaVersion: 1,
-      priority: 0,
+      priority: 0 as const,
       emittedAt: "2026-08-31T00:00:00.000Z",
       payload: {},
     };
