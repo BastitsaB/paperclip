@@ -531,6 +531,7 @@ describe("PaperclipRunnerToolAuthority", () => {
   it("rejects mutations after reassignment, run replacement, or terminalization", async () => {
     const guardedIssueId = "00000000-0000-4000-8000-000000000107";
     const guardedRunId = "00000000-0000-4000-8000-000000000108";
+    const guardedReplacementRunId = "00000000-0000-4000-8000-000000000109";
     await db.insert(issues).values({
       id: guardedIssueId,
       companyId,
@@ -543,6 +544,17 @@ describe("PaperclipRunnerToolAuthority", () => {
     });
     await db.insert(heartbeatRuns).values({
       id: guardedRunId,
+      companyId,
+      agentId,
+      status: "running",
+      runtimeMode: "native",
+      nativeIssueId: guardedIssueId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      contextSnapshot: { issueId: guardedIssueId },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: guardedReplacementRunId,
       companyId,
       agentId,
       status: "running",
@@ -571,7 +583,7 @@ describe("PaperclipRunnerToolAuthority", () => {
 
     await db.update(issues).set({
       assigneeAgentId: agentId,
-      executionRunId: "00000000-0000-4000-8000-000000000109",
+      executionRunId: guardedReplacementRunId,
     }).where(eq(issues.id, guardedIssueId));
     await expect(authority.execute({ ...mutation, callId: "replaced-run" }))
       .rejects.toThrow("paperclip_runner_tool_binding_not_authorized");

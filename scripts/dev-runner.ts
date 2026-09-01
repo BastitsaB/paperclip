@@ -6,7 +6,10 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { createCapturedOutputBuffer, parseJsonResponseWithLimit } from "./dev-runner-output.ts";
-import { paperclipRunnerBinaryNeedsBuild } from "./dev-runner-native-binary.mjs";
+import {
+  paperclipRunnerBinaryNeedsBuild,
+  resolveNativeRunnerRequirement,
+} from "./dev-runner-native-binary.mjs";
 import { applyDevRunnerOptions } from "./dev-runner-options.ts";
 import { collectWatchedSnapshot as collectDevServerWatchedSnapshot, diffSnapshots } from "./dev-runner-snapshot.mjs";
 import { createDevServiceIdentity, repoRoot } from "./dev-service-profile.ts";
@@ -523,6 +526,35 @@ async function buildPluginSdk() {
   }
 }
 
+async function getNativeRunnerRequired(): Promise<boolean> {
+  const status = await runPnpm(
+    [
+      "--silent",
+      "--filter",
+      "@paperclipai/server",
+      "exec",
+      "tsx",
+      "src/dev-native-runner-status.ts",
+    ],
+    { env },
+  );
+  if (status.signal) {
+    exitForSignal(status.signal);
+    return true;
+  }
+  const requirement = resolveNativeRunnerRequirement({
+    exitCode: status.code,
+    stdout: status.stdout,
+  });
+  if (!requirement.valid) {
+    const detail = status.stderr || status.stdout;
+    process.stderr.write(
+      `[paperclip] unable to determine the native runner requirement; conservatively preparing the native runner${detail ? `\n${detail}` : "\n"}`,
+    );
+  }
+  return requirement.nativeRunnerRequired;
+}
+
 async function buildPaperclipRunner() {
   console.log("[paperclip] building paperclip runner...");
   const typescriptResult = await runPnpm(
@@ -541,6 +573,7 @@ async function buildPaperclipRunner() {
   if (
     !paperclipRunnerBinaryNeedsBuild({
       repoRoot,
+      nativeRunnerRequired: await getNativeRunnerRequired(),
       configuredBinary: env.PAPERCLIP_RUNNER_BINARY,
     })
   ) {

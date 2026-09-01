@@ -951,6 +951,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     ) {
       const [priorDecision] = await db.insert(statusDecisions).values({
         companyId,
+        runId: seeded.runId,
         issueId: seeded.issueId,
         assessmentId: seeded.assessmentId,
         decisionVersion: 1,
@@ -1164,6 +1165,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     if (seeded.nativeRecords && completionState === "decision_committed_delivery_pending") {
       const [priorDecision] = await db.insert(statusDecisions).values({
         companyId,
+        runId: seeded.runId,
         issueId: seeded.issueId,
         assessmentId: seeded.assessmentId,
         decisionVersion: 1,
@@ -1284,6 +1286,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
         });
         const [priorDecision] = await db.insert(statusDecisions).values({
           companyId,
+          runId: seeded.runId,
           issueId: seeded.issueId,
           assessmentId: priorAssessmentId,
           decisionVersion: 1,
@@ -1919,6 +1922,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     const seeded = await seedFixture(pendingFixture);
     const [decision] = await db.insert(statusDecisions).values({
       companyId,
+      runId: seeded.runId,
       issueId: seeded.issueId,
       assessmentId: seeded.assessmentId,
       decisionVersion: 1,
@@ -2068,6 +2072,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     const priorStatus = String(fixture.given.priorIssueStatus ?? "in_progress");
     const [historicalDecision] = await db.insert(statusDecisions).values({
       companyId,
+      runId: seeded.runId,
       issueId: seeded.issueId,
       assessmentId: seeded.assessmentId,
       decisionVersion: 1,
@@ -2100,6 +2105,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
     });
     const [authoritativeDecision] = await db.insert(statusDecisions).values({
       companyId,
+      runId: seeded.runId,
       issueId: seeded.issueId,
       assessmentId: authoritativeAssessmentId,
       decisionVersion: 2,

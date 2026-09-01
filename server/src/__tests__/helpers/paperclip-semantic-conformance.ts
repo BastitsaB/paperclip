@@ -28,7 +28,7 @@ import {
   type SemanticConformanceAdapter,
   type SemanticConformanceObservation,
   type SemanticConformanceVector,
-} from "@paperclipai/paperclip-runner/testing";
+} from "../../vendor/paperclip-runner/testing.js";
 
 import { errorHandler } from "../../middleware/index.js";
 import { issueRoutes } from "../../routes/issues.js";

@@ -100,6 +100,7 @@ import {
   continuingPendingInteractionIds,
   buildNativeProviderEnvironment,
   cancelNativeSession,
+  createGovernedWaitEventObservation,
   createRunnerdBackend,
   executePaperclipNativeSession,
   getNativeSessionSteeringState,
@@ -321,14 +322,46 @@ describe("native provider bootstrap environment", () => {
 });
 
 const execution = {
+  schema: "paperclip.native-execution-input.v1",
   provider: { kind: "codex", model: null },
   binding: {
     companyId: "company",
     runId: "run-native-cancel",
     issueId: "issue",
     agentId: "agent",
+    executionWorkspaceId: "workspace",
   },
-  completionContract: { id: "contract", sha256: "sha" },
+  task: {
+    identifier: "PAP-NATIVE",
+    title: "Exercise the native session",
+    description: null,
+    prompt: "Complete the native session test task.",
+    workMode: "standard",
+  },
+  workspace: {
+    cwd: "/tmp/paperclip-native-session-test",
+    repoUrl: null,
+    repoRef: null,
+    branchName: null,
+  },
+  session: {
+    normalizedSessionId: "session-native-cancel",
+    driverKind: "codex_app_server",
+    protocolVersion: 1,
+    lifecyclePolicy: { mode: "per_turn", idleTimeoutMs: null },
+  },
+  completionContract: {
+    id: "contract",
+    sha256: "sha",
+    schemaVersion: "paperclip.completion-contract.v1",
+    contract: {
+      revision: "1",
+      objective: "Exercise the native session.",
+      criteria: [{ id: "objective", requirement: "The session completes." }],
+    },
+  },
+  interactionResponses: [],
+  credentialBindings: [],
 } as NativeExecutionInputV1;
 
 describe("provider plan synchronization", () => {
@@ -532,6 +565,66 @@ describe("native governed waits", () => {
 
     partial.interactionResponses[0]!.response.status = "answered";
     expect(continuingPendingInteractionIds(partial)).toEqual([]);
+  });
+
+  it("consumes an exact replay observation once without leaking stale state", async () => {
+    const waitResult = nativeGovernedWaitResult({
+      interaction: {
+        id: "interaction-replayed",
+        title: "Approve the replayed operation",
+        summary: null,
+      },
+      completionContract: {
+        revision: "contract-v3",
+        objective: "Complete the approved operation",
+        criteria: [{ id: "objective", requirement: "Complete it" }],
+      },
+    });
+    const observation = createGovernedWaitEventObservation(
+      async () => waitResult,
+    );
+    const replayedEvent = {
+      schema: "paperclip.prp.event.v1" as const,
+      sourceInstanceId: "runner-recovered",
+      sourceEventId: "runner-recovered:item:7",
+      sourceSeq: 7,
+      sourceKind: "runner" as const,
+      runId: "run-recovered",
+      normalizedSessionId: "session-recovered",
+      turnId: "turn-recovered",
+      eventType: "item.completed" as const,
+      schemaVersion: 1,
+      priority: 0,
+      emittedAt: "2026-08-31T00:00:00.000Z",
+      payload: {},
+    };
+
+    await observation.observe(replayedEvent, true);
+    expect(observation.consume(replayedEvent)).toEqual(waitResult);
+    expect(observation.consume(replayedEvent)).toBeNull();
+
+    await observation.observe(replayedEvent, true);
+    expect(
+      observation.consume({
+        ...replayedEvent,
+        sourceEventId: "runner-recovered:item:8",
+        sourceSeq: 8,
+      }),
+    ).toBeNull();
+    expect(observation.consume(replayedEvent)).toBeNull();
+
+    let resolveLookup!: (value: typeof waitResult) => void;
+    const delayedObservation = createGovernedWaitEventObservation(
+      () =>
+        new Promise<typeof waitResult>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    );
+    const observing = delayedObservation.observe(replayedEvent, true);
+    expect(delayedObservation.consume(replayedEvent)).toBeNull();
+    resolveLookup(waitResult);
+    await observing;
+    expect(delayedObservation.consume(replayedEvent)).toBeNull();
   });
 });
 

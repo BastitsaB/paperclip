@@ -368,6 +368,43 @@ export function runtimeQuestionFallbackFromEvent(
   };
 }
 
+/**
+ * Materialize the durable replacement for a non-replayable runtime question.
+ *
+ * The interaction service enforces the fallback's stable idempotency key, so
+ * this is safe both immediately after the event commit and while recovering an
+ * exact duplicate whose original post-commit callback did not finish.
+ */
+export async function materializeRuntimeQuestionFallback(input: {
+  db: Db;
+  binding: {
+    companyId: string;
+    issueId: string;
+    runId: string;
+    agentId: string;
+  };
+  event: Pick<PrpEvent, "eventType" | "payload" | "runId">;
+}): Promise<{
+  fallback: RuntimeQuestionFallback;
+  interaction: { id: string };
+} | null> {
+  const fallback = runtimeQuestionFallbackFromEvent(input.event);
+  if (!fallback) return null;
+  const interaction = await issueThreadInteractionService(input.db).create(
+    {
+      id: input.binding.issueId,
+      companyId: input.binding.companyId,
+    },
+    fallback as never,
+    {
+      agentId: input.binding.agentId,
+      runId: input.binding.runId,
+      systemId: "native-runtime-question-handoff",
+    },
+  );
+  return { fallback, interaction };
+}
+
 export function runtimeInputLifecycleMetric(
   event: Pick<PrpEvent, "eventType" | "payload">,
 ): {
@@ -619,6 +656,57 @@ export function nativeGovernedWaitResult(input: {
       summary:
         "Resume from the resolved interaction response without repeating prior work.",
       idempotencyKey: `interaction-response:${input.interaction.id}`,
+    },
+  };
+}
+
+/**
+ * Bridge an asynchronous durable-interaction lookup to the runner package's
+ * synchronous governed-wait boundary. Observations are single-use and bound
+ * to one exact source event so a delayed or replayed lookup cannot leak into a
+ * later provider event.
+ */
+export function createGovernedWaitEventObservation(
+  resolvePending: () => Promise<PrpStructuredRunResult | null>,
+) {
+  let generation = 0;
+  let observation: {
+    sourceInstanceId: string;
+    sourceEventId: string;
+    sourceSeq: number;
+    result: PrpStructuredRunResult;
+  } | null = null;
+
+  return {
+    async observe(event: PrpEvent, eligible: boolean): Promise<void> {
+      const currentGeneration = ++generation;
+      observation = null;
+      if (!eligible) return;
+      const result = await resolvePending();
+      if (generation !== currentGeneration || result === null) return;
+      // If the interaction is answered after this read, parking remains the
+      // fail-closed outcome: the durable answer owns the response-wake path.
+      // Continuing provider work on a possibly stale authorization does not.
+      observation = {
+        sourceInstanceId: event.sourceInstanceId,
+        sourceEventId: event.sourceEventId,
+        sourceSeq: event.sourceSeq,
+        result,
+      };
+    },
+    consume(event: PrpEvent): PrpStructuredRunResult | null {
+      generation += 1;
+      const current = observation;
+      observation = null;
+      if (
+        current === null ||
+        current.sourceInstanceId !== event.sourceInstanceId ||
+        current.sourceEventId !== event.sourceEventId ||
+        current.sourceSeq !== event.sourceSeq
+      ) {
+        return null;
+      }
+      return current.result;
     },
   };
 }
@@ -2444,6 +2532,18 @@ export async function executePaperclipNativeSession(input: {
   }
   const controlPlaneInstanceId = `${effectiveRunnerInstanceId}:control`;
   const planSynchronizations: PlanSynchronization[] = [];
+  const upsertPlanSynchronization = (
+    synchronization: PlanSynchronization,
+  ): void => {
+    const existingIndex = planSynchronizations.findIndex(
+      (candidate) => candidate.eventId === synchronization.eventId,
+    );
+    if (existingIndex >= 0) {
+      planSynchronizations[existingIndex] = synchronization;
+      return;
+    }
+    planSynchronizations.push(synchronization);
+  };
   const recordPlanSynchronization = async (event: {
     sourceEventId: string;
     turnId?: string;
@@ -2456,7 +2556,7 @@ export async function executePaperclipNativeSession(input: {
       event,
     });
     if (!synchronization) return;
-    planSynchronizations.push(synchronization);
+    upsertPlanSynchronization(synchronization);
     const activity = await persistActivity(input.db, {
       companyId: input.execution.binding.companyId,
       actorType: "agent",
@@ -2490,7 +2590,9 @@ export async function executePaperclipNativeSession(input: {
   let runnerSessionStartupScope: NativeRunSpanScope | null = null;
   let agentTurnScope: NativeRunSpanScope | null = null;
   let taskSettleScope: NativeRunSpanScope | null = null;
-  let committedGovernedWaitResult: PrpStructuredRunResult | null = null;
+  const governedWaitObservation = createGovernedWaitEventObservation(
+    resolvePendingGovernedWait,
+  );
   const controlPlane = new PaperclipControlPlanePort(
     input.db,
     {
@@ -2652,22 +2754,12 @@ export async function executePaperclipNativeSession(input: {
             })}\n`,
           );
         }
-        const questionFallback = runtimeQuestionFallbackFromEvent(event);
+        const questionFallback = await materializeRuntimeQuestionFallback({
+          db: input.db,
+          binding: input.execution.binding,
+          event,
+        });
         if (questionFallback) {
-          const interaction = await issueThreadInteractionService(
-            input.db,
-          ).create(
-            {
-              id: input.execution.binding.issueId,
-              companyId: input.execution.binding.companyId,
-            },
-            questionFallback as never,
-            {
-              agentId: input.execution.binding.agentId,
-              runId: input.execution.binding.runId,
-              systemId: "native-runtime-question-handoff",
-            },
-          );
           if (input.onLog) {
             const origin = record(record(record(event.payload).request).origin);
             await input.onLog(
@@ -2679,7 +2771,7 @@ export async function executePaperclipNativeSession(input: {
                     ? "durable_handoff_materialized"
                     : "provider_loss_materialized",
                 requestId: record(event.payload).requestId,
-                interactionId: interaction.id,
+                interactionId: questionFallback.interaction.id,
                 adapter:
                   typeof origin.adapter === "string"
                     ? origin.adapter
@@ -2688,12 +2780,10 @@ export async function executePaperclipNativeSession(input: {
             );
           }
         }
-        if (
-          event.eventType === "item.completed" ||
-          questionFallback !== null
-        ) {
-          committedGovernedWaitResult = await resolvePendingGovernedWait();
-        }
+        await governedWaitObservation.observe(
+          event,
+          event.eventType === "item.completed" || questionFallback !== null,
+        );
         await recordPlanSynchronization(
           event as {
             sourceEventId: string;
@@ -2702,6 +2792,33 @@ export async function executePaperclipNativeSession(input: {
             payload: Record<string, unknown>;
           },
         );
+      },
+      onDuplicateEvent: async (event) => {
+        // A crash can happen after the event commit but before its callback
+        // finishes. Recover only idempotent durable projections here; activity,
+        // publication, logging, trace, and metric effects remain committed-only.
+        const questionFallback = await materializeRuntimeQuestionFallback({
+          db: input.db,
+          binding: input.execution.binding,
+          event,
+        });
+        await governedWaitObservation.observe(
+          event,
+          event.eventType === "item.completed" || questionFallback !== null,
+        );
+        const planSynchronization = await synchronizeCompletedProviderPlan({
+          db: input.db,
+          execution: input.execution,
+          event: event as {
+            sourceEventId: string;
+            turnId?: string;
+            eventType: string;
+            payload: Record<string, unknown>;
+          },
+        });
+        if (planSynchronization) {
+          upsertPlanSynchronization(planSynchronization);
+        }
       },
     },
   );
@@ -2834,10 +2951,7 @@ export async function executePaperclipNativeSession(input: {
             runnerInstanceId: effectiveRunnerInstanceId,
             controlPlaneInstanceId,
             resolveGovernedWait: ({ event }) =>
-              event.eventType === "item.completed" ||
-              runtimeQuestionFallbackFromEvent(event) !== null
-                ? committedGovernedWaitResult
-                : null,
+              governedWaitObservation.consume(event),
             resolveMissingResult: async ({ terminalEvent }) => {
               // A model may correctly create a durable question/confirmation and
               // then end its provider turn without also invoking paperclip_finish.

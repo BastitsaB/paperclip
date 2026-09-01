@@ -5,7 +5,7 @@ import {
   CAPABILITY_SEMANTIC_CONFORMANCE_IDS,
   CapabilityMockSemanticConformanceAdapter,
   runSemanticConformanceKit,
-} from "@paperclipai/paperclip-runner/testing";
+} from "../vendor/paperclip-runner/testing.js";
 
 import {
   getEmbeddedPostgresTestSupport,

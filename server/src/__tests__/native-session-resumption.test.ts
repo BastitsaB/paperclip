@@ -591,8 +591,8 @@ describe("P6-25 persisted reaper-to-finalization recovery", () => {
       id: agentId,
       companyId,
       name: "Native recovery agent",
-      adapterType: "codex_local",
-      status: "idle",
+      adapterType: "paperclip_runner",
+      status: "active",
       runtimeConfig: {
         heartbeat: { wakeOnDemand: true, maxConcurrentRuns: 1 },
         nativeRunner: { mode: "native", backend: "codex_app_server", protocolVersion: 1 },

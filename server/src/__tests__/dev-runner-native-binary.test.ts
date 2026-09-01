@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { paperclipRunnerBinaryNeedsBuild } from "../../../scripts/dev-runner-native-binary.mjs";
+import {
+  paperclipRunnerBinaryNeedsBuild,
+  resolveNativeRunnerRequirement,
+} from "../../../scripts/dev-runner-native-binary.mjs";
 
 const tempRoots = new Set<string>();
 
@@ -38,6 +41,33 @@ function createRunnerCheckout(): { root: string; source: string; binary: string 
 }
 
 describe("paperclip runner native dev prerequisite", () => {
+  it("uses an explicit status response and fails safe when status is unknown", () => {
+    expect(
+      resolveNativeRunnerRequirement({
+        exitCode: 0,
+        stdout: "pnpm warning\n{\"nativeRunnerRequired\":false}\n",
+      }),
+    ).toEqual({ nativeRunnerRequired: false, valid: true });
+    expect(
+      resolveNativeRunnerRequirement({
+        exitCode: 0,
+        stdout: "{\"nativeRunnerRequired\":true}\n",
+      }),
+    ).toEqual({ nativeRunnerRequired: true, valid: true });
+    expect(
+      resolveNativeRunnerRequirement({
+        exitCode: 1,
+        stdout: "",
+      }),
+    ).toEqual({ nativeRunnerRequired: true, valid: false });
+    expect(
+      resolveNativeRunnerRequirement({
+        exitCode: 0,
+        stdout: "{\"unexpected\":true}\n",
+      }),
+    ).toEqual({ nativeRunnerRequired: true, valid: false });
+  });
+
   it("builds only when the staged binary is missing or older than Rust inputs", () => {
     const checkout = createRunnerCheckout();
     const now = Date.now();
@@ -47,19 +77,44 @@ describe("paperclip runner native dev prerequisite", () => {
 
     fs.utimesSync(checkout.source, old, old);
     fs.utimesSync(checkout.binary, current, current);
-    expect(paperclipRunnerBinaryNeedsBuild({ repoRoot: checkout.root })).toBe(false);
+    expect(
+      paperclipRunnerBinaryNeedsBuild({
+        repoRoot: checkout.root,
+        nativeRunnerRequired: true,
+      }),
+    ).toBe(false);
 
     fs.utimesSync(checkout.source, next, next);
-    expect(paperclipRunnerBinaryNeedsBuild({ repoRoot: checkout.root })).toBe(true);
+    expect(
+      paperclipRunnerBinaryNeedsBuild({
+        repoRoot: checkout.root,
+        nativeRunnerRequired: true,
+      }),
+    ).toBe(true);
 
     fs.rmSync(checkout.binary);
-    expect(paperclipRunnerBinaryNeedsBuild({ repoRoot: checkout.root })).toBe(true);
+    expect(
+      paperclipRunnerBinaryNeedsBuild({
+        repoRoot: checkout.root,
+        nativeRunnerRequired: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps default-off legacy development Node-only", () => {
+    expect(
+      paperclipRunnerBinaryNeedsBuild({
+        repoRoot: "/checkout/without/a/staged/binary",
+        nativeRunnerRequired: false,
+      }),
+    ).toBe(false);
   });
 
   it("does not build a workspace binary when an explicit binary is configured", () => {
     expect(
       paperclipRunnerBinaryNeedsBuild({
         repoRoot: "/checkout/without/a/staged/binary",
+        nativeRunnerRequired: true,
         configuredBinary: "/opt/paperclip/paperclip-runnerd",
       }),
     ).toBe(false);
