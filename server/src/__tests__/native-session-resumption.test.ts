@@ -844,6 +844,13 @@ describe("P6-25 persisted reaper-to-finalization recovery", () => {
     await expect(db.select().from(workAssessments).where(eq(workAssessments.runId, runId))).resolves.toHaveLength(1);
     await expect(db.select().from(statusDecisions).where(eq(statusDecisions.issueId, issueId))).resolves.toHaveLength(1);
 
+    // The persisted Paperclip Runner run above remains recoverable while the
+    // flag is off. Switching the agent back to a direct adapter now proves a
+    // fresh run ignores the stale native profile and stays on the legacy path.
+    await db
+      .update(agents)
+      .set({ adapterType: "codex_local" })
+      .where(eq(agents.id, agentId));
     await db.insert(issues).values({
       id: freshIssueId,
       companyId,
@@ -870,7 +877,7 @@ describe("P6-25 persisted reaper-to-finalization recovery", () => {
       expect.objectContaining({
         agentId,
         runtimeMode: "legacy",
-        runtimeModeReason: "instance_flag_disabled",
+        runtimeModeReason: "direct_adapter",
         status: "succeeded",
       }),
     ]);

@@ -879,9 +879,9 @@ describe("native session cancellation", () => {
   });
 
   it("observes cleanup failure after cancellation authority is committed", async () => {
-    state.cancel.mockReturnValueOnce({
+    state.cancel.mockImplementationOnce(() => ({
       cleanup: Promise.reject(new Error("provider cleanup failed")),
-    });
+    }));
     const running = executePaperclipNativeSession({
       db: leaseDb(),
       execution,
