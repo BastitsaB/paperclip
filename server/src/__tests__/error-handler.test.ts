@@ -169,6 +169,7 @@ describe("errorHandler", () => {
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
       error: "Tool action request requires formal board approval before execution",
+      reasonCode: "formal_approval_required",
       details: { approvalId: "approval-1" },
     });
     // Sub-500 statuses must not be attached/reported as a server crash.
