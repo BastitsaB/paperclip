@@ -5152,7 +5152,7 @@ export function issueRoutes(
     req: Request,
     res: Response,
     issue: Parameters<typeof decideIssueAccess>[1],
-    options: { resumeIntent?: boolean } = {},
+    options: { resumeIntent?: boolean; pendingAssigneeAgentId?: string | null } = {},
   ) {
     if (await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)) return false;
 
@@ -5213,15 +5213,25 @@ export function issueRoutes(
       res.status(403).json({ error: "Agent authentication required" });
       return false;
     }
-    if (!issue.assigneeAgentId) {
+    // A single atomic PATCH may set a valid new agent assignee in the same
+    // payload that also transitions the status (e.g. blocked -> in_review).
+    // In that case the follow-up authority checks below must evaluate
+    // against the agent the issue is about to belong to, not the
+    // pre-mutation state — otherwise a previously-unassigned (human-only)
+    // issue can never reach an agent-followed-up status atomically.
+    const effectiveAssigneeAgentId =
+      options.pendingAssigneeAgentId !== undefined
+        ? options.pendingAssigneeAgentId
+        : issue.assigneeAgentId;
+    if (!effectiveAssigneeAgentId) {
       res.status(409).json({
         error: "Issue follow-up requires an assigned agent",
         details: { issueId: issue.id, actorAgentId },
       });
       return false;
     }
-    if (issue.assigneeAgentId === actorAgentId) return true;
-    if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
+    if (effectiveAssigneeAgentId === actorAgentId) return true;
+    if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, effectiveAssigneeAgentId)) {
       return true;
     }
     const boundaryDecision = await decideIssueAccess(req, issue, "issue:mutate");
@@ -5231,7 +5241,7 @@ export function issueRoutes(
       error: "Agent cannot request follow-up for another agent's issue",
       details: {
         issueId: issue.id,
-        assigneeAgentId: issue.assigneeAgentId,
+        assigneeAgentId: effectiveAssigneeAgentId,
         actorAgentId,
       },
     });
@@ -10027,7 +10037,13 @@ export function issueRoutes(
     if (
       resumeRequested !== true &&
       agentStatusTransitionRequiresResumeAuthority &&
-      !(await assertExplicitResumeIntentAllowed(req, res, existing))
+      !(await assertExplicitResumeIntentAllowed(req, res, existing, {
+        // Allow an atomic payload that transitions to in_review while also
+        // setting a valid agent assignee in the same PATCH, even though the
+        // pre-mutation issue had no agent assignee yet (MAI-1501/MAI-1502).
+        pendingAssigneeAgentId:
+          updateFields.status === "in_review" ? requestedAssigneeAgentId : undefined,
+      }))
     ) {
       return;
     }
