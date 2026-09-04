@@ -5671,7 +5671,7 @@ export function createToolGatewayService(
         eq(toolActionRequests.canonicalArgumentsHash, input.argumentsHash),
         eq(toolInvocations.agentId, input.session.agentId),
         eq(toolInvocations.toolName, input.toolName),
-        inArray(toolActionRequests.status, ["pending", "approved", "executing", "rejected", "executed"]),
+        inArray(toolActionRequests.status, ["pending", "approved", "executing", "rejected", "executed", "failed"]),
       ))
       .orderBy(desc(toolActionRequests.createdAt))
       .limit(1);
@@ -5711,6 +5711,19 @@ export function createToolGatewayService(
       await reflectToolActionInteractionLifecycle({ actionRequestId: match.actionRequest.id, status: "expired" });
       return null;
     }
+    // A "failed" request can mean two different things: the approved call was
+    // actually dispatched and the provider/tool rejected it (startedAt is set
+    // right before dispatch), or the request never reached dispatch because the
+    // approval record itself was invalid (stale signature, legacy pre-execute-
+    // on-approve payload, drifted managed arguments, ...). Only the former is
+    // safe to replay as a stored error: the request/arguments were sound and a
+    // second attempt would fail identically, so surfacing the same error avoids
+    // spawning a duplicate approval chain. The latter means nothing was ever
+    // reviewed against these exact arguments, so treat it as no match and let
+    // the caller create a fresh, signable approval request instead.
+    if (pendingRequest.status === "failed" && match.invocation.startedAt === null) {
+      return null;
+    }
     return match;
   }
 
@@ -5738,6 +5751,14 @@ export function createToolGatewayService(
         actionRequestId: actionRequest.id,
         instructions: "The action was declined. Do not retry the same call; adjust your approach or report the decline on the task.",
       });
+    }
+    if (actionRequest.status === "failed") {
+      throw new ToolGatewayHttpError(
+        502,
+        invocation.errorMessage ?? "Approved tool action failed",
+        invocation.errorCode ?? "tool_execution_failed",
+        { actionRequestId: actionRequest.id, invocationId: invocation.id },
+      );
     }
     if (actionRequest.status === "executed") {
       return { matched: true as const, result: storedInvocationResult(invocation), invocationId: invocation.id };

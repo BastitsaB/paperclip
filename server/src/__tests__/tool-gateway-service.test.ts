@@ -849,6 +849,60 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(requests[1]?.status).toBe("pending");
   });
 
+  it("replays a failed approved action's stored error on an identical retry instead of opening a new approval", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    await db.insert(toolPolicies).values({
+      companyId: company.id,
+      name: "Review add calls",
+      policyType: "require_approval",
+      selectors: { toolName: "mcp-remote-fixture:add" },
+    });
+    const gateway = createTestToolGatewayService(db);
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const parameters = { a: "not-a-number", b: 2 };
+
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: "mcp-remote-fixture:add", parameters }))
+      .rejects.toMatchObject({ reasonCode: "approval_required" });
+    const [actionRequest] = await db.select().from(toolActionRequests);
+
+    // Approving executes immediately (execute-on-approve); the fixture tool
+    // throws on non-numeric arguments, so the approved execution fails.
+    const failedApproval = await gateway.approveActionRequest({
+      companyId: company.id,
+      actionRequestId: actionRequest.id,
+      actor: { userId: "board-user" },
+    });
+    expect(failedApproval).toMatchObject({
+      status: "failed",
+      error: "Parameters a and b must be finite numbers",
+    });
+    const [failedInvocation] = await db.select().from(toolInvocations);
+    expect(failedInvocation).toMatchObject({
+      status: "failed",
+      errorCode: "invalid_parameters",
+      errorMessage: "Parameters a and b must be finite numbers",
+    });
+
+    // An identical retry (no approvedActionRequestId, e.g. the agent replaying
+    // the same call after a run restart) must match the failed record, return
+    // its stored error, and must not create a second approval chain.
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: "mcp-remote-fixture:add", parameters }))
+      .rejects.toMatchObject({
+        status: 502,
+        reasonCode: "invalid_parameters",
+        message: "Parameters a and b must be finite numbers",
+      });
+
+    expect(await db.select().from(toolActionRequests)).toHaveLength(1);
+    expect(await db.select().from(toolInvocations)).toHaveLength(1);
+    expect(await db.select().from(issueThreadInteractions)).toHaveLength(1);
+
+    // Existing pending/approved/executing/rejected/executed matches stay on
+    // their own dedicated code paths, unaffected by adding "failed" here.
+    const [unchangedRequest] = await db.select().from(toolActionRequests);
+    expect(unchangedRequest.status).toBe("failed");
+  });
+
   it("adds formal board approval for destructive tool actions and fails closed until approved", async () => {
     const { company, agent, run } = await createRunFixture(db);
     await db.insert(toolPolicies).values({
