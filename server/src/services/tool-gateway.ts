@@ -5671,7 +5671,7 @@ export function createToolGatewayService(
         eq(toolActionRequests.canonicalArgumentsHash, input.argumentsHash),
         eq(toolInvocations.agentId, input.session.agentId),
         eq(toolInvocations.toolName, input.toolName),
-        inArray(toolActionRequests.status, ["pending", "approved", "executing", "rejected", "executed"]),
+        inArray(toolActionRequests.status, ["pending", "approved", "executing", "rejected", "executed", "failed"]),
       ))
       .orderBy(desc(toolActionRequests.createdAt))
       .limit(1);
@@ -5741,6 +5741,24 @@ export function createToolGatewayService(
     }
     if (actionRequest.status === "executed") {
       return { matched: true as const, result: storedInvocationResult(invocation), invocationId: invocation.id };
+    }
+    if (actionRequest.status === "failed") {
+      // The human already approved these exact arguments once; the approved
+      // execution attempt failed afterward (bad signature/snapshot, provider
+      // error, timeout, ...). Surface that failure directly instead of
+      // silently creating a brand-new action request + approval card for the
+      // same call, which forces a redundant re-approval of an already-decided
+      // action.
+      throw new ToolGatewayHttpError(
+        502,
+        invocation.errorMessage ?? "Approved tool action failed",
+        invocation.errorCode ?? "tool_execution_failed",
+        {
+          invocationId: invocation.id,
+          actionRequestId: actionRequest.id,
+          instructions: "This exact action was already approved and attempted once, and the attempt failed. Do not retry the same call; it will not create a new approval request. Adjust the arguments or report the failure on the task.",
+        },
+      );
     }
     if (actionRequest.status === "executing") {
       const settled = await waitForActionRequestExecution(actionRequest.id);
