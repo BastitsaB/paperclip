@@ -100,7 +100,11 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
       title: overrides.title ?? "Watched issue",
       status: overrides.status ?? "done",
       priority: overrides.priority ?? "medium",
-      identifier: overrides.identifier ?? `WDOG-${Math.floor(Math.random() * 10_000)}`,
+      // `issues_identifier_idx` is unique across the whole table, not per
+      // company, so the default must not be drawn from a small random space.
+      // A 4-digit draw collided with the explicit `WDOG-1`..`WDOG-4` identifiers
+      // this file seeds, which failed the insert roughly once every 2500 seeds.
+      identifier: overrides.identifier ?? `WDOG-${id}`,
       issueNumber: overrides.issueNumber ?? Math.floor(Math.random() * 10_000),
       parentId: overrides.parentId,
       assigneeAgentId: overrides.assigneeAgentId,
