@@ -19,7 +19,8 @@ Those are different problems, and the published evidence separates them cleanly:
 - **Semantic / episodic memory** (remembering facts and past conversations) has the
   weakest and most contested evidence, and the best-documented failure modes.
 - **Procedural memory** (remembering *how work gets done*, as reusable executable
-  routines) has by far the strongest measured effects in the literature.
+  routines) has by far the strongest measured effects in the literature — with
+  the transferability caveat in section 3.1, which the ranking below depends on.
 - **Context curation** (evolving role playbooks with incremental updates) sits in
   between, with solid published gains and a low implementation cost.
 
@@ -106,7 +107,28 @@ externally.
 **What the evidence actually says, ranked by effect size:** procedural memory (#1, #2)
 ≫ context curation (#3) > efficiency scheduling (#4) > semantic recall (#12, contested).
 The strongest negative evidence (#10, #11) applies specifically to unbounded semantic
-memory — the exact category with the weakest positive evidence.
+memory — the exact category with the weakest positive effect.
+
+### 3.1 Transferability caveat — read before using these numbers
+
+The ranking above is the honest reading of the literature. The **magnitudes are not
+transferable to Paperclip**, and the recommendation should not be sold as if they were:
+
+- AWM's +51.1% is WebArena: deterministic web tasks with a programmatic success oracle.
+- Voyager's 15.3× is Minecraft: every skill is verified by running it.
+- Both benchmarks can *label a trajectory as successful automatically*. Paperclip's work
+  is open-ended business execution, where "did this succeed" is itself a judgment call.
+
+What survives the transfer is the **direction** — reusing verified procedure beats
+recalling facts — and the **causal claim** from Voyager's ablation, that the skill library
+is where the gain lives. The size of the gain in this domain is unknown until measured.
+That is precisely why every phase below carries an eval gate and a stop condition rather
+than a promised number.
+
+The number this document leans on most heavily and trusts least is #11 (add-all 13% vs
+selective 39%): it is secondary-sourced and was measured on medical reasoning, a domain
+far from ours. It is used only to justify that forgetting must be designed in from the
+start — a conclusion that also follows from #10 and #12 independently.
 
 ---
 
@@ -118,7 +140,7 @@ This matters, because most of the substrate for the recommendation is already bu
 |---|---|---|
 | Scheduled recurring work with concurrency, catch-up, and activity gates | `server/src/routes/routines.ts`, `packages/db/src/schema/routines.ts`, `skills/paperclip/references/routines.md` | The consolidation sweep needs **no new scheduler** |
 | Heartbeat runs + events + watchdog decisions | `heartbeat_runs.ts`, `heartbeat_run_events.ts`, `heartbeat_run_watchdog_decisions.ts` | Raw trajectory data for induction |
-| Structured work records | `cases.ts`, `issue_work_products.ts`, `completion_contracts.ts`, `work_assessments.ts` | Outcome labels — did the work actually succeed |
+| Structured work records | `cases.ts`, `issue_work_products.ts`, `completion_contracts.ts`, `work_assessments.ts` | Outcome signal — only partly typed; see the precondition under Option D |
 | Human-labeled decision examples | `decision_training_examples.ts`, `server/src/routes/decision-training.ts` (interaction / approval / execution_decision) | An existing supervised signal, currently under-exploited |
 | Versioned agent instructions | `agent_config_revisions.ts`, `server/src/services/agent-instructions.ts` (bundle mode, per-adapter instruction paths) | **The injection point for playbooks — versioned and revertible** |
 | Company skill library + Skill Studio + catalog | `company_skills.ts`, `packages/skills-catalog/`, `skills/paperclip/references/company-skills.md` | The store for induced procedural knowledge |
@@ -139,7 +161,10 @@ dead end. That is the actual defect.
 
 ## 5. Options
 
-Effort is rough engineering weeks for one competent contributor including tests.
+Effort is rough engineering weeks for one competent contributor including tests. These
+figures are unvalidated estimates without task decomposition. Treat them as relative
+ordering — B is much cheaper than A, D is the largest of the recommended set — not as
+a plan a schedule can be built on.
 
 ### Option 0 — Do nothing beyond runtime-native memory
 
@@ -171,6 +196,27 @@ audit, browse UI, cost attribution.
 
 **Effort:** 8–12 weeks for Phases 1–4 of that plan. **Risk:** medium-high. **Business
 ROI:** indirect.
+
+---
+
+### Option B0 — Agent-authored lessons file, no sweep at all
+
+The cheapest intervention in the whole space, and the one this document originally
+skipped. At the end of a run, the agent appends what it learned to its own instructions —
+the `learnings.md` / compound-engineering pattern (#9) — landing as an
+`agent_config_revisions` change that a human can read and revert. No consolidation job,
+no scoring, no clustering.
+
+| Pro | Contra |
+|---|---|
+| Days, not weeks. Uses only the instructions bundle that already exists | No curation: the file grows monotonically until it poisons the context (#11) |
+| Practitioner-proven at small scale (#9) | Each agent learns alone — nothing crosses roles or agents, so the *company* still does not learn |
+| Honest floor for measuring everything else against | Wholesale self-rewrites invite context collapse (#3), the failure ACE exists to prevent |
+
+**Effort:** under 1 week. **Risk:** low short-term, rising with file size. **Verdict:**
+worth running in Phase 1 as the **active control arm** against the curated playbook, not
+as the answer. If B0 matches C on eval, the sweep is not earning its cost — and that is a
+result worth knowing early and cheaply.
 
 ---
 
@@ -226,9 +272,8 @@ ROI:** direct — fewer repeated mistakes per role.
 ### Option D — Procedural induction: successful runs → routines / skills / pipelines
 
 The highest-value option. Mine completed issues and heartbeat runs for **recurring task
-shapes** with good outcomes (`work_assessments`, `completion_contracts`,
-`issue_work_products`, no recovery actions, no reopen). Where a shape repeats N times, the
-sweep **proposes an executable asset**:
+shapes** with good outcomes. Where a shape repeats N times, the sweep **proposes an
+executable asset**:
 
 - a **Routine** when the shape is periodic,
 - a **Pipeline** when it is a fixed multi-step flow,
@@ -239,14 +284,24 @@ must pass an eval in `paperclip-eval-kernel` before it is attached to any agent.
 
 | Pro | Contra |
 |---|---|
-| **Strongest measured effects in the entire field**: AWM +51.1% relative (#1); Voyager 15.3× with the skill library as *the* causal factor (#2) | Depends on trajectory-data quality; noisy runs produce noisy inductions |
+| **Strongest measured effects in the entire field**: AWM +51.1% relative (#1); Voyager 15.3× with the skill library as *the* causal factor (#2) — magnitudes not transferable, see 3.1 | Depends on trajectory-data quality; noisy runs produce noisy inductions |
 | Output is an **executable asset**, not a hint — it converts human-triggered work into scheduled work, which is precisely "more automation" | Real risk of **automating a bad process** at scale |
 | Verifiable before adoption: a skill either passes its eval or it does not | Approval overhead per proposal (a feature, not a bug, at this maturity) |
 | Serves `Self-Organization` + `MAXIMIZER MODE` with a governed, non-hidden mechanism | Needs a similarity/clustering step over issues that does not exist yet |
 | Produces the single cleanest KPI: share of work closed without a human turn | Cold start: a young company has nothing to induce from |
+| | **Outcome selection is not query-ready today** — see the precondition below |
 
-**Effort:** 4–6 weeks after B. **Risk:** medium, fully bounded by the approval gate.
-**Business ROI:** highest and most direct.
+**Precondition, discovered while verifying this document.** Selecting "successful" runs
+at scale is not as cheap as it looks. `issue_work_products` carries typed columns that a
+query can filter on (`status`, `review_state`, `health_status`), and reopened issues and
+`issue_recovery_actions` are queryable negatives. But `work_assessments` keeps the actual
+verdict in an opaque `assessment_json` JSONB blob keyed to a `completion_contracts`
+contract — there is no outcome column to cluster on. Phase 3 therefore needs a typed
+outcome projection over `assessment_json` before induction can select on it. That work is
+not in the estimate below.
+
+**Effort:** 4–6 weeks after B, plus the outcome projection above. **Risk:** medium, fully
+bounded by the approval gate. **Business ROI:** highest and most direct.
 
 ---
 
@@ -299,6 +354,7 @@ whole proposal.**
 |---|---|---|
 | 0 Baseline | Keep as eval control | Every change must beat it |
 | A Memory provider plane | **Defer** | Highest cost, weakest and most contested evidence, delivers recall not autonomy |
+| B0 Agent-authored lessons file | **Adopt as control arm** | Cheapest possible baseline; makes the case for C falsifiable |
 | B Consolidation sweep | **Adopt as mechanism** | Cheap, auditable, already-built primitives |
 | C Role playbooks | **Adopt** | Best context-side gain per engineering week; revertible |
 | D Procedural induction | **Adopt — highest priority** | Largest measured effect; produces executable automation |
@@ -311,8 +367,8 @@ whole proposal.**
 `company-consolidation` skill + a nightly Routine with
 `activityGatePolicy: require_external_activity`. Reads the last 7 days of company work,
 writes append-only deltas into a company knowledge `case`, emits an operator digest.
-No new tables. F implemented in full. Deliverable: a nightly digest an operator wants to
-read.
+No new tables. F implemented in full. Ship B0 alongside it as the control arm, so Phase 2
+has something to beat. Deliverable: a nightly digest an operator wants to read.
 
 **Phase 2 — Role playbooks + eval gate (2–3 weeks).**
 Sweep maintains per-role playbooks; injection through the agent instructions bundle as an
@@ -337,6 +393,13 @@ Only for work already in a queue, attributed to the target issue's budget.
 Measure on the existing ledger, per company, weekly:
 
 - **Automation share** — issues closed with zero human comment / total closed. *Primary.*
+  Computable directly: `issue_comments` carries `author_type`, `author_agent_id` and
+  `author_user_id`. Two cautions. First, the table also carries `derived_author_agent_id`
+  for comments written by a non-human sentinel such as `local-board`, so "has an
+  `author_user_id`" is not the same as "a human spoke" — define the metric against
+  `author_type` and validate it before trusting a trend. Second, this metric is gameable:
+  an agent raises it by *not asking* when it should have. It is only meaningful read
+  together with the rework rate below, which is the guardrail against exactly that.
 - **Rework rate** — reopened issues + triggered recovery actions / total.
 - **Cost per closed issue** — from `cost_events`.
 - **Role eval pass rate** — playbook variant vs. baseline.
@@ -356,12 +419,18 @@ rate, revoke them and stop Phase 3. Both reverts must be one action.
    cross-company templates raise IP and leakage questions. Needs a product decision.
 2. **Who owns the consolidation agent?** A dedicated system agent, or the CEO agent? A
    dedicated one keeps the budget and the blast radius clean — but it is another hire.
-3. **Cold start.** Below roughly 50 completed issues there is nothing to induce from.
-   Should Phases 2–3 gate on a data threshold?
+3. **Cold start.** Below roughly 50 completed issues there is likely nothing to induce
+   from. The number 50 is an assumption, not a finding — it is not derived from any
+   source in section 3 and needs calibration against a real company's history. Should
+   Phases 2–3 gate on a data threshold at all?
 4. **Human-labeled examples.** `decision_training_examples` is an existing supervised
    signal. Feeding it into the Reflector is likely the cheapest quality win available —
    worth validating in Phase 2.
-5. **Figure verification.** Items marked (S) in §3 were read via search summaries because
+5. **Who writes the evals?** The eval gate is the load-bearing safety property of this
+   whole proposal, and it is circular if the same loop that writes playbooks also writes
+   the evals that approve them. Phase 2 needs a held-out, human-authored eval set that
+   the loop cannot edit. That set does not exist yet and is not costed here.
+6. **Figure verification.** Items marked (S) in §3 were read via search summaries because
    direct access to the primary sources was blocked in this environment. Before any of
    these numbers is used externally, re-verify against the primary papers.
 
