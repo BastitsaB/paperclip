@@ -472,24 +472,40 @@ describeEmbeddedPostgres("built-in agents", () => {
     const companyId = await seedCompany();
     const builtIns = builtInAgentService(db);
 
-    await expect(builtIns.get(companyId, "learning")).resolves.toMatchObject({ status: "not_provisioned" });
+    // Uses a built-in without `defaultStatus: "paused"`, so the lifecycle runs
+    // through needs_setup. Bundled built-ins that spend tokens on a schedule
+    // provision paused instead — covered by the test below.
+    await expect(builtIns.get(companyId, "briefs")).resolves.toMatchObject({ status: "not_provisioned" });
 
-    const needsSetup = await builtIns.ensure(companyId, "learning");
+    const needsSetup = await builtIns.ensure(companyId, "briefs");
     expect(needsSetup.status).toBe("needs_setup");
     expect(deriveBuiltInAgentStatus(needsSetup.agent)).toBe("needs_setup");
 
-    const ready = await builtIns.ensure(companyId, "learning", {
+    const ready = await builtIns.ensure(companyId, "briefs", {
       adapterType: "claude_local",
       adapterConfig: { model: "claude-sonnet-4-5" },
     });
     expect(ready.status).toBe("ready");
 
     await agentService(db).pause(ready.agentId!, "manual");
-    await expect(builtIns.get(companyId, "learning")).resolves.toMatchObject({
+    await expect(builtIns.get(companyId, "briefs")).resolves.toMatchObject({
       status: "paused",
       agentId: ready.agentId,
       pauseReason: "manual",
     });
+  });
+
+  it("provisions scheduled-sweep built-ins paused so they spend nothing until an operator enables them", async () => {
+    const companyId = await seedCompany();
+    const builtIns = builtInAgentService(db);
+
+    for (const key of ["learning", "reflection-coach", "summarizer"]) {
+      const provisioned = await builtIns.ensure(companyId, key, {
+        adapterType: "claude_local",
+        adapterConfig: { model: "claude-sonnet-4-5" },
+      });
+      expect(provisioned.status, `${key} must provision paused`).toBe("paused");
+    }
   });
 
   it("requires configured built-ins with typed precondition failures and paused warnings", async () => {

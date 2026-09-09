@@ -148,10 +148,20 @@ This matters, because most of the substrate for the recommendation is already bu
 | Evals & feedback | `packages/paperclip-eval-kernel/`, `evals/`, `doc/plans/2026-03-13-agent-evals-framework.md` | The only honest way to prove a learning loop works |
 | Cost ledger | `cost_events.ts`, `finance_events.ts`, budget policies | ROI measurement for the loop itself |
 | Activity log & attribution | `activity_log.ts` | Provenance and audit |
+| **Reflection Coach** (built-in agent + bundled skill + weekly routine) | `server/src/built-ins/agents/reflection-coach/`, `packages/skills-catalog/catalog/bundled/paperclip-operations/reflection-coach/` | **Option C already exists at the per-agent level**, gated by displayed diff + accepted interaction + separate apply run |
+| **Learning Agent** (built-in agent, bundle-less stub before this proposal) | `server/src/services/built-in-agents.ts` | The reserved slot for company-level consolidation |
 | Pipelines | `pipelines.ts`, `pipeline_cases.ts` | Target format for induced multi-step workflows |
 
 **Not present:** any memory table, any `/api/.../memory` route. The March plan
 (`doc/plans/2026-03-17-memory-service-surface-api.md`) is designed but unimplemented.
+
+**Correction, made while implementing Phase 1.** The first version of this table missed
+the two rows now marked in bold. That omission mattered: `reflection-coach` already
+implements Option C for a *single* agent, complete with the governance gates this document
+argues for. The version of Option C below is therefore narrower than first written — it is
+the *cross-agent* playbook layer, and single-agent findings are routed to the coach rather
+than reimplemented. The `learning` built-in existed as a bundle-less stub whose stated
+purpose was exactly this work, which is where Phase 1 now lives.
 
 **The gap is therefore not storage.** Paperclip records what happened in great detail and
 never converts it into anything that changes future behaviour. Every finished issue is a
@@ -363,7 +373,18 @@ whole proposal.**
 
 ### Phasing
 
-**Phase 1 — Consolidation sweep + governance (2–3 weeks).**
+**Phase 1 — Consolidation sweep + governance (2–3 weeks). Shipped.**
+
+Implemented as a bundle on the existing `learning` built-in agent: instructions
+(`server/src/built-ins/agents/learning/AGENTS.md`), the `company-consolidation` skill
+(`packages/skills-catalog/catalog/bundled/paperclip-operations/company-consolidation/`),
+and a nightly routine (`nightly-consolidation`, `0 3 * * *`) that ships **paused** and
+gated on `require_external_activity`, so it spends nothing until an operator enables it
+and skips quiet windows. No new tables, no new routes. Governance (Option F) is written
+into both the instructions and the skill: memory-as-data, append-only deltas, mandatory
+provenance, external-origin quarantine, supersede-not-delete, and proposal-only authority.
+
+Original scope, for reference:
 `company-consolidation` skill + a nightly Routine with
 `activityGatePolicy: require_external_activity`. Reads the last 7 days of company work,
 writes append-only deltas into a company knowledge `case`, emits an operator digest.
