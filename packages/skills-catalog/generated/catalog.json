@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-08-11T15:05:34.526Z",
+  "generatedAt": "2026-09-09T16:22:28.014Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -37,6 +37,41 @@
         }
       ],
       "contentHash": "sha256:2e02299210fd17c1fe1867b4ee8c144a11b6fe1fe481f83b8268cfbaaf10f9aa"
+    },
+    {
+      "id": "paperclipai:bundled:paperclip-operations:company-consolidation",
+      "key": "paperclipai/bundled/paperclip-operations/company-consolidation",
+      "kind": "bundled",
+      "category": "paperclip-operations",
+      "slug": "company-consolidation",
+      "name": "company-consolidation",
+      "description": "Run a bounded, company-wide consolidation sweep over recent work and turn it into curated, append-only company knowledge plus role playbook proposals. Never applies changes and never promotes unattributed content.",
+      "path": "catalog/bundled/paperclip-operations/company-consolidation",
+      "entrypoint": "SKILL.md",
+      "trustLevel": "markdown_only",
+      "compatibility": "compatible",
+      "defaultInstall": false,
+      "recommendedForRoles": [
+        "manager",
+        "general"
+      ],
+      "requires": [],
+      "tags": [
+        "paperclip",
+        "memory",
+        "learning",
+        "consolidation",
+        "governance"
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "kind": "skill",
+          "sizeBytes": 11451,
+          "sha256": "60f00c783de064db7915ac8baaa7a20067ba5700aaa982d70248872a17c9fea6"
+        }
+      ],
+      "contentHash": "sha256:533e3bc5ebd41e76ca2c4b5b3bf3ab86295f1c1971831d488fdb9019763f34bf"
     },
     {
       "id": "paperclipai:bundled:paperclip-operations:issue-triage",
