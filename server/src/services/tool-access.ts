@@ -9642,11 +9642,16 @@ export function toolAccessService(db: Db, options: ToolAccessServiceOptions = {}
         throw error;
       }
       if (galleryEntry?.slug === COMPOSIO_GALLERY_KEY) {
+        await db.update(toolConnections).set({ status: "active", enabled: true, updatedAt: now() })
+          .where(eq(toolConnections.id, connectionRow.id));
+        await db.update(toolApplications).set({ status: "active", type: "mcp_http", updatedAt: now() })
+          .where(eq(toolApplications.id, applicationRow.id));
         const [application] = await db.select().from(toolApplications).where(eq(toolApplications.id, applicationRow.id));
+        const [activatedConnection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connectionRow.id));
         return {
-          connectionId: health.connection.id,
+          connectionId: activatedConnection.id,
           application: toApplication(application),
-          connection: health.connection,
+          connection: toConnection(activatedConnection),
           catalog: [],
           actions: { readOnly: [], canMakeChanges: [] },
           suggestedDefaults: recommendedDefaultsForApp(galleryEntry, method?.key),

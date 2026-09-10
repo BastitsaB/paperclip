@@ -170,11 +170,12 @@ export function createComposioSessionManager(db: Db, options: ComposioSessionMan
       return resolveCached(child, cached);
     }
 
+    const toolkitScopedTools = tools.filter((tool) => !tool.startsWith("COMPOSIO_"));
     const client = options.composioClientFactory?.(apiKey) ?? createComposioClient({ apiKey });
     const session = await client.createSession(`paperclip:${child.companyId}`, {
       mcp: true,
       toolkits: [config.toolkitSlug],
-      ...(tools.length > 0 ? { tools: { [config.toolkitSlug]: { enable: tools } } } : {}),
+      ...(toolkitScopedTools.length > 0 ? { tools: { [config.toolkitSlug]: { enable: toolkitScopedTools } } } : {}),
       ...(config.connectedAccountId ? { connectedAccounts: { [config.toolkitSlug]: [config.connectedAccountId] } } : {}),
     });
     if (!session.mcp?.url) throw unprocessable("Composio did not return a hosted MCP URL.", { code: "composio_session_invalid" });
@@ -187,9 +188,13 @@ export function createComposioSessionManager(db: Db, options: ComposioSessionMan
       configPath: `${prefix}.url`,
       value: session.mcp.url,
     });
+    const mcpHeaders = { ...(session.mcp.headers ?? {}) };
+    if (!Object.keys(mcpHeaders).some((name) => name.toLowerCase() === "x-api-key")) {
+      mcpHeaders["x-api-key"] = apiKey;
+    }
     const priorHeaders = new Map((cached?.headerRefs ?? []).map((ref) => [ref.name.toLowerCase(), ref]));
     const headerRefs: SessionRef[] = [];
-    for (const [name, value] of Object.entries(session.mcp.headers ?? {})) {
+    for (const [name, value] of Object.entries(mcpHeaders)) {
       headerRefs.push(await createOrRotateRef({
         child,
         cached: priorHeaders.get(name.toLowerCase()),
