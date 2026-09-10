@@ -142,6 +142,12 @@ export type {
 export { boardAuthService } from "./board-auth.js";
 export { instanceSettingsService, applyManagedExperimentalOverlay } from "./instance-settings.js";
 export {
+  globalRunAdmissionService,
+  DEFAULT_GLOBAL_MAX_CONCURRENT_RUNS,
+  GLOBAL_RUN_ADMISSION_MIN_CAP,
+  GLOBAL_RUN_ADMISSION_MAX_CAP,
+} from "./global-run-admission.js";
+export {
   getManagedInstanceConfig,
   managedFeatureKeySet,
   parseManagedConfigEnv,

@@ -355,6 +355,7 @@ import {
   instanceSettingsService,
   resolveWorktreeRunExecutionActivation,
 } from "./instance-settings.js";
+import { globalRunAdmissionService } from "./global-run-admission.js";
 import {
   evaluateExecutionAllowlist,
   isExecutionForcedToKubernetes,
@@ -8295,6 +8296,7 @@ export function heartbeatService(
 ) {
   let shutdownInProgress = false;
   const instanceSettings = instanceSettingsService(db);
+  const globalRunAdmission = globalRunAdmissionService(db);
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
@@ -8348,9 +8350,28 @@ export function heartbeatService(
   };
   const getSchedulingSuppression = async () => {
     const override = await resolveWorktreeRunExecutionOverride();
-    return resolveHeartbeatSchedulingSuppression(runtimeEnv, {
+    const envSuppression = resolveHeartbeatSchedulingSuppression(runtimeEnv, {
       allowWorktreeRunExecution: override.allowed,
     });
+    if (envSuppression.suppressed) return envSuppression;
+    // Global emergency stop (MAI-890/MAI-1035): a DB-backed, explicitly
+    // triggered/resumed kill switch layered on top of the env-based
+    // suppression above. Reusing this single chokepoint wires the stop into
+    // every path that already respects scheduling suppression (manual
+    // wakeups, the heartbeat timer/cron scan, fan-out/assignment wakeups, and
+    // scheduled-retry promotion) without touching each call site. Bypasses
+    // the service's read cache deliberately: the approved design requires
+    // the stop to pause admission immediately, so this one check always hits
+    // the DB rather than risking a stale cached read for up to the cache's
+    // TTL. The cap pre-filter in listClaimableQueuedRuns stays cached: it is
+    // non-authoritative (claimQueuedRun's admitOne(), also always uncached,
+    // is the real cap gate), so staleness there only affects how quickly a
+    // full cap is noticed, never enforcement.
+    const admissionState = await globalRunAdmission.getState({ bypassCache: true });
+    if (admissionState.emergencyStopActive) {
+      return { suppressed: true as const, reason: "global_emergency_stop" as const };
+    }
+    return { suppressed: false as const, reason: null };
   };
   const getWorktreeExecutionCutoff = async () => {
     const override = await resolveWorktreeRunExecutionOverride();
@@ -15284,6 +15305,19 @@ export function heartbeatService(
     const queuedCommentClaim =
       issueId && run.wakeupRequestId && queuedCommentIds.length > 0
         ? await db.transaction(async (tx) => {
+            // Global run-admission gate (MAI-890/MAI-1035): taken before the
+            // row locks below so the instance-wide advisory lock is always the
+            // outermost lock in both claim paths of this function. A denial
+            // reports "stale", which leaves the run queued and its queued
+            // comments intact for the next scheduling pass.
+            const admission = await globalRunAdmission.admitOne(tx);
+            if (!admission.allowed) {
+              logger.info(
+                { runId: run.id, agentId: run.agentId, code: admission.code, reason: admission.reason },
+                "claimQueuedRun: deferred by global run admission gate",
+              );
+              return { kind: "stale" as const, run: null };
+            }
             // Match the queue-edit lock order: issue, wake, then run. Once the
             // run becomes running, a concurrent discard must observe the
             // claimed wake and return an explicit conflict; if discard wins,
@@ -15498,24 +15532,41 @@ export function heartbeatService(
       void emitAgentTaskRun(db, queuedCommentClaim.run);
       return null;
     }
+    // Global run-admission gate (MAI-890/MAI-1035): the count-check and the
+    // queued->running write must happen inside the SAME transaction, under a
+    // single instance-wide advisory lock, or two concurrent claims for
+    // different agents could each observe capacity and both proceed,
+    // breaching the cap. A denial here leaves the row "queued" (not
+    // cancelled) so it is simply retried on the next scheduling pass once
+    // capacity frees up or the emergency stop is lifted.
     const claimed = queuedCommentClaim
       ? queuedCommentClaim.run
-      : await db
-          .update(heartbeatRuns)
-          .set({
-            status: "running",
-            responsibleUserId,
-            startedAt: run.startedAt ?? claimedAt,
-            updatedAt: claimedAt,
-          })
-          .where(
-            and(
-              eq(heartbeatRuns.id, run.id),
-              eq(heartbeatRuns.status, "queued"),
-            ),
-          )
-          .returning()
-          .then((rows) => rows[0] ?? null);
+      : await db.transaction(async (tx) => {
+          const admission = await globalRunAdmission.admitOne(tx);
+          if (!admission.allowed) {
+            logger.info(
+              { runId: run.id, agentId: run.agentId, code: admission.code, reason: admission.reason },
+              "claimQueuedRun: deferred by global run admission gate",
+            );
+            return null;
+          }
+          return tx
+            .update(heartbeatRuns)
+            .set({
+              status: "running",
+              responsibleUserId,
+              startedAt: run.startedAt ?? claimedAt,
+              updatedAt: claimedAt,
+            })
+            .where(
+              and(
+                eq(heartbeatRuns.id, run.id),
+                eq(heartbeatRuns.status, "queued"),
+              ),
+            )
+            .returning()
+            .then((rows) => rows[0] ?? null);
+        });
     if (!claimed) return null;
 
     publishLiveEvent({
@@ -17240,10 +17291,16 @@ export function heartbeatService(
       }
       const policy = parseHeartbeatPolicy(agent);
       const runningCount = await countRunningRunsForAgent(agentId);
-      const availableSlots = Math.max(
-        0,
-        policy.maxConcurrentRuns - runningCount,
-      );
+      const perAgentAvailableSlots = Math.max(0, policy.maxConcurrentRuns - runningCount);
+      if (perAgentAvailableSlots <= 0) return [];
+      // Cheap global pre-filter (MAI-890/MAI-1035): avoids the queued-run
+      // enumeration below when the instance-wide cap is already exhausted or
+      // the emergency stop is active. This check alone is not race-safe
+      // across concurrent agents — claimQueuedRun's admitOne() inside a
+      // locked transaction is the authoritative gate.
+      const globalAdmission = await globalRunAdmission.checkAdmissionFast();
+      if (!globalAdmission.allowed) return [];
+      const availableSlots = Math.min(perAgentAvailableSlots, globalAdmission.availableSlots);
       if (availableSlots <= 0) return [];
 
       const queuedRuns = await db

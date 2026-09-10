@@ -158,5 +158,12 @@ export const heartbeatRuns = pgTable(
       sql`(${table.contextSnapshot} ->> 'taskKey')`,
       table.createdAt.desc(),
     ),
+    // Partial index for the global (cross-company) running-run count used by
+    // the MAI-890/MAI-1035 global run-admission cap — that hot-path query has
+    // no companyId predicate, so the existing company-scoped status indexes
+    // above don't serve it.
+    globalRunningStatusIdx: index("heartbeat_runs_global_running_status_idx")
+      .on(table.status)
+      .where(sql`${table.status} = 'running'`),
   }),
 );
