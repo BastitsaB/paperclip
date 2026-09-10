@@ -34,19 +34,6 @@ export function crossIssueInfluenceRunContextError() {
   return forbidden(body.error, body.details);
 }
 
-/**
- * agent_jwt auth sets req.actor.runId from the signed token claim regardless
- * of whether the caller sent the X-Paperclip-Run-Id header. That is enough to
- * satisfy crossIssueInfluenceRunContextError's null check, but not enough to
- * prove the caller actually knows and is asserting its own run id (the header
- * is what agent_key auth relies on exclusively). Callers on the agent_jwt
- * source must send the header explicitly, even when the claim already agrees.
- */
-export function explicitRunIdHeaderRequiredError() {
-  const { body } = issueWriteDenialResponse("cross_issue_influence_run_id_header_required");
-  return forbidden(body.error, body.details);
-}
-
 function readRunSourceIssueId(contextSnapshot: unknown) {
   if (!contextSnapshot || typeof contextSnapshot !== "object" || Array.isArray(contextSnapshot)) return null;
   const context = contextSnapshot as Record<string, unknown>;

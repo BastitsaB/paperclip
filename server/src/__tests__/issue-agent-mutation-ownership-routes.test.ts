@@ -200,11 +200,6 @@ function registerRouteMocks() {
       "Agent issue comments and updates require a valid heartbeat run so cross-issue influence can be contained",
       { code: "cross_issue_influence_run_context_required" },
     ),
-    explicitRunIdHeaderRequiredError: () => new HttpError(
-      422,
-      "Cross-issue writes need the run-id header, not just the token claim",
-      { code: "cross_issue_influence_run_id_header_required" },
-    ),
   }));
 
   vi.doMock("../services/runner-goals.js", () => ({

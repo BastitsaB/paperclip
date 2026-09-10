@@ -95,7 +95,6 @@ const mockRunnerGoalService = vi.hoisted(() => ({
   projection: vi.fn(async () => null),
   act: vi.fn(),
 }));
-const mockExplicitRunIdHeaderRequiredError = vi.hoisted(() => vi.fn());
 
 vi.mock("@paperclipai/shared/telemetry", () => ({
   trackAgentTaskCompleted: vi.fn(),
@@ -192,7 +191,6 @@ vi.mock("../services/cross-issue-influence-limit.js", () => ({
   observeCrossIssueInfluence: mockObserveCrossIssueInfluence,
   crossIssueInfluenceLimitError: mockCrossIssueInfluenceLimitError,
   crossIssueInfluenceRunContextError: mockCrossIssueInfluenceRunContextError,
-  explicitRunIdHeaderRequiredError: mockExplicitRunIdHeaderRequiredError,
 }));
 
 function createApp() {
@@ -312,7 +310,6 @@ describe.sequential("issue comment reopen routes", () => {
     mockObserveCrossIssueInfluence.mockReset();
     mockCrossIssueInfluenceLimitError.mockReset();
     mockCrossIssueInfluenceRunContextError.mockReset();
-    mockExplicitRunIdHeaderRequiredError.mockReset();
     mockTxInsertValues.mockReset();
     mockTxInsert.mockReset();
     mockDbSelect.mockReset();
@@ -354,11 +351,6 @@ describe.sequential("issue comment reopen routes", () => {
       403,
       "Agent issue comments and updates require a valid heartbeat run so cross-issue influence can be contained",
       { code: "cross_issue_influence_run_context_required" },
-    ));
-    mockExplicitRunIdHeaderRequiredError.mockImplementation(() => new HttpError(
-      422,
-      "Cross-issue writes need the run-id header, not just the token claim",
-      { code: "cross_issue_influence_run_id_header_required" },
     ));
     mockLogActivity.mockResolvedValue(undefined);
     mockFeedbackService.listIssueVotesForUser.mockResolvedValue([]);

@@ -279,7 +279,6 @@ import { resolveSelectedSuggestedTasks } from "../services/issue-thread-interact
 import {
   crossIssueInfluenceLimitError,
   crossIssueInfluenceRunContextError,
-  explicitRunIdHeaderRequiredError,
   observeCrossIssueInfluence,
   type CrossIssueInfluenceKind,
 } from "../services/cross-issue-influence-limit.js";
@@ -3190,9 +3189,6 @@ export function issueRoutes(
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent") return true;
-    if (req.actor.source === "agent_jwt" && !req.header("x-paperclip-run-id")) {
-      throw explicitRunIdHeaderRequiredError();
-    }
     if (!req.actor.agentId || !req.actor.runId) throw crossIssueInfluenceRunContextError();
 
     // The counter transaction locks and validates the persisted run before it
