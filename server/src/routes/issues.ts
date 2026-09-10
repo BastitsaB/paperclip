@@ -10557,10 +10557,12 @@ export function issueRoutes(
     }
     const descriptor = updateFields.unblockDescriptor ?? null;
     if (descriptor && typeof descriptor === "object") {
+      // MAI-880: agents may route a purely human unblock action to the board or
+      // to an active company member. Without it they could not park an existing
+      // issue on a human and instead filed a fresh escalation task every time —
+      // the mechanical root of the task explosion. Naming another AGENT remains
+      // forbidden; that check stands unchanged directly below.
       const owner = descriptor.owner;
-      if (req.actor.type === "agent" && (owner === "board" || "userId" in owner)) {
-        throw forbidden("Agents may only name themselves as an unblock owner");
-      }
       if (owner !== "board" && "agentId" in owner) {
         const target = await db.select({ id: agents.id }).from(agents).where(and(
           eq(agents.id, owner.agentId),
