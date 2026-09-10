@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "@/context/ThemeContext";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TaskChatThread } from "./TaskChatThread";
 import type {
   IssueDocument,
@@ -63,7 +64,10 @@ vi.mock("@/hooks/useIssuePlanDocument", () => ({
   useIssuePlanDocument: () => planState,
 }));
 vi.mock("@/hooks/useStreamlinedUiEnabled", () => ({
-  useStreamlinedUiEnabled: () => ({ enabled: streamlinedState.enabled, loaded: true }),
+  useStreamlinedUiEnabled: () => ({
+    enabled: streamlinedState.enabled,
+    loaded: true,
+  }),
 }));
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -94,6 +98,7 @@ vi.mock("@/components/MarkdownEditor", () => ({
 
 let container: HTMLDivElement;
 let root: Root | null = null;
+let queryClient: QueryClient;
 
 beforeEach(() => {
   localStorage.clear();
@@ -109,10 +114,17 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
 });
 
 afterEach(() => {
   flushSync(() => root?.unmount());
+  queryClient.clear();
   root = null;
   container.remove();
   localStorage.clear();
@@ -120,8 +132,40 @@ afterEach(() => {
 });
 
 function render(ui: ReactElement) {
-  flushSync(() => root!.render(<ThemeProvider>{ui}</ThemeProvider>));
+  flushSync(() =>
+    root!.render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>{ui}</ThemeProvider>
+      </QueryClientProvider>,
+    ),
+  );
 }
+
+it("coordinates first reveal while keeping the composer and visible history mounted through refresh", async () => {
+  const props = { issueId: "coordinated-issue", comments: [], onAdd: async () => {} };
+  render(<TaskChatThread {...props} initialHistoryPending />);
+  const composer = container.querySelector('[data-testid="mock-editor"]');
+  expect(composer).not.toBeNull();
+  expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+  render(<TaskChatThread {...props} initialHistoryPending={false} />);
+  await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+  expect(container.querySelector('[aria-busy="false"]')).not.toBeNull();
+  expect(container.querySelector('[data-testid="mock-editor"]')).toBe(composer);
+  render(<TaskChatThread {...props} initialHistoryPending />);
+  expect(container.querySelector('[data-testid="task-chat-history-loading"]')).toBeNull();
+  expect(container.querySelector('[data-testid="mock-editor"]')).toBe(composer);
+});
+
+it("keeps an acknowledged optimistic bubble mounted with its canonical comment target", () => {
+  const comment = { companyId: "company", issueId: "issue", authorAgentId: null, presentation: null, metadata: null, updatedAt: new Date("2026-09-09T12:00:00Z"), id: "optimistic-one", clientId: "optimistic-one", body: "Keep this message in place", authorType: "user" as const, authorUserId: "board", createdAt: new Date("2026-09-09T12:00:00Z") };
+  render(<TaskChatThread comments={[comment]} onAdd={async () => {}} />);
+  const row = container.querySelector('[data-thread-anchor="optimistic-one"]');
+  expect(row).not.toBeNull();
+  render(<TaskChatThread comments={[{ ...comment, id: "canonical-one" }]} onAdd={async () => {}} />);
+  expect(container.querySelector('[data-thread-anchor="optimistic-one"]')).toBe(row);
+  expect(row?.id).toBe("comment-canonical-one");
+  expect(container.textContent?.match(/Keep this message in place/g)).toHaveLength(1);
+});
 
 function fakeScrollGeometry(
   element: HTMLElement,
@@ -319,7 +363,7 @@ describe("TaskChatThread draft pass-through", () => {
     expect(scroller?.firstElementChild?.classList).toContain("pt-3");
   });
 
-  it("keeps the composer dock aligned with the thread's horizontal padding", () => {
+  it("lets the mobile composer dock use the full thread width", () => {
     render(
       <TaskChatThread
         comments={[
@@ -344,10 +388,18 @@ describe("TaskChatThread draft pass-through", () => {
     const dock = container.querySelector(
       '[data-testid="task-chat-composer-dock"]',
     );
-    expect(dock?.classList).toContain("px-4");
+    const thread = container.querySelector(
+      '[data-testid="task-chat-thread"]',
+    );
+    expect(thread?.classList).not.toContain("h-(--tc-thread-max-h)");
+    expect(thread?.classList).toContain("flex-1");
+    expect(dock?.classList).toContain("px-2");
+    expect(dock?.classList).toContain("md:px-0");
     expect(dock?.classList).not.toContain("px-1");
-    expect(dock?.classList).toContain("-mt-(--radius-task-composer)");
+    expect(dock?.classList).not.toContain("-mt-(--radius-task-composer)");
     expect(dock?.classList).not.toContain("pt-1");
+    expect(dock?.classList).toContain("md:pb-0");
+    expect(dock?.classList).not.toContain("md:pb-4");
     expect(dock?.classList).not.toContain("bg-background/80");
     expect(dock?.classList).not.toContain("backdrop-blur");
   });
@@ -974,6 +1026,19 @@ describe("TaskChatThread runtime transcript selection", () => {
     expect(onRetryFailedRun).toHaveBeenCalledWith("native-failed");
   });
 
+  it("explains a legacy run prevented from starting by a reconciliation hold", () => {
+    render(<TaskChatThread comments={[]} onAdd={async () => {}} linkedRuns={[{
+      runId: "blocked-legacy", runtimeMode: "legacy", status: "cancelled",
+      errorCode: "execution_reconciliation_required", agentId: "agent-1", agentName: "Runner",
+      adapterType: "claude_local", createdAt: "2026-08-25T18:00:00.000Z",
+      startedAt: null, finishedAt: "2026-08-25T18:00:00.012Z",
+    }]} />);
+    expect(container.textContent).toContain("Couldn't start");
+    expect(container.textContent).not.toContain("No user-facing response");
+    expect(container.textContent).not.toContain("Run completed");
+    expect(container.querySelector(".text-destructive")).toBeNull();
+  });
+
   it("shows cancellation after native progress without offering a retry", () => {
     nativeTranscriptState.transcriptByRun.set("native-cancelled", [
       {
@@ -1005,6 +1070,8 @@ describe("TaskChatThread runtime transcript selection", () => {
     );
 
     expect(container.textContent).toContain("Work was in progress.");
+    expect(container.querySelector('[data-testid="task-chat-collapsible-marker"] button')?.classList).toContain("text-muted-foreground");
+    expect(container.querySelector('[data-testid="task-chat-collapsible-marker"] .text-destructive')).toBeNull();
     expect(
       container.querySelector('[data-testid="task-chat-collapsible-marker"]')
         ?.textContent,
@@ -1081,6 +1148,16 @@ describe("TaskChatThread runtime transcript selection", () => {
     },
   );
 
+  it("does not show a completed-response notice for a redundant cancelled continuation", () => {
+    render(<TaskChatThread comments={[]} onAdd={async () => {}} linkedRuns={[{
+      runId: "connection-continuation-skipped", status: "cancelled", errorCode: "issue_not_in_progress", startedAt: null,
+      agentId: "agent-1", agentName: "Runner", adapterType: "paperclip_runner",
+      createdAt: "2026-09-07T18:00:00.000Z", finishedAt: "2026-09-07T18:00:01.000Z",
+    }]} />);
+    expect(container.textContent).not.toContain("The runner returned no user-facing response.");
+    expect(container.textContent).not.toContain("Run completed");
+  });
+
   it("does not treat a progress comment as the final response of a failed native run", () => {
     nativeTranscriptState.transcriptByRun.set("native-progress-failed", [
       {
@@ -1150,6 +1227,255 @@ describe("TaskChatThread runtime transcript selection", () => {
     expect(
       container.querySelector('[data-testid="task-chat-final-response"]'),
     ).toBeNull();
+  });
+
+  it("does not repeat progress when the persisted completion comment owns the same text", () => {
+    const repeated = "BASELINE-DONE";
+    nativeTranscriptState.transcriptByRun.set("native-repeated-final", [
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:01.000Z",
+        text: repeated,
+        channel: "progress",
+      },
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:02.000Z",
+        text: repeated,
+        channel: "final",
+      },
+    ]);
+
+    render(
+      <TaskChatThread
+        comments={[
+          {
+            id: "native-repeated-final-comment",
+            companyId: "company-1",
+            issueId: "issue-1",
+            authorType: "agent",
+            authorAgentId: "agent-1",
+            authorUserId: null,
+            body: repeated,
+            presentation: null,
+            metadata: null,
+            runId: "native-repeated-final",
+            createdAt: new Date("2026-08-25T18:00:03.000Z"),
+            updatedAt: new Date("2026-08-25T18:00:03.000Z"),
+          },
+        ]}
+        onAdd={async () => {}}
+        linkedRuns={[
+          {
+            runId: "native-repeated-final",
+            runtimeMode: "native",
+            status: "succeeded",
+            agentId: "agent-1",
+            agentName: "Runner",
+            adapterType: "paperclip_runner",
+            createdAt: "2026-08-25T18:00:00.000Z",
+            startedAt: "2026-08-25T18:00:00.000Z",
+            finishedAt: "2026-08-25T18:00:03.000Z",
+            resultJson: {
+              presentationDecision: {
+                schema: "paperclip.run_presentation_decision.v1",
+                chosenSource: "final_agent_message",
+                commentId: "native-repeated-final-comment",
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(container.textContent?.split(repeated)).toHaveLength(2);
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          '[data-testid="task-chat-phase-interstitial"]',
+        ),
+      ).some((element) => element.textContent?.includes(repeated)),
+    ).toBe(false);
+    expect(
+      container.querySelector('[data-testid="task-chat-agent-bubble"]')
+        ?.textContent,
+    ).toContain(repeated);
+  });
+
+  it("removes only the final repeated progress across steering segments", () => {
+    const repeated = "SAME-BEFORE-AND-AFTER";
+    nativeTranscriptState.transcriptByRun.set("native-steered-repetition", [
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:01.000Z",
+        text: repeated,
+        channel: "progress",
+      },
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:03.000Z",
+        text: repeated,
+        channel: "progress",
+      },
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:04.000Z",
+        text: repeated,
+        channel: "final",
+      },
+    ]);
+
+    render(
+      <TaskChatThread
+        comments={[
+          {
+            id: "steering-comment",
+            companyId: "company-1",
+            issueId: "issue-1",
+            authorType: "user",
+            authorAgentId: null,
+            authorUserId: "user-1",
+            body: "Steer this run.",
+            presentation: null,
+            metadata: null,
+            runId: null,
+            followUpRequested: true,
+            consumedByRunId: "native-steered-repetition",
+            steeredIntoRunId: "native-steered-repetition",
+            conversationAnchorAt: new Date("2026-08-25T18:00:02.000Z"),
+            createdAt: new Date("2026-08-25T17:59:32.000Z"),
+            updatedAt: new Date("2026-08-25T18:00:02.000Z"),
+          },
+          {
+            id: "native-steered-repetition-final",
+            companyId: "company-1",
+            issueId: "issue-1",
+            authorType: "agent",
+            authorAgentId: "agent-1",
+            authorUserId: null,
+            body: repeated,
+            presentation: null,
+            metadata: null,
+            runId: "native-steered-repetition",
+            createdAt: new Date("2026-08-25T18:00:05.000Z"),
+            updatedAt: new Date("2026-08-25T18:00:05.000Z"),
+          },
+        ]}
+        onAdd={async () => {}}
+        linkedRuns={[
+          {
+            runId: "native-steered-repetition",
+            runtimeMode: "native",
+            status: "succeeded",
+            agentId: "agent-1",
+            agentName: "Runner",
+            adapterType: "paperclip_runner",
+            createdAt: "2026-08-25T18:00:00.000Z",
+            startedAt: "2026-08-25T18:00:00.000Z",
+            finishedAt: "2026-08-25T18:00:05.000Z",
+            resultJson: {
+              presentationDecision: {
+                schema: "paperclip.run_presentation_decision.v1",
+                chosenSource: "final_agent_message",
+                commentId: "native-steered-repetition-final",
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    const matchingPhases = Array.from(
+      container.querySelectorAll(
+        '[data-testid="task-chat-phase-interstitial"]',
+      ),
+    ).filter((element) => element.textContent?.includes(repeated));
+    expect(matchingPhases).toHaveLength(1);
+    expect(
+      container.querySelector('[data-testid="task-chat-agent-bubble"]')
+        ?.textContent,
+    ).toContain(repeated);
+    expect(container.textContent).toContain(
+      `Queued ${new Date("2026-08-25T17:59:32.000Z").toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · Steered ${new Date("2026-08-25T18:00:02.000Z").toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
+    );
+    const turnHeaders = Array.from(
+      container.querySelectorAll('[data-testid="task-chat-turn-summary"]'),
+    );
+    expect(turnHeaders).toHaveLength(2);
+    expect(turnHeaders[0]?.textContent).not.toContain(
+      "Continued after steering",
+    );
+    expect(turnHeaders[1]?.textContent).toContain(
+      "Continued after steering · Worked for",
+    );
+  });
+
+  it("labels the live tail as a continuation after the steering bubble", () => {
+    nativeTranscriptState.transcriptByRun.set("native-live-steered", [
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:01.000Z",
+        text: "Work before steering.",
+        channel: "progress",
+      },
+      {
+        kind: "assistant",
+        ts: "2026-08-25T18:00:03.000Z",
+        text: "Work after steering.",
+        channel: "progress",
+      },
+    ]);
+
+    render(
+      <TaskChatThread
+        comments={[
+          {
+            id: "live-steering-comment",
+            companyId: "company-1",
+            issueId: "issue-1",
+            authorType: "user",
+            authorAgentId: null,
+            authorUserId: "user-1",
+            body: "Change course now.",
+            presentation: null,
+            metadata: null,
+            runId: null,
+            consumedByRunId: "native-live-steered",
+            steeredIntoRunId: "native-live-steered",
+            conversationAnchorAt: new Date("2026-08-25T18:00:02.000Z"),
+            createdAt: new Date("2026-08-25T17:59:32.000Z"),
+            updatedAt: new Date("2026-08-25T18:00:02.000Z"),
+          },
+        ]}
+        onAdd={async () => {}}
+        issueStatus="in_progress"
+        activeRun={{
+          id: "native-live-steered",
+          runtimeMode: "native",
+          status: "running",
+          invocationSource: "issue",
+          triggerDetail: null,
+          startedAt: "2026-08-25T18:00:00.000Z",
+          finishedAt: null,
+          createdAt: "2026-08-25T18:00:00.000Z",
+          agentId: "agent-1",
+          agentName: "Runner",
+          adapterType: "paperclip_runner",
+        }}
+      />,
+    );
+
+    expect(
+      container.querySelector('[data-testid="task-chat-turn-summary"]')
+        ?.textContent,
+    ).not.toContain("Continued after steering");
+    expect(
+      container.querySelector('[data-testid="task-chat-turn-status-header"]')
+        ?.textContent,
+    ).toContain("Continued after steering · Working for");
+    expect(container.textContent).toContain(
+      `Queued ${new Date("2026-08-25T17:59:32.000Z").toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · Steered ${new Date("2026-08-25T18:00:02.000Z").toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
+    );
   });
 
   it("keeps a yielded question turn out of the final-response slot", () => {
@@ -1507,9 +1833,13 @@ describe("TaskChatThread composer alignment", () => {
     streamlinedState.enabled = false;
     render(<TaskChatThread comments={[]} onAdd={async () => {}} />);
 
-    const dock = container.querySelector('[data-testid="task-chat-composer-dock"]');
+    const dock = container.querySelector(
+      '[data-testid="task-chat-composer-dock"]',
+    );
     const composer = container.querySelector(".paperclip-task-chat-composer");
-    const send = container.querySelector('[data-testid="task-chat-composer-send"]');
+    const send = container.querySelector(
+      '[data-testid="task-chat-composer-send"]',
+    );
 
     expect(dock?.classList).not.toContain("md:px-0");
     expect(dock?.classList).not.toContain("md:pb-4");
@@ -1518,8 +1848,8 @@ describe("TaskChatThread composer alignment", () => {
     expect(dock?.classList).not.toContain("-mt-(--radius-task-composer)");
     expect(composer?.classList).not.toContain("border");
     expect(composer?.classList).toContain("bg-card");
-    expect(send?.classList).toContain("rounded-md");
-    expect(send?.classList).not.toContain("rounded-full");
+    expect(send?.classList).toContain("rounded-full");
+    expect(send?.classList).not.toContain("rounded-md");
   });
 });
 
@@ -1630,10 +1960,16 @@ describe("TaskChatThread blocker links", () => {
     expect(notices).toHaveLength(2);
     expect(notices[0]?.getAttribute("data-placement")).toBe("top");
     expect(notices[1]?.getAttribute("data-placement")).toBe("bottom");
-    expect(notices[0]?.textContent).toContain("Blocked byPAP-600Waiting in review");
+    expect(notices[0]?.textContent).toContain(
+      "Blocked byPAP-600Waiting in review",
+    );
     expect(notices[0]?.textContent).toContain("Root blockerPAP-777Actual work");
-    expect(notices[1]?.textContent).toContain("Still blocked byPAP-600Waiting in review");
-    expect(notices[1]?.textContent).toContain("Root blocker remainsPAP-777Actual work");
+    expect(notices[1]?.textContent).toContain(
+      "Still blocked byPAP-600Waiting in review",
+    );
+    expect(notices[1]?.textContent).toContain(
+      "Root blocker remainsPAP-777Actual work",
+    );
     for (const notice of notices) {
       expect(notice.querySelector('a[href="/issues/PAP-600"]')).not.toBeNull();
       expect(notice.querySelector('a[href="/issues/PAP-777"]')).not.toBeNull();
@@ -1717,17 +2053,28 @@ describe("TaskChatThread blocker links", () => {
     expect(notices[0]?.textContent).toContain("Waiting on live work");
     expect(notices[1]?.textContent).toContain("Still waiting on live work");
     for (const notice of notices) {
-      const orderedLinks = [...notice.querySelectorAll('[data-testid="task-chat-live-work-step"] a')]
-        .map((link) => link.textContent);
+      const orderedLinks = [
+        ...notice.querySelectorAll(
+          '[data-testid="task-chat-live-work-step"] a',
+        ),
+      ].map((link) => link.textContent);
       expect(orderedLinks).toEqual([
         "PAP-17424Run the guarded cutover",
         "PAP-17425Verify the live projection",
         "PAP-17427Verify the completed projection",
       ]);
-      expect(notice.textContent).toContain("Now runningPAP-17426Restore live alias projection");
-      expect(notice.querySelector('a[href="/issues/PAP-17426"]')).not.toBeNull();
-      expect(notice.querySelector('[data-testid="task-chat-live-work-step"] > a')).not.toBeNull();
-      expect(notice.querySelector('[data-testid="task-chat-live-work-step"] > span')).toBeNull();
+      expect(notice.textContent).toContain(
+        "Now runningPAP-17426Restore live alias projection",
+      );
+      expect(
+        notice.querySelector('a[href="/issues/PAP-17426"]'),
+      ).not.toBeNull();
+      expect(
+        notice.querySelector('[data-testid="task-chat-live-work-step"] > a'),
+      ).not.toBeNull();
+      expect(
+        notice.querySelector('[data-testid="task-chat-live-work-step"] > span'),
+      ).toBeNull();
     }
     expect(
       container.querySelector('[data-testid="task-chat-blocker-links"]'),
@@ -1864,11 +2211,21 @@ describe("TaskChatThread blocker links", () => {
       />,
     );
 
-    const notices = container.querySelectorAll('[data-testid="task-chat-blocker-links"]');
-    expect(notices[0]?.textContent).toContain("Blocked byPAP-600Selected dependency");
-    expect(notices[0]?.textContent).toContain("Root blockerPAP-650Stalled intermediate review");
-    expect(notices[1]?.textContent).toContain("Still blocked byPAP-600Selected dependency");
-    expect(notices[1]?.textContent).toContain("Root blocker remainsPAP-650Stalled intermediate review");
+    const notices = container.querySelectorAll(
+      '[data-testid="task-chat-blocker-links"]',
+    );
+    expect(notices[0]?.textContent).toContain(
+      "Blocked byPAP-600Selected dependency",
+    );
+    expect(notices[0]?.textContent).toContain(
+      "Root blockerPAP-650Stalled intermediate review",
+    );
+    expect(notices[1]?.textContent).toContain(
+      "Still blocked byPAP-600Selected dependency",
+    );
+    expect(notices[1]?.textContent).toContain(
+      "Root blocker remainsPAP-650Stalled intermediate review",
+    );
     expect(container.textContent).not.toContain("Unrelated dependency");
     expect(container.textContent).not.toContain("Deeper structural leaf");
   });
@@ -1906,19 +2263,23 @@ describe("TaskChatThread blocker links", () => {
         comments={createLongThreadComments().slice(0, 1)}
         onAdd={async () => {}}
         issueStatus="blocked"
-        blockedBy={[{
-          id: "direct-1",
-          identifier: "PAP-500",
-          title: "Direct dependency",
-          status: "todo",
-          priority: "medium",
-          assigneeAgentId: null,
-          assigneeUserId: null,
-        }]}
+        blockedBy={[
+          {
+            id: "direct-1",
+            identifier: "PAP-500",
+            title: "Direct dependency",
+            status: "todo",
+            priority: "medium",
+            assigneeAgentId: null,
+            assigneeUserId: null,
+          },
+        ]}
       />,
     );
 
-    const notices = container.querySelectorAll('[data-testid="task-chat-blocker-links"]');
+    const notices = container.querySelectorAll(
+      '[data-testid="task-chat-blocker-links"]',
+    );
     expect(notices).toHaveLength(1);
     expect(notices[0]?.getAttribute("data-placement")).toBe("top");
   });
@@ -2095,6 +2456,92 @@ describe("TaskChatThread Paperclip Runner queue", () => {
       ),
     ).toBeNull();
     expect(occurrenceCount(queuedComment.body)).toBe(1);
+  });
+
+  it("keeps legacy follow-ups in the composer queue with an interrupt fallback", () => {
+    const onInterruptQueued = vi.fn(async () => {});
+    render(
+      <TaskChatThread
+        comments={[
+          {
+            ...queuedComment,
+            clientStatus: "queued",
+            queueTargetRunId: "run-1",
+          },
+        ]}
+        onAdd={async () => {}}
+        onInterruptQueued={onInterruptQueued}
+        queuedCommentQueue={{
+          ...queue,
+          protocol: "legacy",
+          steeringDisposition: "unsupported",
+        }}
+        onEditQueuedComment={async () => {}}
+        onReorderQueuedComments={async () => {}}
+        onSteerQueuedComment={async () => {}}
+        onDiscardQueuedComment={async () => {}}
+      />,
+    );
+
+    expect(
+      container.querySelector(
+        '[data-testid="task-chat-queued-message-queued-prp-1"]',
+      ),
+    ).not.toBeNull();
+    expect(occurrenceCount(queuedComment.body)).toBe(1);
+    expect(container.textContent).not.toContain("QueuedInterrupt");
+
+    const interrupt = container.querySelector<HTMLButtonElement>(
+      '[data-testid="task-chat-queued-interrupt-queued-prp-1"]',
+    );
+    expect(interrupt).not.toBeNull();
+    flushSync(() => interrupt!.click());
+    expect(onInterruptQueued).toHaveBeenCalledWith("run-1");
+  });
+
+  it("cancels an optimistic queued row locally before server acknowledgement", async () => {
+    const onCancelQueued = vi.fn();
+    render(
+      <TaskChatThread
+        comments={[]}
+        onAdd={async () => {}}
+        onCancelQueued={onCancelQueued}
+        queuedCommentQueue={{
+          ...queue,
+          queueId: null,
+          entries: [
+            {
+              ...queue.entries[0],
+              comment: {
+                ...queuedComment,
+                id: "optimistic-local-1",
+                body: "Delete before acknowledgement",
+              },
+              canEdit: false,
+            },
+          ],
+        }}
+        onEditQueuedComment={async () => {}}
+        onReorderQueuedComments={async () => {}}
+        onSteerQueuedComment={async () => {}}
+        onDiscardQueuedComment={async () => {}}
+      />,
+    );
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="task-chat-queued-discard-optimistic-local-1"]',
+        )
+        ?.click();
+    });
+
+    expect(onCancelQueued).toHaveBeenCalledWith("optimistic-local-1");
+    expect(
+      container.querySelector(
+        '[data-testid="task-chat-queued-message-optimistic-local-1"]',
+      ),
+    ).toBeNull();
   });
 });
 
@@ -2552,5 +2999,27 @@ describe("TaskChatThread live transcript", () => {
     // The pill has settled to its "Worked" state rather than flipping back to a
     // spinner while it waits for the reply comment.
     expect(container.textContent).toContain("Worked");
+  });
+});
+
+describe("TaskChatThread composer execution controls", () => {
+  it.each(["process", "paperclip_runner"])("passes the task's stop action through for %s execution", async (adapterType) => {
+    const onStop = vi.fn(async () => {});
+    const run = {
+      id: "task-run", status: "running", runtimeMode: adapterType === "process" ? "legacy" as const : "native" as const,
+      invocationSource: "issue", triggerDetail: null, startedAt: "2026-09-09T12:00:00Z", finishedAt: null,
+      createdAt: "2026-09-09T12:00:00Z", agentId: "agent-1", agentName: "Alex", adapterType,
+    };
+    render(<TaskChatThread comments={[]} onAdd={async () => {}} issueStatus="in_progress" activeRun={run} onCancelRun={onStop} stopScope="subtree" />);
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-stop"]')!;
+    expect(button.title).toBe("Stop and pause subtree");
+    await act(async () => { button.click(); });
+    expect(onStop).toHaveBeenCalledOnce();
+    render(<TaskChatThread comments={[]} onAdd={async () => {}} issueStatus="in_progress" activeRun={run} onCancelRun={onStop} stopPending />);
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-stop"]')?.disabled).toBe(true);
+  });
+  it("does not offer Stop for settled work even when a callback is available", () => {
+    render(<TaskChatThread comments={[]} onAdd={async () => {}} issueStatus="todo" onCancelRun={vi.fn()} />);
+    expect(container.querySelector('[data-testid="task-chat-composer-stop"]')).toBeNull();
   });
 });

@@ -14,7 +14,7 @@ on:
         type: boolean
         default: true
       group:
-        description: "Comma-separated groups (AND semantics: legacy,native,local,daytona,core,breadth)"
+        description: "Comma-separated groups (AND semantics: legacy,native,local,daytona,warm,core,breadth)"
         type: string
         required: false
       suite:
@@ -42,9 +42,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: runner-full-stack-e2e-${{ inputs.target_branch || github.event.repository.default_branch }}
+  group: runner-full-stack-e2e-${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != '' && inputs.target_branch != github.event.repository.default_branch && format('development-{0}', inputs.target_branch) || format('protected-{0}', github.run_id) }}
   # Development branch campaigns supersede older runs for the same target.
-  # Preserve every default-branch campaign for its paid audit trail.
+  # Give protected/default-branch campaigns unique groups because GitHub also
+  # replaces pending runs when cancel-in-progress is false.
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != '' && inputs.target_branch != github.event.repository.default_branch }}
 
 jobs:
@@ -59,6 +60,7 @@ jobs:
       test_runner: ${{ steps.runner.outputs.runner }}
       max_parallel_default: ${{ steps.runner.outputs.max_parallel_default }}
       max_parallel_limit: ${{ steps.runner.outputs.max_parallel_limit }}
+      playwright_channel: ${{ steps.runner.outputs.playwright_channel }}
       target_sha: ${{ steps.target.outputs.sha }}
       target_ref: ${{ steps.target.outputs.ref }}
     steps:
@@ -131,6 +133,7 @@ jobs:
               echo "runner=$aws_runner"
               echo "max_parallel_default=100"
               echo "max_parallel_limit=100"
+              echo "playwright_channel=chrome"
             } >> "$GITHUB_OUTPUT"
             echo '::notice title=Paid runner routing::Using an ephemeral RunsOn Fleet runner'
           else
@@ -138,8 +141,9 @@ jobs:
               echo "runner=$github_runner"
               echo "max_parallel_default=32"
               echo "max_parallel_limit=57"
+              echo "playwright_channel="
             } >> "$GITHUB_OUTPUT"
-            echo '::notice title=Paid runner routing::RUNNER_E2E_AWS_ENABLED is not true; using the existing paid runner'
+            echo '::notice title=Paid runner routing::RUNNER_E2E_AWS_ENABLED is not true; using the proven GitHub-hosted runner'
           fi
 
   target_lock:
@@ -350,18 +354,21 @@ jobs:
       source_revision: ${{ steps.image.outputs.source_revision }}
       content_id: ${{ steps.image.outputs.content_id }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - if: needs.catalog.outputs.needs_daytona == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
 
       - name: Download resolved target lockfile
+        if: needs.catalog.outputs.needs_daytona == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.target_lock.outputs.artifact_id }}
           path: ${{ runner.temp }}/runner-e2e-target-lock
 
       - name: Restore resolved target lockfile
+        if: needs.catalog.outputs.needs_daytona == 'true'
         env:
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
           EXPECTED_LOCK_SHA256: ${{ needs.target_lock.outputs.lock_sha256 }}
@@ -402,13 +409,18 @@ jobs:
           NEEDS_DAYTONA: ${{ needs.catalog.outputs.needs_daytona }}
           IMAGE_CONTENT_ID: ${{ needs.catalog.outputs.daytona_image_content_id }}
           IMAGE_TAG: ghcr.io/paperclipai/paperclip-daytona-runner:e2e-content-${{ needs.catalog.outputs.daytona_image_content_id }}
+          IMAGE_CACHE: ghcr.io/paperclipai/paperclip-daytona-runner:e2e-buildcache-amd64
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+          TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           if [ "$NEEDS_DAYTONA" != true ]; then
-            echo "image=" >> "$GITHUB_OUTPUT"
-            echo "source_revision=" >> "$GITHUB_OUTPUT"
-            echo "content_id=" >> "$GITHUB_OUTPUT"
+            {
+              echo "image="
+              echo "source_revision="
+              echo "content_id="
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           [[ "$IMAGE_CONTENT_ID" =~ ^[0-9a-f]{64}$ ]]
@@ -416,12 +428,24 @@ jobs:
           if docker buildx imagetools inspect "$IMAGE_TAG" >/dev/null 2>&1; then
             digest="$(docker buildx imagetools inspect "$IMAGE_TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           else
+            cache_args=(
+              --cache-from "type=registry,ref=${IMAGE_CACHE}"
+            )
+            if [ "$TARGET_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+              cache_args+=(
+                --cache-to "type=registry,ref=${IMAGE_CACHE},mode=max"
+              )
+              echo '::notice title=Daytona image cache::Publishing cache from the trusted default-branch target'
+            else
+              echo '::notice title=Daytona image cache::Using the default-branch cache without publishing development-branch layers'
+            fi
             docker buildx build \
               --platform linux/amd64 \
               --build-arg "PAPERCLIP_RUNNER_CONTENT_ID=${IMAGE_CONTENT_ID}" \
               --build-arg "PAPERCLIP_RUNNER_SOURCE_REVISION=${TARGET_SHA}" \
               --file docker/daytona-runner/Dockerfile \
               --tag "$IMAGE_TAG" \
+              "${cache_args[@]}" \
               --push \
               .
             digest="$(docker buildx imagetools inspect "$IMAGE_TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
@@ -452,9 +476,11 @@ jobs:
              .config.User == "daytona" and
              (.config.Env | any(startswith("PAPERCLIP_RUNNER_PROVIDER_PACK_ROOT=")))' \
             <<< "$image_config" >/dev/null
-          echo "image=$immutable" >> "$GITHUB_OUTPUT"
-          echo "source_revision=$source_revision" >> "$GITHUB_OUTPUT"
-          echo "content_id=$published_content_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=$immutable"
+            echo "source_revision=$source_revision"
+            echo "content_id=$published_content_id"
+          } >> "$GITHUB_OUTPUT"
 
   build_runner_artifacts:
     name: Build reusable runner campaign artifacts
@@ -833,6 +859,7 @@ jobs:
         run: node packages/paperclip-runner/scripts/materialize-opencode-binary.mjs
 
       - name: Download immutable campaign outputs
+        if: startsWith(matrix.profileId, 'runner-') || matrix.suiteId == 'openrouter-model-breadth'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.build_runner_artifacts.outputs.build_artifact_name }}
@@ -846,6 +873,7 @@ jobs:
           path: runner-e2e-provider-pack
 
       - name: Verify and restore campaign outputs
+        if: startsWith(matrix.profileId, 'runner-') || matrix.suiteId == 'openrouter-model-breadth'
         env:
           NEEDS_RUNNER_TYPESCRIPT: ${{ matrix.profileId == 'runner-opencode' || startsWith(matrix.profileId, 'runner-acpx-') || matrix.suiteId == 'openrouter-model-breadth' }}
           NEEDS_NATIVE_BINARY: ${{ startsWith(matrix.profileId, 'runner-') || matrix.suiteId == 'openrouter-model-breadth' }}
@@ -902,8 +930,43 @@ jobs:
         if: matrix.profileId == 'legacy-claude'
         run: npm install --global --omit=dev @anthropic-ai/claude-code@2.1.19
 
-      - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Qualify preinstalled Chrome
+        if: needs.authorize.outputs.playwright_channel == 'chrome'
+        run: |
+          set -euo pipefail
+          chrome_path="$(command -v google-chrome)"
+          test -x "$chrome_path"
+          google-chrome --version
+
+      - name: Install Playwright FFmpeg on AWS runner
+        if: needs.authorize.outputs.playwright_channel == 'chrome'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install ffmpeg; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Playwright FFmpeg installation failed after $attempt attempts." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
+
+      - name: Install Chromium headless shell on GitHub-hosted fallback
+        if: needs.authorize.outputs.playwright_channel != 'chrome'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps --only-shell chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Chromium headless shell installation failed after $attempt attempts." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
 
       - name: Run paid cell
         env:
@@ -916,6 +979,7 @@ jobs:
           PAPERCLIP_E2E_CAMPAIGN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.executionId }}
           PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
           PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
+          PAPERCLIP_PLAYWRIGHT_CHANNEL: ${{ needs.authorize.outputs.playwright_channel }}
         run: pnpm test:e2e:runner -- --id "${{ matrix.executionId }}"
 
       - name: Upload access-controlled packaged cell evidence
@@ -929,13 +993,14 @@ jobs:
 
   report:
     name: Merge and enforce campaign result
-    if: always() && needs.catalog.result == 'success'
+    if: always() && !cancelled() && needs.catalog.result == 'success'
     needs: [authorize, catalog, daytona_image, test]
     outputs:
       history_source_ready: ${{ steps.history_source_ready.outputs.ready }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -963,22 +1028,52 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Resolve workflow job attempts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" \
+            > runner-e2e-job-pages.json
+          for attempt in $(seq 1 "${{ github.run_attempt }}"); do
+            gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/attempts/$attempt" \
+              --jq '{run_attempt, run_started_at}'
+          done > runner-e2e-attempts.jsonl
+          jq -s '.' runner-e2e-attempts.jsonl > runner-e2e-attempts.json
+          jq --slurpfile attempts runner-e2e-attempts.json \
+            '{jobs: [.[].jobs[]], attempts: $attempts[0]}' \
+            runner-e2e-job-pages.json > runner-e2e-jobs.json
+
       - name: Download cell evidence
         id: download_evidence
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: runner-e2e-${{ github.run_id }}-${{ github.run_attempt }}-*
+          pattern: runner-e2e-${{ github.run_id }}-*-*
           path: downloaded-runner-e2e
-          merge-multiple: true
+          merge-multiple: false
 
       - name: Retry cell evidence download after transport failure
         if: steps.download_evidence.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: runner-e2e-${{ github.run_id }}-${{ github.run_attempt }}-*
+          pattern: runner-e2e-${{ github.run_id }}-*-*
           path: downloaded-runner-e2e
-          merge-multiple: true
+          merge-multiple: false
+
+      - name: Select latest workflow attempt per cell
+        if: always()
+        env:
+          PAPERCLIP_RUNNER_E2E_ARTIFACT_ROOT: ${{ github.workspace }}/downloaded-runner-e2e
+          PAPERCLIP_RUNNER_E2E_SELECTED_ROOT: ${{ github.workspace }}/selected-runner-e2e
+          PAPERCLIP_RUNNER_E2E_JOBS_JSON: ${{ github.workspace }}/runner-e2e-jobs.json
+          PAPERCLIP_RUNNER_E2E_EXPECTED_IDS: ${{ needs.catalog.outputs.execution_ids }}
+          PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
+          PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
+        run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/select-rerun-artifacts.ts
 
       - name: Collect blob reports
         run: |
@@ -990,7 +1085,7 @@ jobs:
             if [ ! -e "$target" ]; then
               cp "$report" "$target"
             fi
-          done < <(find downloaded-runner-e2e -path '*/blob-report/*.zip' -print0)
+          done < <(find selected-runner-e2e -path '*/blob-report/*.zip' -print0)
 
       - name: Merge Playwright HTML and JUnit
         if: always()
@@ -1001,12 +1096,14 @@ jobs:
       - name: Aggregate normalized campaign results
         if: always()
         env:
-          PAPERCLIP_RUNNER_E2E_REPORT_ROOT: ${{ github.workspace }}/downloaded-runner-e2e
+          PAPERCLIP_RUNNER_E2E_REPORT_ROOT: ${{ github.workspace }}/selected-runner-e2e
           PAPERCLIP_RUNNER_E2E_REPORT_OUT: ${{ github.workspace }}/runner-e2e-merged-report/normalized
           PAPERCLIP_RUNNER_E2E_EXPECTED_IDS: ${{ needs.catalog.outputs.execution_ids }}
           PAPERCLIP_E2E_CAMPAIGN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
           PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
+          PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}
+          PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${{ vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}
         run: |
           set +e
           pnpm test:e2e:runner:report
@@ -1024,25 +1121,26 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Verify history source report and private screenshot evidence
+      - name: Verify normalized history source report
         id: history_source_ready
         if: always()
         run: |
           set -euo pipefail
           dashboard_root="runner-e2e-merged-report/normalized"
-          private_screenshot="$(find "$dashboard_root" -type f -name '*.png' -print -quit 2>/dev/null || true)"
-          if [ -f "$dashboard_root/index.html" ] && [ -n "$private_screenshot" ]; then
+          if [ -f "$dashboard_root/index.html" ] && [ -f "$dashboard_root/normalized-results.json" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
   publish_history:
-    name: Publish pruned immutable history and landing site
+    name: Publish S3 history and Pages bundle with declared screenshots
     needs: [authorize, catalog, report]
     if: always() && needs.catalog.result == 'success' && needs.report.outputs.history_source_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      pages_artifact_name: ${{ steps.pages_artifact_name.outputs.name }}
     concurrency:
       group: runner-e2e-history-publish
       cancel-in-progress: false
@@ -1072,6 +1170,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Install publisher-only Chromium
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+
       - name: Download access-controlled normalized campaign
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1084,7 +1185,7 @@ jobs:
           role-to-assume: ${{ vars.RUNNER_E2E_HISTORY_AWS_ROLE_ARN }}
           aws-region: ${{ vars.RUNNER_E2E_HISTORY_AWS_REGION }}
 
-      - name: Prune private evidence and publish immutable campaign history
+      - name: Publish trusted summary and declared screenshots to public bundles
         env:
           PAPERCLIP_RUNNER_E2E_REPORT_DIR: ${{ github.workspace }}/runner-e2e-merged-report/normalized
           RUNNER_E2E_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_HISTORY_S3_BUCKET }}
@@ -1092,14 +1193,20 @@ jobs:
           RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}
         run: pnpm test:e2e:runner:history:publish
 
-      - name: Package pruned structured dashboard for GitHub Pages
+      - name: Resolve Pages artifact name
+        id: pages_artifact_name
+        if: vars.RUNNER_FULL_STACK_E2E_PUBLISH_PAGES == 'true'
+        run: echo "name=github-pages-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      - name: Package pruned dashboard with declared screenshots for GitHub Pages
         if: vars.RUNNER_FULL_STACK_E2E_PUBLISH_PAGES == 'true'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
-          path: runner-e2e-merged-report/normalized
+          name: ${{ steps.pages_artifact_name.outputs.name }}
+          path: runner-e2e-merged-report/pages
 
   pages:
-    name: Publish latest structured dashboard
+    name: Publish latest dashboard with declared screenshots
     needs: [report, publish_history]
     if: always() && needs.report.outputs.history_source_ready == 'true' && needs.publish_history.result == 'success' && vars.RUNNER_FULL_STACK_E2E_PUBLISH_PAGES == 'true'
     runs-on: ubuntu-latest
@@ -1113,3 +1220,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        with:
+          # If only this failed job is rerun, GitHub retains the successful
+          # publisher job's output from the earlier workflow attempt.
+          artifact_name: ${{ needs.publish_history.outputs.pages_artifact_name }}

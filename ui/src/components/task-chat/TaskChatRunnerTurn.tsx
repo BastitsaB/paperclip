@@ -1,4 +1,5 @@
 import { useRef, useState, type ComponentType, type SVGProps } from "react";
+import type { ExecutionProjection } from "@paperclipai/shared";
 import { Brain, OctagonX } from "lucide-react";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { useSecondTick } from "@/hooks/useSecondTick";
@@ -14,7 +15,9 @@ import type {
   TaskChatThinkingItem,
   TaskChatToolItem,
 } from "./task-chat-model";
-import { TaskChatAgentIdentity } from "./TaskChatBubble";
+import { TaskChatAgentIdentity, TaskChatBubble } from "./TaskChatBubble";
+import { TaskChatBubbleActions } from "./TaskChatBubbleActions";
+import { formatTaskChatTimestamp } from "./task-chat-adapter";
 import { TaskChatActivityPhase } from "./TaskChatActivityPhase";
 import { TaskChatProtocolActivityRow } from "./TaskChatProtocolActivityRow";
 import { TaskChatProtocolCard } from "./TaskChatProtocolCard";
@@ -30,6 +33,7 @@ import {
 import {
   buildTurnTimelineRows,
   isTerminalRunStatus,
+  omitProgressRepeatedByResponse,
   paperclipRunnerFinalResponse,
   paperclipRunnerTimelineItems,
 } from "./transcript-adapter";
@@ -186,25 +190,17 @@ function FoldedReasoningTicker({
   );
 }
 
-function FoldedLiveNarration({ narration }: { narration: FoldedNarration }) {
-  if (narration.kind === "reasoning") {
-    if (!narration.line) return null;
-    return (
-      <FoldedReasoningTicker
-        logicalKey={`${narration.item.id}:${narration.lineIndex}`}
-        text={narration.line}
-      />
-    );
-  }
+function FoldedLiveNarration({
+  narration,
+}: {
+  narration: Extract<FoldedNarration, { kind: "reasoning" }>;
+}) {
+  if (!narration.line) return null;
   return (
-    <div
-      className="tc-enter-cot-line min-w-0 px-1 py-1.5 text-sm text-foreground/90"
-      data-testid="task-chat-progress-update"
-    >
-      <MarkdownBody softBreaks linkIssueReferences>
-        {narration.item.text}
-      </MarkdownBody>
-    </div>
+    <FoldedReasoningTicker
+      logicalKey={`${narration.item.id}:${narration.lineIndex}`}
+      text={narration.line}
+    />
   );
 }
 
@@ -244,7 +240,7 @@ function RunnerActivityTimeline({ items }: { items: readonly TaskChatItem[] }) {
           <li className="min-w-0" key={item.id} data-activity-item-id={item.id}>
             {item.kind === "message" ? (
               <div
-                className="tc-enter-cot-line min-w-0 px-1 text-sm text-foreground/90"
+                className="min-w-0 px-1 text-sm text-foreground/90"
                 data-testid="task-chat-activity-commentary"
               >
                 <MarkdownBody softBreaks linkIssueReferences>
@@ -296,12 +292,16 @@ function RunnerActivityMarker({ item }: { item: TaskChatMarkerItem }) {
 
 function RunnerTurnStatus({
   status,
+  execution,
   startedAtMs,
   finishedAtMs,
+  continuedAfterSteering = false,
 }: {
   status: string;
+  execution?: ExecutionProjection | null;
   startedAtMs: number | null;
   finishedAtMs?: number | null;
+  continuedAfterSteering?: boolean;
 }) {
   const terminal = isTerminalRunStatus(status);
   useSecondTick(!terminal && startedAtMs != null);
@@ -315,12 +315,16 @@ function RunnerTurnStatus({
   const elapsed = formatCompactDuration(elapsedMs);
 
   const failed = terminalStatusFailed(status);
-  const label = terminal ? (failed ? "Stopped" : "Worked") : "Working";
-  const semanticLabel = terminal
+  const reconnecting = execution?.phase === "reconnecting" || execution?.phase === "retry_scheduled";
+  const label = reconnecting ? "Reconnecting…" : (terminal ? (failed ? "Stopped" : "Worked") : "Working");
+  const semanticLabel = reconnecting ? label : terminal
     ? elapsed
       ? `${label} ${failed ? "after" : "for"} ${elapsed}`
       : label
     : `${label} for ${elapsed ?? "0s"}`;
+  const visibleLabel = continuedAfterSteering
+    ? `Continued after steering · ${semanticLabel}`
+    : semanticLabel;
 
   return (
     <span
@@ -330,7 +334,7 @@ function RunnerTurnStatus({
       aria-live="polite"
       aria-atomic="true"
     >
-      {semanticLabel}
+      {visibleLabel}
     </span>
   );
 }
@@ -427,10 +431,12 @@ export function TaskChatRunnerTurn({
   agentIcon,
   items,
   status,
+  execution,
   startedAtMs,
   finishedAtMs,
   activityUnavailable = false,
   suppressFinal = false,
+  continuedAfterSteering = false,
   onRuntimeRequestDecision,
 }: {
   /** Stable identity used to clear replay-latched final text for the next turn. */
@@ -439,11 +445,14 @@ export function TaskChatRunnerTurn({
   agentIcon?: string | null;
   items: readonly TaskChatItem[];
   status: string;
+  execution?: ExecutionProjection | null;
   startedAtMs: number | null;
   finishedAtMs?: number | null;
   activityUnavailable?: boolean;
   /** Accepted wait/interaction authority overrides an early provider final. */
   suppressFinal?: boolean;
+  /** The visible tail resumes the same native run after an accepted steer. */
+  continuedAfterSteering?: boolean;
   onRuntimeRequestDecision?: (
     item: TaskChatRuntimeRequestItem,
     decision: TaskChatRuntimeRequestDecision,
@@ -451,10 +460,6 @@ export function TaskChatRunnerTurn({
 }) {
   const terminal = isTerminalRunStatus(status);
   const narration = latestFoldedNarration(items);
-  const timelineRows = buildTurnTimelineRows(
-    paperclipRunnerTimelineItems(items),
-    !terminal,
-  );
   const currentActivityItems = currentActivityStatusItems(items);
   const yielded = items.some(
     (item) =>
@@ -501,6 +506,11 @@ export function TaskChatRunnerTurn({
     finalRef.current.providerText = observedProviderText;
   }
   const final = finalRef.current.item;
+  const timelineItems = paperclipRunnerTimelineItems(items);
+  const timelineRows = buildTurnTimelineRows(
+    omitProgressRepeatedByResponse(timelineItems, final?.text),
+    !terminal,
+  );
 
   return (
     <div
@@ -520,11 +530,13 @@ export function TaskChatRunnerTurn({
         ) : null}
         <RunnerTurnStatus
           status={status}
+          execution={execution}
           startedAtMs={startedAtMs}
           finishedAtMs={finishedAtMs}
+          continuedAfterSteering={continuedAfterSteering}
         />
       </div>
-      {!terminal && narration && !final ? (
+      {!terminal && narration?.kind === "reasoning" && !final ? (
         <div
           className="flex min-w-0 flex-col py-1"
           data-testid="task-chat-live-narration"
@@ -552,6 +564,7 @@ export function TaskChatRunnerTurn({
               key={`${runId ?? "run"}:${row.id}`}
               data-testid="task-chat-turn-timeline-row"
               data-timeline-row-id={row.id}
+              data-thread-anchor={row.id}
             >
               {row.kind === "activity_phase" ? (
                 <TaskChatActivityPhase
@@ -585,20 +598,18 @@ export function TaskChatRunnerTurn({
       ) : null}
       {final ? (
         <div
-          className="tc-enter-bubble w-full"
+          className="w-full"
           data-testid="task-chat-final-response"
         >
-          <div
-            className="break-words px-1 py-2 text-sm text-foreground"
-            data-testid="task-chat-agent-bubble"
-          >
-            <MarkdownBody softBreaks linkIssueReferences>
-              {final.text}
-            </MarkdownBody>
-          </div>
+          <TaskChatBubble
+            item={{ ...final, authorName: agentName ?? undefined, agentIcon, timestamp: final.timestamp ?? formatTaskChatTimestamp(final.atMs) }}
+            animateEntry={false}
+            hideAgentIdentity={!continuedAfterSteering}
+            actions={<TaskChatBubbleActions copyText={final.text} />}
+          />
         </div>
       ) : null}
-      <RunnerCurrentActivityTail items={currentActivityItems} status={status} />
+      {!final && (!execution || execution.phase === "working") ? <RunnerCurrentActivityTail items={currentActivityItems} status={status} /> : null}
     </div>
   );
 }

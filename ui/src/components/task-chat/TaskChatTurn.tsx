@@ -100,6 +100,7 @@ export function TaskChatTurn({
             />
           ) : null}
           <span className="min-w-0 truncate">
+            {item.continuedAfterSteering ? "Continued after steering · " : ""}
             {item.summary.durationLabel
               ? `${item.summary.failed ? "Stopped" : "Worked"} for ${item.summary.durationLabel}`
               : item.summary.failed
@@ -118,6 +119,7 @@ export function TaskChatTurn({
                 key={child.id}
                 data-testid="task-chat-turn-timeline-row"
                 data-timeline-row-id={child.id}
+                data-thread-anchor={child.id}
               >
                 {renderChild(child)}
               </div>

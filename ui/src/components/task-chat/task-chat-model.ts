@@ -100,6 +100,8 @@ export interface TaskChatTokenUsage {
 
 /** A human/agent/system message bubble. */
 export interface TaskChatMessageItem {
+  /** Stable UI identity through optimistic acknowledgement; id remains canonical. */
+  renderKey?: string;
   id: string;
   kind: "message";
   author: TaskChatAuthorKind;
@@ -241,6 +243,8 @@ export interface TaskChatMarkerItem {
   detail?: string;
   /** Renders the marker as a quiet disclosure row with detail beneath it. */
   collapsible?: boolean;
+  /** Expected cancellation is neutral; unexpected failures remain destructive. */
+  tone?: "neutral" | "error";
   runId?: string;
   createdAtIso?: string;
   runHref?: string;
@@ -505,6 +509,8 @@ export interface TaskChatTurnItem {
   animateFold?: boolean;
   /** New-runner turns keep Worked/Stopped fixed above their ordered timeline. */
   standaloneHeader?: boolean;
+  /** This segment resumes the same native run after a steering input. */
+  continuedAfterSteering?: boolean;
   /** Durable response shown after the ordered Paperclip Runner timeline. */
   finalResponse?: TaskChatMessageItem;
   summary: {
