@@ -133,6 +133,13 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 COPY --chown=node:node --from=build /app /app
 
+# MAI-1562: browser E2E (Playwright/Chromium) for the frontend engineer agent.
+# node:*-trixie-slim carries none of the Chromium system libraries. Bake the
+# browser into the image, with PLAYWRIGHT_BROWSERS_PATH outside /paperclip so
+# the data volume mount cannot shadow it and a container restart cannot drop it.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install --with-deps chromium
+
 ENV NODE_ENV=production \
   HOME=/paperclip \
   HOST=0.0.0.0 \
