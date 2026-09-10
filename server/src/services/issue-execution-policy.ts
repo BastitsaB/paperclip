@@ -263,7 +263,11 @@ function buildClearedMonitorState(input: {
 }
 
 function issueAllowsMonitor(status: string, assigneeAgentId: string | null, assigneeUserId: string | null) {
-  return Boolean(assigneeAgentId) && !assigneeUserId && (status === "in_progress" || status === "in_review");
+  // MAI-880: "blocked" included. An escalation to a human is only expressible as
+  // blocked + unblockDescriptor; without this no deadline can sit on it and an
+  // unanswered escalation stands forever.
+  return Boolean(assigneeAgentId) && !assigneeUserId
+    && (status === "in_progress" || status === "in_review" || status === "blocked");
 }
 
 function monitorClearReasonForIssue(

@@ -10270,7 +10270,7 @@ export function heartbeatService(
             sql`${issues.monitorNextCheckAt} is not null`,
             isNull(issues.assigneeUserId),
             sql`${issues.assigneeAgentId} is not null`,
-            inArray(issues.status, ["in_progress", "in_review"]),
+            inArray(issues.status, ["in_progress", "in_review", "blocked"]),
             or(
               isNull(issues.monitorWakeRequestedAt),
               lt(issues.monitorWakeRequestedAt, staleClaimThreshold),
@@ -10312,7 +10312,7 @@ export function heartbeatService(
           lte(issues.monitorNextCheckAt, now),
           isNull(issues.assigneeUserId),
           sql`${issues.assigneeAgentId} is not null`,
-          inArray(issues.status, ["in_progress", "in_review"]),
+          inArray(issues.status, ["in_progress", "in_review", "blocked"]),
           or(
             isNull(issues.monitorWakeRequestedAt),
             lt(issues.monitorWakeRequestedAt, staleClaimThreshold),
@@ -10340,7 +10340,7 @@ export function heartbeatService(
               lte(issues.monitorNextCheckAt, now),
               isNull(issues.assigneeUserId),
               sql`${issues.assigneeAgentId} is not null`,
-              inArray(issues.status, ["in_progress", "in_review"]),
+              inArray(issues.status, ["in_progress", "in_review", "blocked"]),
               or(
                 isNull(issues.monitorWakeRequestedAt),
                 lt(issues.monitorWakeRequestedAt, staleClaimThreshold),
