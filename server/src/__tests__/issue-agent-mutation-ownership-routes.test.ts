@@ -118,6 +118,10 @@ const mockHeartbeatService = vi.hoisted(() => ({
   getActiveRunForAgent: vi.fn(async () => null),
   cancelRun: vi.fn(async () => null),
 }));
+const mockRunnerGoalService = vi.hoisted(() => ({
+  projection: vi.fn(async () => null),
+  act: vi.fn(),
+}));
 const mockExternalObjectService = vi.hoisted(() => ({
   getIssueSummaries: vi.fn(async () => new Map()),
   getIssueSummary: vi.fn(async () => ({
@@ -196,6 +200,12 @@ function registerRouteMocks() {
       "Agent issue comments and updates require a valid heartbeat run so cross-issue influence can be contained",
       { code: "cross_issue_influence_run_context_required" },
     ),
+  }));
+
+  vi.doMock("../services/runner-goals.js", () => ({
+    runnerGoalService: () => mockRunnerGoalService,
+    RunnerGoalActionError: class RunnerGoalActionError extends Error {},
+    RunnerGoalConflictError: class RunnerGoalConflictError extends Error {},
   }));
 
   vi.doMock("../services/index.js", () => ({
@@ -1663,30 +1673,65 @@ describe("agent issue mutation checkout ownership", () => {
     });
   });
 
+  // MAI-880: an agent parking its own issue on a human is the sanctioned
+  // escalation path. While it was forbidden, agents could not hand an existing
+  // issue over and filed a fresh escalation task on every blocker instead.
   it.each([
     ["board", "board"],
     ["a company user", { userId: "board-user" }],
-  ])("rejects an agent naming %s as unblock owner", async (_label, unblockOwner) => {
+  ])("lets an agent route the unblock action to %s", async (_label, unblockOwner) => {
     mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress" }));
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue({ status: "in_progress" }),
+      ...patch,
+    }));
 
     const res = await request(await createApp(ownerActor())).patch(`/api/issues/${issueId}`).send({
       status: "blocked",
       unblockDescriptor: { owner: unblockOwner, action: "Review the blocker" },
     });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(403);
-    expect(res.body.error).toBe("Agents may only name themselves as an unblock owner");
-    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      issueId,
+      expect.objectContaining({
+        status: "blocked",
+        unblockDescriptor: { owner: unblockOwner, action: "Review the blocker" },
+      }),
+    );
   });
 
   it.each([
     ["board", "board"],
     ["a company user", { userId: "board-user" }],
-  ])("rejects an agent changing an already-blocked issue owner to %s", async (_label, unblockOwner) => {
+  ])("lets an agent move an already-blocked issue owner to %s", async (_label, unblockOwner) => {
     mockIssueService.getById.mockResolvedValue(makeIssue({ status: "blocked" }));
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue({ status: "blocked" }),
+      ...patch,
+    }));
 
     const res = await request(await createApp(ownerActor())).patch(`/api/issues/${issueId}`).send({
       unblockDescriptor: { owner: unblockOwner, action: "Review the blocker" },
+    });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      issueId,
+      expect.objectContaining({
+        unblockDescriptor: { owner: unblockOwner, action: "Review the blocker" },
+      }),
+    );
+  });
+
+  // Routing work to another AGENT stays forbidden: that is task dumping, not
+  // escalation, and it is the half of the guard that must survive MAI-880.
+  it("still rejects an agent naming a different agent as unblock owner", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress" }));
+
+    const res = await request(await createApp(ownerActor())).patch(`/api/issues/${issueId}`).send({
+      status: "blocked",
+      unblockDescriptor: { owner: { agentId: peerAgentId }, action: "Review the blocker" },
     });
 
     expect(res.status, JSON.stringify(res.body)).toBe(403);

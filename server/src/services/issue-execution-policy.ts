@@ -71,7 +71,7 @@ export const DEFAULT_MAX_REVIEW_ROUNDS = 3;
 const COMPLETED_STATUS: IssueExecutionState["status"] = "completed";
 const PENDING_STATUS: IssueExecutionState["status"] = "pending";
 const CHANGES_REQUESTED_STATUS: IssueExecutionState["status"] = "changes_requested";
-const MONITOR_INVALID_MESSAGE = "Monitor can only be scheduled on issues assigned to an agent in in_progress or in_review";
+const MONITOR_INVALID_MESSAGE = "Monitor can only be scheduled on issues assigned to an agent in in_progress, in_review or blocked";
 const MONITOR_BOUNDS_EXHAUSTED_MESSAGE = "Monitor bounds are already exhausted";
 const STAGE_DECISION_COMMENT_HINT = "Include the decision comment in the same PATCH request; prior comments are not considered.";
 export const REDACTED_ISSUE_MONITOR_EXTERNAL_REF = "[redacted]";
@@ -263,7 +263,11 @@ function buildClearedMonitorState(input: {
 }
 
 function issueAllowsMonitor(status: string, assigneeAgentId: string | null, assigneeUserId: string | null) {
-  return Boolean(assigneeAgentId) && !assigneeUserId && (status === "in_progress" || status === "in_review");
+  // MAI-880: "blocked" included. An escalation to a human is only expressible as
+  // blocked + unblockDescriptor; without this no deadline can sit on it and an
+  // unanswered escalation stands forever.
+  return Boolean(assigneeAgentId) && !assigneeUserId
+    && (status === "in_progress" || status === "in_review" || status === "blocked");
 }
 
 function monitorClearReasonForIssue(

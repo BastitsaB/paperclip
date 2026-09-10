@@ -42,6 +42,7 @@ export {
   type IssueFilters,
 } from "./issues.js";
 export { issueThreadInteractionService } from "./issue-thread-interactions.js";
+export { githubConnectionEventService, type GitHubConnectionEventPollResult } from "./github-connection-events.js";
 export {
   assertIssueReviewVerdictActorAllowed,
   type IssueReviewVerdictActor,
@@ -106,6 +107,14 @@ export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService, resolveHeartbeatSchedulingSuppression } from "./heartbeat.js";
 export {
+  runnerGoalService,
+  applyRunnerGoalPrpEvent,
+  blockRunnerGoalRecovery,
+  failRunnerGoalAction,
+  RunnerGoalActionError,
+  RunnerGoalConflictError,
+} from "./runner-goals.js";
+export {
   productivityReviewService,
   PRODUCTIVITY_REVIEW_ORIGIN_KIND,
 } from "./productivity-review.js";
@@ -132,6 +141,12 @@ export type {
 } from "./authorization.js";
 export { boardAuthService } from "./board-auth.js";
 export { instanceSettingsService, applyManagedExperimentalOverlay } from "./instance-settings.js";
+export {
+  globalRunAdmissionService,
+  DEFAULT_GLOBAL_MAX_CONCURRENT_RUNS,
+  GLOBAL_RUN_ADMISSION_MIN_CAP,
+  GLOBAL_RUN_ADMISSION_MAX_CAP,
+} from "./global-run-admission.js";
 export {
   getManagedInstanceConfig,
   managedFeatureKeySet,

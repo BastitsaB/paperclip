@@ -41,7 +41,7 @@ export const patchInstanceGeneralSettingsSchema = z
 
 export const instanceExperimentalSettingsSchema = z.object({
   enableEnvironments: z.boolean().default(false),
-  enableNativeRunner: z.boolean().default(false),
+  enableNativeRunner: z.boolean().default(true),
   enableManagedSandboxOnly: z.boolean().default(false),
   enableIsolatedWorkspaces: z.boolean().default(false),
   enableStreamlinedLeftNavigation: z.boolean().default(true),
@@ -67,6 +67,7 @@ export const instanceExperimentalSettingsSchema = z.object({
   enableServerInfoDebugView: z.boolean().default(false),
   enablePaperclipDeveloperMode: z.boolean().default(false),
   enableSimplifiedEnglishInteractions: z.boolean().default(false),
+  enableFirstTaskPlanProposal: z.boolean().default(false),
   autoRestartDevServerWhenIdle: z.boolean().default(false),
   enableWorkspaceBranchReconcileForward: z.boolean().default(true),
   enableWorkspaceDirtyQuarantineRepair: z.boolean().default(true),
@@ -121,6 +122,36 @@ export const MAX_TASK_DRAIN_TTL_MS = 24 * 60 * 60 * 1000;
 export const startTaskDrainRequestSchema = z.object({
   ttlMs: z.number().int().positive().max(MAX_TASK_DRAIN_TTL_MS).nullable().optional(),
 }).strict();
+
+// Global run admission (MAI-890/MAI-1035). The cap bounds mirror
+// GLOBAL_RUN_ADMISSION_MIN_CAP/MAX_CAP in the server service; every governance
+// action carries a reason so the cross-company audit entry is never empty.
+export const GLOBAL_RUN_ADMISSION_MIN_CAP = 1;
+export const GLOBAL_RUN_ADMISSION_MAX_CAP = 500;
+
+const globalRunAdmissionReasonSchema = z.string().trim().min(1, "reason is required").max(2000);
+
+export const globalRunAdmissionEmergencyStopSchema = z.object({
+  reason: globalRunAdmissionReasonSchema,
+});
+
+export const globalRunAdmissionResumeSchema = z.object({
+  reason: globalRunAdmissionReasonSchema.optional(),
+});
+
+export const patchGlobalRunAdmissionCapSchema = z.object({
+  maxConcurrentRuns: z
+    .number()
+    .int()
+    .min(GLOBAL_RUN_ADMISSION_MIN_CAP)
+    .max(GLOBAL_RUN_ADMISSION_MAX_CAP),
+  reason: globalRunAdmissionReasonSchema,
+});
+
+export const patchGlobalRunAdmissionAuthorizedAgentsSchema = z.object({
+  agentIds: z.array(z.string().min(1)).max(50),
+  reason: globalRunAdmissionReasonSchema,
+});
 
 export type InstanceGeneralSettings = z.infer<typeof instanceGeneralSettingsSchema>;
 // The patch schema removes each default so an absent key stays absent. Declare

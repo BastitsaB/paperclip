@@ -1742,10 +1742,13 @@ describe("issue execution policy transitions", () => {
         },
       })!;
 
+      // MAI-880 made "blocked" a valid monitor state, so this case now uses
+      // "todo": an escalation parked on a human must be able to carry a
+      // deadline, but an issue nobody has started still must not.
       expect(() =>
         applyIssueExecutionPolicyTransition({
           issue: {
-            status: "blocked",
+            status: "todo",
             assigneeAgentId: coderAgentId,
             assigneeUserId: null,
             executionPolicy: null,
@@ -1758,6 +1761,33 @@ describe("issue execution policy transitions", () => {
           monitorExplicitlyUpdated: true,
         }),
       ).toThrow("Monitor can only be scheduled");
+    });
+
+    it("allows explicitly scheduling a monitor on a blocked issue (MAI-880)", () => {
+      const policy = normalizeIssueExecutionPolicy({
+        stages: [],
+        monitor: {
+          nextCheckAt: "2099-04-11T12:30:00.000Z",
+          notes: "Chase the human who owns the unblock",
+        },
+      })!;
+
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "blocked",
+          assigneeAgentId: coderAgentId,
+          assigneeUserId: null,
+          executionPolicy: null,
+          executionState: null,
+        },
+        policy,
+        previousPolicy: null,
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+        monitorExplicitlyUpdated: true,
+      });
+
+      expect(result.patch.monitorNextCheckAt).toEqual(new Date("2099-04-11T12:30:00.000Z"));
     });
 
     it("rejects explicitly re-arming a monitor after max attempts are exhausted", () => {

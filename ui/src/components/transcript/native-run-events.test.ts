@@ -72,6 +72,26 @@ function runResult(summary: string): Record<string, unknown> {
   };
 }
 
+describe("provider notice presentation", () => {
+  it("preserves notice text as a notice rather than a synthetic tool call", () => {
+    const entries = nativeRunEventsToTranscript([
+      event(1, "provider.notice.recorded", {
+        schema: "paperclip.provider.notice.v1", noticeId: "warning-1",
+        severity: "warning", category: "configWarning", summary: "Repository is not trusted",
+      }),
+      event(2, "provider.notice.recorded", {
+        schema: "paperclip.provider.notice.v1", noticeId: "error-1",
+        severity: "error", message: "Provider connection failed",
+      }),
+    ]);
+    expect(entries).toMatchObject([
+      { kind: "provider_activity", family: "provider_notice", status: "informational", summary: "Repository is not trusted" },
+      { kind: "provider_activity", family: "provider_notice", status: "failed", summary: "Provider connection failed" },
+    ]);
+    expect(entries.some((entry) => entry.kind === "tool_call")).toBe(false);
+  });
+});
+
 describe("nativeRunEventsToTranscript", () => {
   it("projects the cross-language duplicate-delivery fixture exactly once", () => {
     const fixture = JSON.parse(readFileSync(
@@ -174,6 +194,144 @@ describe("nativeRunEventsToTranscript", () => {
         outputTokens: 3,
         cachedTokens: 2,
         costUsd: 0.01,
+      }),
+    ]);
+  });
+
+  it("coalesces sparse Codex tool lifecycle events at the named write boundary", () => {
+    const transcript = nativeRunEventsToTranscript([
+      event(1, "tool.execution.started", {
+        schema: "paperclip.tool.execution.v1",
+        executionId: "exec-write-plan",
+        transport: "dynamic",
+        operation: "unknown",
+        name: null,
+        status: "running",
+        output: null,
+      }),
+      itemEvent(2, "item.started", "exec-write-plan", {
+        kind: "dynamicToolCall",
+        item: { id: "exec-write-plan" },
+      }),
+      itemEvent(3, "item.started", "exec-write-plan", {
+        kind: "dynamicToolCall",
+        item: {
+          type: "tool_use",
+          id: "exec-write-plan",
+          name: "write_document",
+          input: {
+            key: "plan",
+            title: "Plan",
+            body: "Ship the durable runner.",
+          },
+        },
+      }),
+      itemEvent(4, "item.completed", "exec-write-plan", {
+        kind: "dynamicToolCall",
+        item: {
+          type: "tool_result",
+          id: "exec-write-plan",
+          tool_use_id: "exec-write-plan",
+          result: {
+            commandKind: "write_document",
+            revisionId: "revision-1",
+          },
+        },
+      }),
+      event(5, "tool.execution.completed", {
+        schema: "paperclip.tool.execution.v1",
+        executionId: "exec-write-plan",
+        transport: "dynamic",
+        operation: "unknown",
+        name: null,
+        status: "completed",
+        output: null,
+      }),
+      itemEvent(6, "item.completed", "exec-write-plan", {
+        kind: "dynamicToolCall",
+        item: { id: "exec-write-plan", status: "completed" },
+      }),
+    ]);
+
+    expect(transcript).toEqual([
+      expect.objectContaining({
+        kind: "tool_call",
+        name: "write_document",
+        toolUseId: "exec-write-plan",
+        input: {
+          key: "plan",
+          title: "Plan",
+          body: "Ship the durable runner.",
+        },
+      }),
+      expect.objectContaining({
+        kind: "tool_result",
+        toolUseId: "exec-write-plan",
+        toolName: "write_document",
+        content: JSON.stringify({
+          commandKind: "write_document",
+          revisionId: "revision-1",
+        }),
+        isError: false,
+      }),
+    ]);
+  });
+
+  it("projects ACPX item-only tool lifecycles at the named write boundary", () => {
+    const transcript = nativeRunEventsToTranscript([
+      itemEvent(1, "item.started", "2", {
+        kind: "dynamicToolCall",
+        item: {
+          type: "tool_use",
+          id: "2",
+          name: "write_document",
+          input: {
+            key: "plan",
+            title: "Plan",
+            body: "Ship the durable runner.",
+          },
+        },
+      }),
+      itemEvent(2, "item.completed", "2", {
+        kind: "dynamicToolCall",
+        item: {
+          type: "tool_result",
+          id: "2",
+          tool_use_id: "2",
+          result: {
+            disposition: "applied",
+            document: {
+              key: "plan",
+              latestRevisionId: "revision-1",
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(transcript).toEqual([
+      expect.objectContaining({
+        kind: "tool_call",
+        name: "write_document",
+        toolUseId: "2",
+        input: {
+          key: "plan",
+          title: "Plan",
+          body: "Ship the durable runner.",
+        },
+      }),
+      expect.objectContaining({
+        kind: "tool_result",
+        toolUseId: "2",
+        toolName: "write_document",
+        content: JSON.stringify({
+          disposition: "applied",
+          document: {
+            key: "plan",
+            latestRevisionId: "revision-1",
+          },
+        }),
+        isError: false,
       }),
     ]);
   });

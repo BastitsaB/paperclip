@@ -213,4 +213,41 @@ describe("cross-issue influence limit rollout", () => {
     });
     expect(fake.inserted).toEqual([]);
   });
+
+  it.each([
+    ["checkout", "targetIssueCheckoutRunId"],
+    ["execution", "targetIssueExecutionRunId"],
+    ["origin", "targetIssueOriginRunId"],
+  ] as const)("bypasses via the target issue's %s-run lock when the run woke without a source issue", async (_label, field) => {
+    const fake = counterDb(0, { contextSnapshot: {} });
+
+    await expect(observeCrossIssueInfluence(fake.db as never, {
+      companyId: "22222222-2222-4222-8222-222222222222",
+      runId: "11111111-1111-4111-8111-111111111111",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      targetIssueId: "55555555-5555-4555-8555-555555555555",
+      kind: "update",
+      [field]: "11111111-1111-4111-8111-111111111111",
+    })).resolves.toBeNull();
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("still fails closed when the target issue's run-lock columns belong to a different run", async () => {
+    const fake = counterDb(0, { contextSnapshot: {} });
+
+    await expect(observeCrossIssueInfluence(fake.db as never, {
+      companyId: "22222222-2222-4222-8222-222222222222",
+      runId: "11111111-1111-4111-8111-111111111111",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      targetIssueId: "55555555-5555-4555-8555-555555555555",
+      kind: "update",
+      targetIssueCheckoutRunId: "99999999-9999-4999-8999-999999999999",
+      targetIssueExecutionRunId: "99999999-9999-4999-8999-999999999999",
+      targetIssueOriginRunId: "99999999-9999-4999-8999-999999999999",
+    })).rejects.toMatchObject({
+      status: 403,
+      details: { code: "cross_issue_influence_run_context_required" },
+    });
+    expect(fake.inserted).toEqual([]);
+  });
 });

@@ -220,39 +220,50 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
   }, 20_000);
 
   // Wraps db.transaction so the callback's tx object throws the moment code
-  // calls tx.update(table) for a table named in tablesByCall — this makes a
-  // real Postgres transaction roll back exactly like a genuine write failure
-  // partway through, without touching any other table's update path.
-  // tablesByCall maps a 0-based db.transaction() call index (in call order)
-  // to the table that call should fail on; a call index with no entry runs
-  // every update for real. For example { 0: issues } fails only the
+  // calls tx.update(failingTable) for the nth time — this makes a real Postgres
+  // transaction roll back exactly like a genuine write failure partway through,
+  // without touching any other table's update path.
+  //
+  // The occurrence is counted per transactional write to that one table, not
+  // per db.transaction() call. Counting transactions made the fixture depend on
+  // how many transactions the production path happens to open in total, so any
+  // added transaction that never touches the table silently shifted the fault
+  // onto a different write and quietly changed what the test asserted. With
+  // (issues, 0) the only transactional issue write on this path fails: the
   // issue-lock write inside releaseRunClaimedJustBeforeSuppression's
-  // transaction.
-  function withFailingTransactionalUpdate(realDb: typeof db, tablesByCall: Record<number, unknown>) {
-    let callIndex = 0;
+  // transaction. The stale-run validation transaction completes because it
+  // never writes issues at all - which is why the previous transaction-indexed
+  // form happened to work, and why it broke the moment an unrelated
+  // transaction was added ahead of it.
+  function withFailingTransactionalUpdate(
+    realDb: typeof db,
+    failingTable: unknown,
+    failAtOccurrence: number,
+  ) {
+    let occurrence = 0;
     return new Proxy(realDb, {
       get(target, prop, receiver) {
         if (prop !== "transaction") return Reflect.get(target, prop, receiver);
-        return (fn: (tx: unknown) => Promise<unknown>) => {
-          const failingTable = tablesByCall[callIndex];
-          callIndex += 1;
-          return target.transaction((tx) => {
-            const txProxy = new Proxy(tx as object, {
-              get(txTarget, txProp, txReceiver) {
-                if (txProp === "update") {
-                  return (table: unknown) => {
-                    if (failingTable !== undefined && table === failingTable) {
+        return (fn: (tx: unknown) => Promise<unknown>) => target.transaction((tx) => {
+          const txProxy = new Proxy(tx as object, {
+            get(txTarget, txProp, txReceiver) {
+              if (txProp === "update") {
+                return (table: unknown) => {
+                  if (table === failingTable) {
+                    const seen = occurrence;
+                    occurrence += 1;
+                    if (seen === failAtOccurrence) {
                       throw new Error("simulated transactional write failure");
                     }
-                    return (txTarget as any).update(table);
-                  };
-                }
-                return Reflect.get(txTarget, txProp, txReceiver);
-              },
-            });
-            return fn(txProxy);
+                  }
+                  return (txTarget as any).update(table);
+                };
+              }
+              return Reflect.get(txTarget, txProp, txReceiver);
+            },
           });
-        };
+          return fn(txProxy);
+        });
       },
     }) as typeof db;
   }
@@ -262,7 +273,7 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
     // Fault the release transaction on the issue-lock write, so executeRun's
     // suppression branch catches the failure, logs it, and returns instead
     // of throwing. There is no in-process fallback or retry for this path.
-    const failingDb = withFailingTransactionalUpdate(db, { 0: issues });
+    const failingDb = withFailingTransactionalUpdate(db, issues, 0);
     const heartbeat = heartbeatService(failingDb);
 
     const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {

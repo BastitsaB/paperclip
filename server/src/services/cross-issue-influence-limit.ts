@@ -76,6 +76,9 @@ export async function observeCrossIssueInfluence(
     responsibleUserId?: string | null;
     targetIssueId: string;
     targetIssueIdentifier?: string | null;
+    targetIssueCheckoutRunId?: string | null;
+    targetIssueExecutionRunId?: string | null;
+    targetIssueOriginRunId?: string | null;
     kind: CrossIssueInfluenceKind;
     now?: Date;
   },
@@ -110,13 +113,26 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    // A run that wakes without a target issue (e.g. a generic heartbeat_timer
+    // scan) and then self-checks-out or self-creates an issue never gets that
+    // recorded back into its own contextSnapshot (only heartbeat.wakeup() for
+    // a foreign assignee does). Trust the target issue's own run-lock columns
+    // as an equally valid ownership proof so that run is not locked out of its
+    // own issue for the rest of its lifetime (MAI-475/MAI-477).
+    const targetIssueOwnedByRun =
+      (input.targetIssueCheckoutRunId != null && input.targetIssueCheckoutRunId === input.runId) ||
+      (input.targetIssueExecutionRunId != null && input.targetIssueExecutionRunId === input.runId) ||
+      (input.targetIssueOriginRunId != null && input.targetIssueOriginRunId === input.runId);
     if (
-      sourceIssueId === input.targetIssueId ||
-      (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
+      targetIssueOwnedByRun ||
+      (sourceIssueId != null && (
+        sourceIssueId === input.targetIssueId ||
+        (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
+      ))
     ) {
       return null;
     }
+    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
 
     const priorCount = await tx
       .select({ count: count() })

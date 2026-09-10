@@ -122,8 +122,10 @@ All of these are optional; when unset, the driver defaults apply and behavior is
 ```sh
 DATABASE_PREPARED_STATEMENTS=false   # required for transaction-mode poolers; default: enabled
 DATABASE_POOL_MAX=25                 # connection pool size; default: 10
-DATABASE_IDLE_TIMEOUT_SECONDS=60     # close idle pooled connections; default: keep open
+DATABASE_IDLE_TIMEOUT_SECONDS=60     # close idle pooled connections; default: 60 (0 = keep open)
 DATABASE_CONNECT_TIMEOUT_SECONDS=10  # default: 30
+DATABASE_MAX_LIFETIME_SECONDS=1800   # recycle a pooled connection after this long; default: 30-60 min (random)
+DATABASE_APPLICATION_NAME=paperclip  # application_name in pg_stat_activity; default: paperclip
 ```
 
 ### Push the schema
@@ -245,11 +247,29 @@ finalization ledger, whose retry time and owner lease are checked under a row
 lock. None of these writes selects a runtime or changes a legacy run's execution
 path.
 
+Durable agent session goals are an additive projection on
+`agent_task_sessions`, distinct from the business-goal hierarchy. The row stores
+the negotiated goal capability, normalized snapshot and status, desired state,
+provider source cursor, monotonic projection revision, and observation time.
+`agent_session_goal_actions` is the control outbox: `(session_id, request_id)`
+is unique, so retries return the original accepted action. Provider source
+ordering fences duplicate and stale updates, and a cleared projection retains
+its revision/cursor tombstone so an older provider event cannot resurrect it.
+
 Issue `status_version` advances only when `status` changes. The JavaScript backup
 path includes user-defined functions and triggers so a restored database keeps
 that invariant. Removing or disabling a future native rollout flag must not
 delete these records; persisted experimental runs remain available for recovery
 and inspection.
+
+`native_run_finalizations` also stores restart ownership and recovery state.
+The controller owner is a server boot id, PID, operating-system process-start
+timestamp, and monotonically increasing controller generation. Recovery writes
+its correlated request id, current state, and a bounded JSON history. A
+successor can take the lease immediately only when coordinated handoff or PID
+and process-start evidence proves the prior controller is gone, or when the
+lease expires. Recovery generation changes do not increment the independent
+provider-attempt counter.
 
 ## Question-response delivery receipts
 
