@@ -856,6 +856,34 @@ describeEmbeddedPostgres("connectionIntentService", () => {
       targetType: "agent",
       targetId: agentId,
     });
+    // "ready" additionally requires the agent to be permitted to call the
+    // connection's tools, not just to have it installed: usableConnectionForAgent
+    // intersects installedConnections with allowedTools, and allowedTools is
+    // derived from the tool catalog. Without a catalog entry and an allowing
+    // profile the state stops at "needs_user_action" for reasons that have
+    // nothing to do with slug resolution.
+    await db.insert(toolCatalogEntries).values({
+      companyId,
+      connectionId: composioGmailChild!.id,
+      toolName: "GMAIL_FETCH_EMAILS",
+      name: "Fetch emails",
+      description: "Read messages from the connected Gmail account",
+      versionHash: "fixture-v1",
+      status: "active",
+      entryKind: "tool",
+    });
+    const [profile] = await db.insert(toolProfiles).values({
+      companyId,
+      profileKey: `composio-slug-${randomUUID()}`,
+      name: `Composio slug profile ${randomUUID()}`,
+      defaultAction: "allow",
+    }).returning();
+    await db.insert(toolProfileBindings).values({
+      companyId,
+      profileId: profile!.id,
+      targetType: "agent",
+      targetId: agentId,
+    });
 
     return { companyId, fixtureClaims, fixtureRunId, composioGmailChild: composioGmailChild! };
   }
