@@ -1309,12 +1309,20 @@ process.exit(1);
       expect(capture.prompt).toContain("Do not switch to another issue until you have handled this wake.");
       expect(capture.prompt).toContain("Second comment");
       expect(capture.prompt).not.toContain("Follow the paperclip heartbeat.");
-      expect(capture.prompt).not.toContain("You are managed instructions.");
+      // #12494: the compact wake delta replaces the heartbeat boilerplate, but
+      // NOT the agent instructions. Leaving those to the session context alone
+      // let them fade across wakes and compactions, so they are reinjected on
+      // every resume; prompt caching keeps that cheap.
+      expect(capture.prompt).toContain("You are managed instructions.");
       expect(invocationPrompt).toContain("## Paperclip Resume Delta");
-      expect(invocationNotes).toContain(
+      expect(invocationNotes).toContain(`Loaded agent instructions from ${instructionsPath}`);
+      expect(invocationNotes.some((note) => note.startsWith("Prepended instructions + path directive to stdin prompt"))).toBe(true);
+      expect(invocationNotes).not.toContain(
         "Skipped stdin instruction reinjection because an existing Codex session is being resumed with a wake delta.",
       );
-      expect(promptMetrics.instructionsChars).toBe(0);
+      expect(promptMetrics.instructionsChars).toBeGreaterThan(0);
+      // The heartbeat prompt itself stays suppressed on a resume: that is what
+      // the wake delta is for, and it is unaffected by the instruction fix.
       expect(promptMetrics.heartbeatPromptChars).toBe(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
