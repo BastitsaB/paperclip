@@ -31,6 +31,7 @@ export const ISSUE_WRITE_DENIAL_CODES = [
   "issue_write_assignee_run_lock",
   "cross_issue_influence_cap_exceeded",
   "cross_issue_influence_run_context_required",
+  "cross_issue_influence_run_id_header_required",
   "issue_write_attribution_spoof_rejected",
 ] as const;
 
@@ -260,6 +261,23 @@ export function describeIssueWriteDenial(
           `Send the \`X-Paperclip-Run-Id\` header with your current run (\`$PAPERCLIP_RUN_ID\`) ` +
           `and retry.`,
 
+      };
+
+    case "cross_issue_influence_run_id_header_required":
+      return {
+        code,
+        status: 422,
+        tone: "boundary",
+        boundary: "Explicit run-id header",
+        title: "Cross-issue writes need the run-id header, not just the token claim",
+        description:
+          `Your signed agent token already carries a run id, but that alone is not enough to ` +
+          `attribute this write to a specific heartbeat run. The \`X-Paperclip-Run-Id\` header ` +
+          `must be sent explicitly on every write, even when the token claim agrees with it.`,
+        whoCanAct: `${actor}, once the request carries the explicit header.`,
+        sanctionedPath:
+          `Send the \`X-Paperclip-Run-Id\` header with your current run (\`$PAPERCLIP_RUN_ID\`) ` +
+          `and retry.`,
       };
 
     case "issue_write_attribution_spoof_rejected":
