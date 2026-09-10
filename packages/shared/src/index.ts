@@ -1784,6 +1784,12 @@ export {
   MAX_TASK_DRAIN_TTL_MS,
   startTaskDrainRequestSchema,
   type StartTaskDrainRequest,
+  GLOBAL_RUN_ADMISSION_MIN_CAP,
+  GLOBAL_RUN_ADMISSION_MAX_CAP,
+  globalRunAdmissionEmergencyStopSchema,
+  globalRunAdmissionResumeSchema,
+  patchGlobalRunAdmissionCapSchema,
+  patchGlobalRunAdmissionAuthorizedAgentsSchema,
 } from "./validators/instance.js";
 
 export {

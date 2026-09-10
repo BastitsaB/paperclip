@@ -176,6 +176,10 @@ import {
   patchInstanceExperimentalSettingsSchema,
   patchInstanceSettingsSchema,
   startTaskDrainRequestSchema,
+  globalRunAdmissionEmergencyStopSchema,
+  globalRunAdmissionResumeSchema,
+  patchGlobalRunAdmissionCapSchema,
+  patchGlobalRunAdmissionAuthorizedAgentsSchema,
   // Resource memberships
   updateDocumentResourceMembershipSchema,
   updateResourceMembershipSchema,
@@ -4325,6 +4329,52 @@ registry.registerPath({
   tags: ["instance"],
   summary: "End a task drain and restore run admission",
   responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden },
+});
+
+// ─── Global run admission (instance-wide cap + emergency stop) ────────────────
+
+registry.registerPath({
+  method: "get",
+  path: "/api/run-admission/status",
+  tags: ["instance"],
+  summary: "Read the instance-wide run cap, emergency-stop state, and the current globally running run count",
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/api/run-admission/cap",
+  tags: ["instance"],
+  summary: "Change the instance-wide cap on concurrently running agent runs",
+  request: { body: jsonBody(patchGlobalRunAdmissionCapSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/run-admission/emergency-stop",
+  tags: ["instance"],
+  summary: "Activate the global emergency stop, so no further run is admitted until it is resumed",
+  request: { body: jsonBody(globalRunAdmissionEmergencyStopSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/run-admission/resume",
+  tags: ["instance"],
+  summary: "Clear the global emergency stop and resume run admission",
+  request: { body: jsonBody(globalRunAdmissionResumeSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/api/run-admission/authorized-agents",
+  tags: ["instance"],
+  summary: "Replace the allowlist of agents that may trigger or resume the global emergency stop (human instance admin only)",
+  request: { body: jsonBody(patchGlobalRunAdmissionAuthorizedAgentsSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden },
 });
 
 // ─── Board chat (Conference Room Chat, experimental) ──────────────────────────

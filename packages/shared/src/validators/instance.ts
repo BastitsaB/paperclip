@@ -123,6 +123,36 @@ export const startTaskDrainRequestSchema = z.object({
   ttlMs: z.number().int().positive().max(MAX_TASK_DRAIN_TTL_MS).nullable().optional(),
 }).strict();
 
+// Global run admission (MAI-890/MAI-1035). The cap bounds mirror
+// GLOBAL_RUN_ADMISSION_MIN_CAP/MAX_CAP in the server service; every governance
+// action carries a reason so the cross-company audit entry is never empty.
+export const GLOBAL_RUN_ADMISSION_MIN_CAP = 1;
+export const GLOBAL_RUN_ADMISSION_MAX_CAP = 500;
+
+const globalRunAdmissionReasonSchema = z.string().trim().min(1, "reason is required").max(2000);
+
+export const globalRunAdmissionEmergencyStopSchema = z.object({
+  reason: globalRunAdmissionReasonSchema,
+});
+
+export const globalRunAdmissionResumeSchema = z.object({
+  reason: globalRunAdmissionReasonSchema.optional(),
+});
+
+export const patchGlobalRunAdmissionCapSchema = z.object({
+  maxConcurrentRuns: z
+    .number()
+    .int()
+    .min(GLOBAL_RUN_ADMISSION_MIN_CAP)
+    .max(GLOBAL_RUN_ADMISSION_MAX_CAP),
+  reason: globalRunAdmissionReasonSchema,
+});
+
+export const patchGlobalRunAdmissionAuthorizedAgentsSchema = z.object({
+  agentIds: z.array(z.string().min(1)).max(50),
+  reason: globalRunAdmissionReasonSchema,
+});
+
 export type InstanceGeneralSettings = z.infer<typeof instanceGeneralSettingsSchema>;
 // The patch schema removes each default so an absent key stays absent. Declare
 // the type from the full settings type, so every field keeps its precise type.

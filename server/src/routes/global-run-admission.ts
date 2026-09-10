@@ -1,9 +1,14 @@
 import { Router, type Request } from "express";
-import { z } from "zod";
 import type { Db } from "@paperclipai/db";
+import {
+  globalRunAdmissionEmergencyStopSchema,
+  globalRunAdmissionResumeSchema,
+  patchGlobalRunAdmissionCapSchema,
+  patchGlobalRunAdmissionAuthorizedAgentsSchema,
+} from "@paperclipai/shared";
 import { forbidden, badRequest } from "../errors.js";
 import { validate } from "../middleware/validate.js";
-import { globalRunAdmissionService, GLOBAL_RUN_ADMISSION_MIN_CAP, GLOBAL_RUN_ADMISSION_MAX_CAP } from "../services/global-run-admission.js";
+import { globalRunAdmissionService } from "../services/global-run-admission.js";
 import { instanceSettingsService, logActivity } from "../services/index.js";
 import { assertBoardOrAgent, assertInstanceAdmin, getActorInfo } from "./authz.js";
 
@@ -44,29 +49,12 @@ function assertRunAdmissionGovernanceAccess(req: Request, authorizedAgentIds: st
   throw forbidden("Board or authorized agent access required");
 }
 
-const reasonSchema = z.string().trim().min(1, "reason is required").max(2000);
-
-const emergencyStopSchema = z.object({
-  reason: reasonSchema,
-});
-
-const resumeSchema = z.object({
-  reason: reasonSchema.optional(),
-});
-
-const capSchema = z.object({
-  maxConcurrentRuns: z
-    .number()
-    .int()
-    .min(GLOBAL_RUN_ADMISSION_MIN_CAP)
-    .max(GLOBAL_RUN_ADMISSION_MAX_CAP),
-  reason: reasonSchema,
-});
-
-const authorizedAgentsSchema = z.object({
-  agentIds: z.array(z.string().min(1)).max(50),
-  reason: reasonSchema,
-});
+// Request shapes live in @paperclipai/shared so routes/openapi.ts documents the
+// same schema the handler validates against, rather than a hand-copied twin.
+const emergencyStopSchema = globalRunAdmissionEmergencyStopSchema;
+const resumeSchema = globalRunAdmissionResumeSchema;
+const capSchema = patchGlobalRunAdmissionCapSchema;
+const authorizedAgentsSchema = patchGlobalRunAdmissionAuthorizedAgentsSchema;
 
 export function globalRunAdmissionRoutes(db: Db) {
   const router = Router();

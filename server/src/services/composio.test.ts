@@ -120,7 +120,10 @@ describe("Composio REST client", () => {
         body: {
           user_id: "user-1",
           mcp: true,
-          toolkits: { enabled: ["github"] },
+          // Composio's ToolRouterToolkitsEnabledConfigSchema is `.strict()` and
+          // names the key `enable`, matching the `tools.<toolkit>.enable` shape
+          // in the same body. `enabled` was silently dropped or rejected.
+          toolkits: { enable: ["github"] },
           tools: { github: { enable: ["GITHUB_LIST_REPOS"] } },
           auth_configs: { github: "ac_1" },
           connected_accounts: { github: ["ca_1"] },
