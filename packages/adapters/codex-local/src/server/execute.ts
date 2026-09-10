@@ -1107,7 +1107,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         : "";
     const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: Boolean(sessionId) });
     const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
-    const promptInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
+    // #12494: on a resumed session the instructions were dropped entirely, on
+    // the assumption that they still sit in the session context. They do not
+    // survive Codex compaction of long sessions, and an edited AGENTS.md never
+    // reaches a resumed session at all. Measured on a 14-agent instance: 38% of
+    // runs executed without their instruction bundle. Prompt caching makes the
+    // reinjection cheap; correctness outranks the token saving.
+    // shouldUseResumeDeltaPrompt stays in force below for suppressing the
+    // heartbeat prompt and for the command notes.
+    const promptInstructionsPrefix = instructionsPrefix;
     instructionsChars = promptInstructionsPrefix.length;
     const continuationSummary = parseObject(context.paperclipContinuationSummary);
     const continuationSummaryBody = asString(continuationSummary.body, "").trim() || null;
@@ -1131,20 +1139,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         return notes;
       }
       if (instructionsPrefix.length > 0) {
-        if (shouldUseResumeDeltaPrompt) {
-          const notes = [
-            `Loaded agent instructions from ${instructionsFilePath}`,
-            "Skipped stdin instruction reinjection because an existing Codex session is being resumed with a wake delta.",
-            repoAgentsNote,
-          ];
-          if (forceSaferInvocation) {
-            notes.push("Codex transient fallback requested safer invocation settings for this retry.");
-          }
-          if (forceFreshSession) {
-            notes.push("Codex transient fallback forced a fresh session with a continuation handoff.");
-          }
-          return notes;
-        }
+        // The former shouldUseResumeDeltaPrompt branch is dead since the
+        // reinjection fix above: promptInstructionsPrefix is now always
+        // instructionsPrefix and never emptied. Its note ("Skipped stdin
+        // instruction reinjection...") would describe behaviour this change
+        // abolishes. An agent reads commandNotes as evidence about its own
+        // run, so leaving it would make it believe its rules were missing from
+        // the prompt — the same class of defect (a misleading diagnosis),
+        // merely inverted.
         const notes = [
           `Loaded agent instructions from ${instructionsFilePath}`,
           `Prepended instructions + path directive to stdin prompt (relative references from ${instructionsDir}).`,
