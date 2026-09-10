@@ -24186,20 +24186,22 @@ export function heartbeatService(
       )
       .orderBy(desc(heartbeatRuns.createdAt));
 
+    // paperclipai/paperclip#5180: an undirected wake (taskKey === null, e.g. a
+    // manual /heartbeat/invoke with no issue context) must coalesce with ANY
+    // active run for this agent, not only with one whose taskKey is also null.
+    // Without this, isSameTaskScope(issueId, null) is false and a second,
+    // uncoordinated run is spawned into the same workspace as the active one —
+    // both acquire workspace-write leases and overwrite each other's output.
+    const scopeMatches = (candidate: typeof activeRuns[number]) =>
+      taskKey === null || isSameTaskScope(runTaskKey(candidate), taskKey);
     const sameScopeQueuedRun = activeRuns.find(
-      (candidate) =>
-        candidate.status === "queued" &&
-        isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "queued" && scopeMatches(candidate),
     );
     const sameScopeScheduledRetryRun = activeRuns.find(
-      (candidate) =>
-        candidate.status === "scheduled_retry" &&
-        isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "scheduled_retry" && scopeMatches(candidate),
     );
     const sameScopeRunningRun = activeRuns.find(
-      (candidate) =>
-        candidate.status === "running" &&
-        isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "running" && scopeMatches(candidate),
     );
     const shouldQueueFollowupForRunningWake =
       Boolean(sameScopeRunningRun) &&
