@@ -209,6 +209,7 @@ import {
   ISSUE_BLOCKERS_RESOLVED_WAKE_REASON,
   buildIssueBlockersResolvedWakeStateKey,
   findExistingIssueBlockersResolvedWakeForReadyState,
+  hasIssueBlockerResolutionInBlockedCycle,
 } from "../services/issue-dependency-wakeups.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import {
@@ -11578,6 +11579,24 @@ export function issueRoutes(
             "failed to check existing dependency wake before issue update wake",
           );
         }
+        // Edge-triggered gate: only wake when a blocker edge actually changed
+        // during the dependent's current blocked cycle. A dependent that is
+        // blocked on a free-text unblockDescriptor while all its formal edges
+        // were already terminal has no news and must not be re-woken.
+        try {
+          const hasFreshResolution = await hasIssueBlockerResolutionInBlockedCycle(db, {
+            companyId: issue.companyId,
+            dependentIssueId: input.dependentIssueId,
+            blockerIssueIds: input.blockerIssueIds,
+            blockedTransitionAt: input.blockedTransitionAt,
+          });
+          if (!hasFreshResolution) return;
+        } catch (err) {
+          logger.warn(
+            { err, issueId: input.dependentIssueId, idempotencyKey },
+            "failed to check blocker resolution recency before issue update wake",
+          );
+        }
         addWakeup(input.agentId, {
           source: "automation",
           triggerDetail: "system",
@@ -14232,6 +14251,21 @@ export function issueRoutes(
           logger.warn(
             { err, issueId: input.dependentIssueId, idempotencyKey },
             "failed to check existing dependency wake before issue comment wake",
+          );
+        }
+        // Edge-triggered gate, same rule as the issue-update path above.
+        try {
+          const hasFreshResolution = await hasIssueBlockerResolutionInBlockedCycle(db, {
+            companyId: currentIssue.companyId,
+            dependentIssueId: input.dependentIssueId,
+            blockerIssueIds: input.blockerIssueIds,
+            blockedTransitionAt: input.blockedTransitionAt,
+          });
+          if (!hasFreshResolution) return;
+        } catch (err) {
+          logger.warn(
+            { err, issueId: input.dependentIssueId, idempotencyKey },
+            "failed to check blocker resolution recency before issue comment wake",
           );
         }
         addWakeup(input.agentId, {

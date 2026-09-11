@@ -1044,4 +1044,166 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
     });
   });
 
+  // MAI-1819 regression: an issue that is `blocked` on a free-text
+  // `unblockDescriptor` while all its formal `blocks` edges were already
+  // terminal must not be re-woken. Every dispatch checks the issue out (status
+  // -> `in_progress`), and the agent setting it back to `blocked` rewrites
+  // `blockedTransitionAt`, so the level-triggered state key alone produced a new
+  // key — and a new wake — on every scheduler tick.
+  async function seedFreeTextBlockedDependent(opts: {
+    blockerCompletedAt: Date;
+    blockedTransitionAt: Date;
+  }) {
+    const fixture = await seedResolvedDependencyBackstopFixture({ workspaceState: "none" });
+    // The edge predates the block: it carries no news for this blocked cycle.
+    await db
+      .update(issueRelations)
+      .set({ createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) })
+      .where(eq(issueRelations.relatedIssueId, fixture.blockedIssueId));
+    await db
+      .update(issues)
+      .set({ completedAt: opts.blockerCompletedAt })
+      .where(eq(issues.id, fixture.blockerIssueId));
+    await db
+      .update(issues)
+      .set({
+        blockedTransitionAt: opts.blockedTransitionAt,
+        unblockDescriptor: { owner: "board", action: "Auftraggeberentscheidung zu Option A/B" },
+      })
+      .where(eq(issues.id, fixture.blockedIssueId));
+    return fixture;
+  }
+
+  function countWakes(companyId: string, agentId: string) {
+    return db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(
+        and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, agentId)),
+      )
+      .then((rows) => rows.length);
+  }
+
+  it("does not re-wake a free-text blocked dependent whose edges were terminal before the block", async () => {
+    const { companyId, agentId } = await seedFreeTextBlockedDependent({
+      blockerCompletedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    const result = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(result.healed).toBe(0);
+    expect(result.staleBlockedCycleSkipped).toBe(1);
+    expect(await countWakes(companyId, agentId)).toBe(0);
+  });
+
+  it("stays quiet across repeated ticks and checkout-induced re-blocks without new facts", async () => {
+    const { companyId, agentId, blockedIssueId } = await seedFreeTextBlockedDependent({
+      blockerCompletedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    const heartbeat = heartbeatService(db);
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      const result = await heartbeat.reconcileResolvedDependencyWakes();
+      expect(result.healed).toBe(0);
+      expect(result.staleBlockedCycleSkipped).toBe(1);
+      // A dispatch would have checked the issue out and the agent would have set
+      // it back to `blocked`, stamping a fresh cycle. Neither the edge set nor
+      // the unblockDescriptor changed, so the next tick must still stay quiet.
+      await db
+        .update(issues)
+        .set({ blockedTransitionAt: new Date() })
+        .where(eq(issues.id, blockedIssueId));
+    }
+
+    expect(await countWakes(companyId, agentId)).toBe(0);
+  });
+
+  it("stays quiet when only the free-text unblockDescriptor changes", async () => {
+    const { companyId, agentId, blockedIssueId } = await seedFreeTextBlockedDependent({
+      blockerCompletedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    const heartbeat = heartbeatService(db);
+
+    expect((await heartbeat.reconcileResolvedDependencyWakes()).healed).toBe(0);
+
+    await db
+      .update(issues)
+      .set({ unblockDescriptor: { owner: "board", action: "Neue Formulierung, gleiche Entscheidung" } })
+      .where(eq(issues.id, blockedIssueId));
+
+    const afterDescriptorChange = await heartbeat.reconcileResolvedDependencyWakes();
+    expect(afterDescriptorChange.healed).toBe(0);
+    expect(afterDescriptorChange.staleBlockedCycleSkipped).toBe(1);
+    expect(await countWakes(companyId, agentId)).toBe(0);
+  });
+
+  it("still emits exactly one wake when a blocker resolves during the blocked cycle", async () => {
+    const { companyId, agentId, blockedIssueId, blockerIssueId } =
+      await seedFreeTextBlockedDependent({
+        blockerCompletedAt: new Date(Date.now() - 60 * 1000),
+        blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+      });
+    const heartbeat = heartbeatService(db);
+
+    const first = await heartbeat.reconcileResolvedDependencyWakes();
+    expect(first.healed).toBe(1);
+    expect(first.issueIds).toEqual([blockedIssueId]);
+    expect(first.staleBlockedCycleSkipped).toBe(0);
+
+    const second = await heartbeat.reconcileResolvedDependencyWakes();
+    expect(second.healed).toBe(0);
+    expect(second.existingWakeSkipped).toBe(1);
+
+    expect(await countWakes(companyId, agentId)).toBe(1);
+    const wake = await db
+      .select({
+        reason: agentWakeupRequests.reason,
+        idempotencyKey: agentWakeupRequests.idempotencyKey,
+      })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.agentId, agentId))
+      .then((rows) => rows[0] ?? null);
+    expect(wake?.reason).toBe("issue_blockers_resolved");
+    expect(wake?.idempotencyKey).toContain(blockedIssueId);
+    expect(wake?.idempotencyKey).not.toBe(
+      buildIssueBlockersResolvedWakeStateKey({
+        dependentIssueId: blockedIssueId,
+        blockerIssueIds: [blockerIssueId],
+      }),
+    );
+  });
+
+  it("emits a wake when an already-done blocker is linked during the current blocked cycle", async () => {
+    const { companyId, agentId, blockedIssueId } = await seedFreeTextBlockedDependent({
+      blockerCompletedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    // The edge itself is new information for this blocked cycle.
+    await db
+      .update(issueRelations)
+      .set({ createdAt: new Date(Date.now() - 30 * 60 * 1000) })
+      .where(eq(issueRelations.relatedIssueId, blockedIssueId));
+
+    const result = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(result.healed).toBe(1);
+    expect(result.staleBlockedCycleSkipped).toBe(0);
+    expect(await countWakes(companyId, agentId)).toBe(1);
+  });
+
+  it("still heals a dependent without a recorded blocked cycle", async () => {
+    const { companyId, agentId } = await seedResolvedDependencyBackstopFixture({
+      workspaceState: "none",
+    });
+
+    const result = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(result.healed).toBe(1);
+    expect(result.staleBlockedCycleSkipped).toBe(0);
+    expect(await countWakes(companyId, agentId)).toBe(1);
+  });
+
 });

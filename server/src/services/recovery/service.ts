@@ -52,6 +52,7 @@ import {
   ISSUE_BLOCKERS_RESOLVED_WAKE_REASON,
   buildIssueBlockersResolvedWakeStateKey,
   findExistingIssueBlockersResolvedWakeForReadyState,
+  hasIssueBlockerResolutionInBlockedCycle,
 } from "../issue-dependency-wakeups.js";
 import { evaluateAgentInvokabilityFromDb } from "../agent-invokability.js";
 import { isHeartbeatWakeOnDemandEnabled } from "../heartbeat-policy.js";
@@ -3795,6 +3796,7 @@ export function recoveryService(
       checked: 0,
       healed: 0,
       existingWakeSkipped: 0,
+      staleBlockedCycleSkipped: 0,
       livePathSkipped: 0,
       interactionSkipped: 0,
       pauseHoldSkipped: 0,
@@ -3938,6 +3940,34 @@ export function recoveryService(
         });
         if (existingWake) {
           result.existingWakeSkipped += 1;
+          continue;
+        }
+
+        // Edge-triggered gate. The state key above is scoped to one blocked
+        // cycle, and every dispatch checks the issue out (status flips to
+        // `in_progress`), so an agent that sets the issue back to `blocked`
+        // produces a fresh `blockedTransitionAt` and a fresh key. Without this
+        // check a dependent whose formal edges were already terminal when it
+        // entered `blocked` — the real block sitting in its free-text
+        // `unblockDescriptor` — is re-woken on every tick forever (MAI-1819).
+        let hasFreshResolution = true;
+        try {
+          hasFreshResolution = await hasIssueBlockerResolutionInBlockedCycle(db, {
+            companyId,
+            dependentIssueId: candidate.id,
+            blockerIssueIds: readiness.blockerIssueIds,
+            blockedTransitionAt: candidate.blockedTransitionAt,
+          });
+        } catch (err) {
+          // Fail open: a transient lookup error must never swallow a legitimate
+          // wake. The state key still bounds this to one wake per ready state.
+          logger.warn(
+            { err, issueId: candidate.id, source },
+            "failed to check blocker resolution recency in resolved dependency wake backstop",
+          );
+        }
+        if (!hasFreshResolution) {
+          result.staleBlockedCycleSkipped += 1;
           continue;
         }
 

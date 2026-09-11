@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { agentWakeupRequests } from "@paperclipai/db";
+import { agentWakeupRequests, issueRelations, issues } from "@paperclipai/db";
 
 export const ISSUE_BLOCKERS_RESOLVED_WAKE_REASON = "issue_blockers_resolved";
 
@@ -236,4 +236,125 @@ export async function findExistingIssueBlockersResolvedWakeForReadyState(
     }),
   );
   return covering ?? null;
+}
+
+/**
+ * One blocker edge of a dependent, reduced to the two timestamps that decide
+ * whether the edge carries news for the dependent's current blocked cycle:
+ *
+ * - `resolvedAt`: when the blocker issue reached `done` (`issues.completedAt`).
+ * - `linkedAt`: when the `blocks` edge itself was created
+ *   (`issue_relations.created_at`).
+ */
+export type IssueBlockerResolutionFact = {
+  blockerIssueId: string;
+  resolvedAt: IssueBlockersResolvedWakeCycleInput;
+  linkedAt: IssueBlockersResolvedWakeCycleInput;
+};
+
+/**
+ * Edge-triggered guard for `issue_blockers_resolved`.
+ *
+ * The level-triggered state key suppresses a duplicate wake only for one blocked
+ * cycle. A dependent that keeps re-entering `blocked` (each dispatch checks the
+ * issue out, which flips it to `in_progress`, and the agent sets it back to
+ * `blocked`) gets a fresh `blockedTransitionAt` and therefore a fresh key on
+ * every round, so a dependent whose formal edges were ALREADY terminal when it
+ * entered `blocked` was re-woken forever without any new fact. That is the
+ * MAI-1819 loop: the real block lives in the free-text `unblockDescriptor`, not
+ * in an edge.
+ *
+ * A blocker edge only carries news for the current blocked cycle if it changed
+ * at or after the dependent entered `blocked`:
+ *
+ * - the blocker reached `done` at/after `blockedTransitionAt` (the real
+ *   `open -> done` transition the wake reason is named after), or
+ * - the edge itself was attached at/after `blockedTransitionAt` (an already-done
+ *   blocker linked during this cycle is new information too).
+ *
+ * Fails open (returns `true`) whenever the decision cannot be made from the
+ * available facts — no recorded blocked cycle, no edge rows, or a `done` blocker
+ * without a `completedAt` (rows predating that column). A permitted wake is then
+ * still bounded by the state-key dedup, so failing open costs at most one wake
+ * per ready state instead of dropping a legitimate one.
+ */
+export function hasBlockerResolutionInBlockedCycle(input: {
+  blockedTransitionAt: IssueBlockersResolvedWakeCycleInput;
+  resolutions: IssueBlockerResolutionFact[];
+}): boolean {
+  const cycleStart = parseWakeCycleDate(input.blockedTransitionAt);
+  if (!cycleStart) return true;
+  if (input.resolutions.length === 0) return true;
+
+  return input.resolutions.some((resolution) => {
+    const resolvedAt = parseWakeCycleDate(resolution.resolvedAt);
+    if (!resolvedAt) return true;
+    if (resolvedAt.getTime() >= cycleStart.getTime()) return true;
+    const linkedAt = parseWakeCycleDate(resolution.linkedAt);
+    return linkedAt != null && linkedAt.getTime() >= cycleStart.getTime();
+  });
+}
+
+/**
+ * Load the `blocks` edges of `dependentIssueId` that point at the given blockers,
+ * with the timestamps `hasBlockerResolutionInBlockedCycle` needs.
+ */
+export async function listIssueBlockerResolutionFacts(
+  db: Db,
+  input: {
+    companyId: string;
+    dependentIssueId: string;
+    blockerIssueIds: string[];
+  },
+): Promise<IssueBlockerResolutionFact[]> {
+  const blockerIssueIds = uniqueSortedBlockerIssueIds(input.blockerIssueIds);
+  if (blockerIssueIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      blockerIssueId: issueRelations.issueId,
+      resolvedAt: issues.completedAt,
+      linkedAt: issueRelations.createdAt,
+    })
+    .from(issueRelations)
+    .innerJoin(issues, eq(issueRelations.issueId, issues.id))
+    .where(
+      and(
+        eq(issueRelations.companyId, input.companyId),
+        eq(issueRelations.type, "blocks"),
+        eq(issueRelations.relatedIssueId, input.dependentIssueId),
+        inArray(issueRelations.issueId, blockerIssueIds),
+      ),
+    );
+
+  return rows.map((row) => ({
+    blockerIssueId: row.blockerIssueId,
+    resolvedAt: row.resolvedAt,
+    linkedAt: row.linkedAt,
+  }));
+}
+
+/**
+ * Edge-triggered gate used by all three `issue_blockers_resolved` emit paths
+ * (route-time update, route-time comment, periodic/finalize backstop). Returns
+ * `true` when at least one blocker edge changed during the dependent's current
+ * blocked cycle. See `hasBlockerResolutionInBlockedCycle` for the rule and its
+ * fail-open cases. Callers wrap this in the same try/catch they already use for
+ * `findExistingIssueBlockersResolvedWakeForReadyState` and fail open on a lookup
+ * error, so a transient DB problem can never swallow a legitimate wake.
+ */
+export async function hasIssueBlockerResolutionInBlockedCycle(
+  db: Db,
+  input: {
+    companyId: string;
+    dependentIssueId: string;
+    blockerIssueIds: string[];
+    blockedTransitionAt?: IssueBlockersResolvedWakeCycleInput;
+  },
+): Promise<boolean> {
+  const resolutions = await listIssueBlockerResolutionFacts(db, input);
+  return hasBlockerResolutionInBlockedCycle({
+    blockedTransitionAt: input.blockedTransitionAt,
+    resolutions,
+  });
 }
