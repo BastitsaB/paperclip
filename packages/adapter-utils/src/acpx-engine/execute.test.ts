@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -590,6 +591,83 @@ describe("shared ACPX engine runtime behavior", () => {
     expect(prompt).not.toContain("-d '{...}'");
     expect(prompt).not.toContain("runtime-secret-token");
     expect(promptMetrics?.runtimeNoteChars).toBeGreaterThan(0);
+  });
+
+  describe("large execution continuation history (spawn E2BIG)", () => {
+    // Linux MAX_ARG_STRLEN: execve rejects any single envp string above this.
+    const MAX_ARG_STRLEN = 131_072;
+
+    function wakeWithContinuationHistory(messageCount: number) {
+      return {
+        reason: "issue_commented",
+        issue: { id: "issue-1", identifier: "TEST-1", title: "Task", status: "in_progress" },
+        executionContinuation: {
+          version: 1,
+          companyId: "company-1",
+          issueId: "issue-1",
+          trigger: { reason: "issue_commented", interactionId: null, sourceRunId: null },
+          originCommentIds: [],
+          objective: "Finish the task",
+          messages: Array.from({ length: messageCount }, (_, idx) => ({
+            id: `history-comment-${idx}`,
+            authorType: "user",
+            authorId: "user-1",
+            createdByRunId: null,
+            body: "x".repeat(1_024),
+            createdAt: "2026-09-11T00:00:00.000Z",
+            updatedAt: "2026-09-11T00:00:00.000Z",
+            deleted: false,
+            sourceTrust: null,
+          })),
+          interactionOutcomes: [],
+          completedWork: null,
+          completedActions: [],
+          unresolvedInteractionIds: [],
+          recoveryOutcomes: [],
+          coverage: {
+            kind: "full_task_history",
+            throughCommentId: `history-comment-${messageCount - 1}`,
+            summaryThroughCommentId: null,
+          },
+        },
+      };
+    }
+
+    async function launchEnvAndPrompt() {
+      const { sessionInputs, meta } = await runExecutor(
+        { agent: "custom", agentCommand: "node ./fake-acp.js" },
+        {
+          context: {
+            taskId: "issue-1",
+            wakeReason: "issue_commented",
+            paperclipWake: wakeWithContinuationHistory(200),
+          },
+        },
+      );
+      const sessionOptions = sessionInputs[0]?.sessionOptions as { env: Record<string, string> };
+      return { env: sessionOptions.env, prompt: String(meta[0]?.prompt ?? "") };
+    }
+
+    it("keeps every launch env entry under MAX_ARG_STRLEN and delivers the history through the prompt", async () => {
+      const { env, prompt } = await launchEnvAndPrompt();
+
+      const oversized = Object.entries(env)
+        .map(([key, value]) => ({ key, bytes: Buffer.byteLength(`${key}=${value}`, "utf8") + 1 }))
+        .filter((entry) => entry.bytes > MAX_ARG_STRLEN);
+      expect(oversized).toEqual([]);
+      expect(env.PAPERCLIP_WAKE_PAYLOAD_JSON).toBeDefined();
+      expect(JSON.parse(env.PAPERCLIP_WAKE_PAYLOAD_JSON).executionContinuation).toBeNull();
+      expect(prompt).toContain("history-comment-0");
+      expect(prompt).toContain("history-comment-199");
+    });
+
+    it.runIf(process.platform === "linux")("launches a real process with that env without E2BIG", async () => {
+      const { env } = await launchEnvAndPrompt();
+
+      const result = spawnSync(process.execPath, ["-e", ""], { env });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+    });
   });
 
   it("does not show a scoped issue API command when the task id is unavailable", async () => {

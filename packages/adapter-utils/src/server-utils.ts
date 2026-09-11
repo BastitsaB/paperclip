@@ -1499,6 +1499,33 @@ export function stringifyPaperclipWakePayload(
   return JSON.stringify(normalized);
 }
 
+// Linux rejects execve with E2BIG when a single envp or argv string exceeds
+// MAX_ARG_STRLEN (32 pages = 131072 bytes on 4 KiB pages). The ceiling sits
+// far below that because some lanes re-wrap the whole launch env into ONE
+// argument: the sandbox process-session lane packs it as JSON, base64 encoded
+// (execution-target.ts, commandPayload), and the SSH lane shell-quotes env and
+// args into one ssh command line. The payload is measured JSON-escaped, as it
+// appears inside the sandbox envelope; base64 then adds a third, so 64 KiB
+// grows to at most ~87 KiB and leaves roughly 32 KiB of raw room for the rest
+// of that envelope. Wake payloads without the continuation stayed around 20 KB
+// on a live instance, so the ceiling does not cut normal wakes.
+export const PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES = 64 * 1024;
+
+/**
+ * The PAPERCLIP_WAKE_PAYLOAD_JSON copy of the wake payload. The execution
+ * continuation carries the full task comment history without a size bound and
+ * already reaches the agent in full through the prompt, so the env copy omits
+ * it. An env copy that is still too large is dropped (null, variable unset)
+ * rather than failing the whole run launch with `spawn E2BIG`.
+ */
+export function stringifyPaperclipWakePayloadForEnv(value: unknown): string | null {
+  const normalized = normalizePaperclipWakePayload(value);
+  if (!normalized) return null;
+  const json = JSON.stringify({ ...normalized, executionContinuation: null });
+  const envelopeBytes = Buffer.byteLength(JSON.stringify(json), "utf8");
+  return envelopeBytes <= PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES ? json : null;
+}
+
 export function isPaperclipRecoveryWakePayload(value: unknown): boolean {
   const normalized = normalizePaperclipWakePayload(value);
   return Boolean(normalized?.recovery || normalized?.reason === "source_scoped_recovery_action");
