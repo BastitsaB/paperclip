@@ -28,6 +28,8 @@ import {
   shapePaperclipWorkspaceEnvForExecution,
   rewriteWorkspaceCwdEnvVarsForExecution,
   stringifyPaperclipWakePayload,
+  stringifyPaperclipWakePayloadForEnv,
+  PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES,
   UNMANAGED_BACKGROUND_TASK_LIVENESS_REASON,
   UNMANAGED_BACKGROUND_TASK_STOP_REASON,
   WATCHDOG_DEFAULT_MANDATE,
@@ -2764,6 +2766,93 @@ describe("renderPaperclipWakePrompt - task watchdog", () => {
     expect(
       parsed.taskWatchdog.terminalLeafSummaries.length,
     ).toBeLessThanOrEqual(25);
+  });
+});
+
+describe("stringifyPaperclipWakePayloadForEnv", () => {
+  // Linux MAX_ARG_STRLEN: the per-string execve limit behind `spawn E2BIG`.
+  const MAX_ARG_STRLEN = 131_072;
+
+  function continuationWithHistory(messageCount: number, bodyBytes: number) {
+    return {
+      version: 1 as const,
+      companyId: "company-1",
+      issueId: "issue-1",
+      trigger: { reason: "issue_commented", interactionId: null, sourceRunId: null },
+      originCommentIds: ["comment-0"],
+      objective: "Finish the task",
+      messages: Array.from({ length: messageCount }, (_, idx) => ({
+        id: `comment-${idx}`,
+        authorType: "user",
+        authorId: "user-1",
+        createdByRunId: null,
+        body: "x".repeat(bodyBytes),
+        createdAt: "2026-09-11T00:00:00.000Z",
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        deleted: false,
+        sourceTrust: null,
+      })),
+      interactionOutcomes: [],
+      completedWork: null,
+      completedActions: [],
+      unresolvedInteractionIds: [],
+      recoveryOutcomes: [],
+      coverage: {
+        kind: "full_task_history" as const,
+        throughCommentId: `comment-${messageCount - 1}`,
+        summaryThroughCommentId: null,
+      },
+    };
+  }
+
+  const baseWake = {
+    reason: "issue_commented",
+    issue: { id: "issue-1", identifier: "PAP-1", title: "Task", status: "in_progress", priority: "medium" },
+    comments: [{ id: "comment-0", issueId: "issue-1", body: "Please continue", bodyTruncated: false }],
+    commentIds: ["comment-0"],
+    latestCommentId: "comment-0",
+  };
+
+  it("omits the unbounded continuation history and stays under MAX_ARG_STRLEN", () => {
+    const payload = { ...baseWake, executionContinuation: continuationWithHistory(372, 1_200) };
+    // Precondition: the full payload is what broke the launch before this fix.
+    expect(Buffer.byteLength(stringifyPaperclipWakePayload(payload) ?? "")).toBeGreaterThan(MAX_ARG_STRLEN);
+
+    const envJson = stringifyPaperclipWakePayloadForEnv(payload);
+    expect(envJson).not.toBeNull();
+    const parsed = JSON.parse(envJson ?? "{}");
+    expect(parsed.executionContinuation).toBeNull();
+    expect(parsed.reason).toBe("issue_commented");
+    expect(parsed.issue.identifier).toBe("PAP-1");
+    expect(parsed.latestCommentId).toBe("comment-0");
+    expect(Buffer.byteLength(`PAPERCLIP_WAKE_PAYLOAD_JSON=${envJson}`) + 1).toBeLessThanOrEqual(MAX_ARG_STRLEN);
+  });
+
+  it("matches the full serialization for payloads without a continuation", () => {
+    const envJson = stringifyPaperclipWakePayloadForEnv(baseWake);
+    const fullJson = JSON.parse(stringifyPaperclipWakePayload(baseWake) ?? "{}");
+    expect(JSON.parse(envJson ?? "{}")).toEqual({ ...fullJson, executionContinuation: null });
+  });
+
+  it("returns null for an empty wake", () => {
+    expect(stringifyPaperclipWakePayloadForEnv(null)).toBeNull();
+    expect(stringifyPaperclipWakePayloadForEnv({})).toBeNull();
+  });
+
+  it("drops the env copy instead of exceeding the byte ceiling", () => {
+    const oversized = { ...baseWake, agentMessage: { text: "y".repeat(PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES) } };
+    expect(JSON.parse(stringifyPaperclipWakePayload(oversized) ?? "{}").agentMessage).not.toBeNull();
+    expect(stringifyPaperclipWakePayloadForEnv(oversized)).toBeNull();
+  });
+
+  it("measures the ceiling on the JSON-escaped form the sandbox launch envelope embeds", () => {
+    // Every quote doubles when the value is embedded as a JSON string, so this
+    // payload is under the ceiling raw but over it inside the envelope.
+    const quoteHeavy = { ...baseWake, agentMessage: { text: '"'.repeat(20_000) } };
+    const raw = stringifyPaperclipWakePayload(quoteHeavy) ?? "";
+    expect(Buffer.byteLength(raw)).toBeLessThan(PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(raw))).toBeGreaterThan(PAPERCLIP_WAKE_PAYLOAD_ENV_MAX_BYTES);
+    expect(stringifyPaperclipWakePayloadForEnv(quoteHeavy)).toBeNull();
   });
 });
 
