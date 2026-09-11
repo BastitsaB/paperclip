@@ -27,7 +27,10 @@ import { nativeSha256 } from "./canonical.js";
 import { issueService } from "../issues.js";
 import { issueThreadInteractionService } from "../issue-thread-interactions.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
-import { buildIssueBlockersResolvedWakeIdempotencyKey } from "../issue-dependency-wakeups.js";
+import {
+  buildIssueBlockersResolvedWakeStateKey,
+  hasIssueBlockerResolutionInBlockedCycle,
+} from "../issue-dependency-wakeups.js";
 import { persistActivity, publishActivity, type ActivityPublication } from "../activity-log.js";
 import { emitAgentTaskRun } from "../agent-task-run-telemetry.js";
 
@@ -1207,11 +1210,32 @@ export async function commitNativeStatusDecision(input: {
         : false;
       for (const dependent of dependents) {
         const isCompletedChildParent = parent?.id === dependent.id;
+        // Same edge-/cycle-driven rule as the other `issue_blockers_resolved`
+        // producers (issue update, issue comment, liveness backstop). Read
+        // through `tx` so the blocker's `completedAt`, written by the status
+        // projection above, is visible in this transaction.
+        if (
+          !isCompletedChildParent
+          && !(await hasIssueBlockerResolutionInBlockedCycle(tx as unknown as Db, {
+            companyId: input.companyId,
+            dependentIssueId: dependent.id,
+            blockerIssueIds: dependent.blockerIssueIds,
+            blockedTransitionAt: dependent.blockedTransitionAt,
+          }))
+        ) {
+          continue;
+        }
+        // The cycle-aware state key is what makes this producer share ONE
+        // idempotency rule with the other three. The legacy per-edge key used
+        // here before never covered the ready state, so a wake emitted here and
+        // then delivered did not stop the backstop from emitting a second wake
+        // for the same ready state on its next tick.
         const idempotencyKey = isCompletedChildParent
           ? `issue_children_completed:${dependent.id}:${input.issueId}`
-          : buildIssueBlockersResolvedWakeIdempotencyKey({
+          : buildIssueBlockersResolvedWakeStateKey({
               dependentIssueId: dependent.id,
-              resolvedBlockerIssueId: input.issueId,
+              blockerIssueIds: dependent.blockerIssueIds,
+              blockedTransitionAt: dependent.blockedTransitionAt,
             });
         const childCompletionContext = isCompletedChildParent && parent
           ? {
