@@ -3945,7 +3945,9 @@ export function recoveryService(
         // run for this issue (execution_reconciliation_required) and mark its
         // wake `skipped`. A skipped wake never covers the ready state, so without
         // this check the backstop would re-emit on every scheduler tick. Only an
-        // operator reconciliation lifts the hold; this path then resumes.
+        // operator reconciliation lifts the hold; that route also moves the issue
+        // to `todo` (out of this candidate set) and wakes it under its own key, so
+        // the issue does not come back through this path.
         if (await getExecutionBlocker(db, companyId, candidate.id)) {
           result.executionHoldSkipped += 1;
           executionHeldIssueIds.push(candidate.id);
