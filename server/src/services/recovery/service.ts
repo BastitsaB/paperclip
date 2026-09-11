@@ -38,6 +38,7 @@ import { logActivity } from "../activity-log.js";
 import { appendHeartbeatRunEvent } from "../heartbeat-run-events.js";
 import { emitAgentTaskRun } from "../agent-task-run-telemetry.js";
 import { budgetService } from "../budgets.js";
+import { getExecutionBlocker } from "../execution-blocker.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { legacyExecutionNeedsReconciliation, terminalizeLegacyExecution } from "../legacy-execution-recovery.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
@@ -3793,6 +3794,7 @@ export function recoveryService(
       livePathSkipped: 0,
       interactionSkipped: 0,
       pauseHoldSkipped: 0,
+      executionHoldSkipped: 0,
       notReadySkipped: 0,
       candidateLimitSkipped: 0,
       deferredOrFailed: 0,
@@ -3931,6 +3933,16 @@ export function recoveryService(
         });
         if (existingWake) {
           result.existingWakeSkipped += 1;
+          continue;
+        }
+
+        // An unreconciled execution hold makes the queued-run gate cancel every
+        // run for this issue (execution_reconciliation_required) and mark its
+        // wake `skipped`. A skipped wake never covers the ready state, so without
+        // this check the backstop would re-emit on every scheduler tick. Only an
+        // operator reconciliation lifts the hold; this path then resumes.
+        if (await getExecutionBlocker(db, companyId, candidate.id)) {
+          result.executionHoldSkipped += 1;
           continue;
         }
 

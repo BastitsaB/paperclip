@@ -16,6 +16,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
+  issueRecoveryActions,
   issueRelations,
   issueTreeHoldMembers,
   issueTreeHolds,
@@ -592,6 +593,95 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
     expect(wakes.map((wake) => wake.status)).toContain("skipped");
     expect(wakes.every((wake) => wake.idempotencyKey === idempotencyKey)).toBe(true);
     expect(wakes.some((wake) => ["queued", "claimed", "completed"].includes(wake.status))).toBe(true);
+  });
+
+  it("does not re-emit a dependency wake while an execution reconciliation holds the dependent", async () => {
+    const { companyId, agentId, blockedIssueId, blockerIssueId } =
+      await seedResolvedDependencyBackstopFixture({ workspaceState: "none" });
+    // Production shape: a legacy run on the dependent failed, automatic recovery
+    // settled it without replay, and the queued-run gate then cancelled the
+    // dependency wake's run (execution_reconciliation_required), leaving the
+    // wake `skipped`. Before the fix the backstop re-emitted on every tick.
+    const sourceRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: sourceRunId,
+      companyId,
+      agentId,
+      status: "failed",
+      errorCode: "process_lost",
+      invocationSource: "automation",
+      contextSnapshot: { issueId: blockedIssueId },
+      finishedAt: new Date(),
+    });
+    const [holdAction] = await db
+      .insert(issueRecoveryActions)
+      .values({
+        companyId,
+        sourceIssueId: blockedIssueId,
+        kind: "active_run_watchdog",
+        status: "resolved",
+        ownerType: "board",
+        returnOwnerAgentId: agentId,
+        cause: "legacy_execution_requires_reconciliation",
+        fingerprint: `legacy-execution:${sourceRunId}`,
+        outcome: "blocked",
+        resolvedAt: new Date(),
+        nextAction:
+          "Automatic recovery stopped. Recorded work is preserved; actions with unverified outcomes will not be repeated.",
+        evidence: {
+          runId: sourceRunId,
+          automaticRecovery: {
+            policy: "preserve_without_replay_v1",
+            runId: sourceRunId,
+            replay: "blocked",
+            actionOutcome: "unknown",
+          },
+        },
+      })
+      .returning();
+    const idempotencyKey = buildIssueBlockersResolvedWakeStateKey({
+      dependentIssueId: blockedIssueId,
+      blockerIssueIds: [blockerIssueId],
+    });
+    await db.insert(agentWakeupRequests).values({
+      companyId,
+      agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_blockers_resolved",
+      payload: {
+        issueId: blockedIssueId,
+        resolvedBlockerIssueId: blockerIssueId,
+        blockerIssueIds: [blockerIssueId],
+      },
+      status: "skipped",
+      finishedAt: new Date(),
+      error:
+        "Automatic recovery stopped. Recorded work is preserved; actions with unverified outcomes will not be repeated.",
+      idempotencyKey,
+    });
+
+    const held = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(held.healed).toBe(0);
+    expect(held.executionHoldSkipped).toBe(1);
+    const dependencyWakes = await db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.reason, "issue_blockers_resolved")));
+    expect(dependencyWakes).toHaveLength(1);
+
+    // Operator reconciliation clears the no-replay marker; the backstop resumes.
+    await db
+      .update(issueRecoveryActions)
+      .set({ evidence: { runId: sourceRunId } })
+      .where(eq(issueRecoveryActions.id, holdAction!.id));
+
+    const released = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(released.healed).toBe(1);
+    expect(released.executionHoldSkipped).toBe(0);
+    expect(released.issueIds).toEqual([blockedIssueId]);
   });
 
   it("waits for workspace finalize before healing a resolved blocked dependent", async () => {
