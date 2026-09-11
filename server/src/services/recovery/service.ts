@@ -38,6 +38,7 @@ import { logActivity } from "../activity-log.js";
 import { appendHeartbeatRunEvent } from "../heartbeat-run-events.js";
 import { emitAgentTaskRun } from "../agent-task-run-telemetry.js";
 import { budgetService } from "../budgets.js";
+import { getExecutionBlocker } from "../execution-blocker.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { legacyExecutionNeedsReconciliation, terminalizeLegacyExecution } from "../legacy-execution-recovery.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
@@ -100,6 +101,7 @@ const EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON = "execution_review_participa
 const STRANDED_BOARD_ESCALATION_POLICY = "board_escalation_no_takeover_v1";
 const DISPOSITION_REPAIR_IDEMPOTENCY_INDEX = "agent_wakeup_requests_disposition_repair_idempotency_uq";
 const RESOLVED_DEPENDENCY_WAKE_BACKSTOP_CANDIDATE_LIMIT = 500;
+const RESOLVED_DEPENDENCY_WAKE_EXECUTION_HOLD_LOG_INTERVAL_MS = 60 * 60 * 1000;
 
 // GGU-809: when a stranded `in_progress` issue would otherwise hit the
 // `isRepeatedProductiveContinuationRecovery` escalation path, exempt the
@@ -672,6 +674,9 @@ export function recoveryService(
   const treeControlSvc = issueTreeControlService(db);
   const budgets = budgetService(db);
   let resolvedDependencyWakeBackstopCandidateCursor: string | null = null;
+  // Last execution-hold skip log per backstop source: the sorted held issue ids
+  // and when they were logged. In-memory on purpose; one log after a restart is fine.
+  const resolvedDependencyWakeExecutionHoldLogState = new Map<string, { key: string; loggedAt: number }>();
 
   async function getAgent(agentId: string) {
     return db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0] ?? null);
@@ -3793,12 +3798,14 @@ export function recoveryService(
       livePathSkipped: 0,
       interactionSkipped: 0,
       pauseHoldSkipped: 0,
+      executionHoldSkipped: 0,
       notReadySkipped: 0,
       candidateLimitSkipped: 0,
       deferredOrFailed: 0,
       enqueueFailed: 0,
       issueIds: [] as string[],
     };
+    const executionHeldIssueIds: string[] = [];
 
     const source = opts?.source ?? "issue_graph_liveness.backstop";
     const requestedByActorId = source === "workspace.finalize"
@@ -3934,6 +3941,17 @@ export function recoveryService(
           continue;
         }
 
+        // An unreconciled execution hold makes the queued-run gate cancel every
+        // run for this issue (execution_reconciliation_required) and mark its
+        // wake `skipped`. A skipped wake never covers the ready state, so without
+        // this check the backstop would re-emit on every scheduler tick. Only an
+        // operator reconciliation lifts the hold; this path then resumes.
+        if (await getExecutionBlocker(db, companyId, candidate.id)) {
+          result.executionHoldSkipped += 1;
+          executionHeldIssueIds.push(candidate.id);
+          continue;
+        }
+
         if (
           await hasActiveExecutionPath(companyId, candidate.id, agentId) ||
           await hasQueuedIssueWake(companyId, candidate.id, agentId)
@@ -4019,6 +4037,34 @@ export function recoveryService(
         { healed: result.healed, issueIds: result.issueIds, source, blockerIssueId: opts?.blockerIssueId ?? null },
         "issue graph liveness backstop healed resolved blocked dependency wakes",
       );
+    }
+
+    // Held dependents produce no run and no healed log, so this is their only
+    // operational trace. The backstop revisits them every scheduler tick; log
+    // only when the held set changes or once per interval, so a stuck hold stays
+    // visible without replacing the former run flood with a log flood.
+    if (executionHeldIssueIds.length === 0) {
+      resolvedDependencyWakeExecutionHoldLogState.delete(source);
+    } else {
+      const heldKey = [...executionHeldIssueIds].sort().join(",");
+      const now = Date.now();
+      const lastLog = resolvedDependencyWakeExecutionHoldLogState.get(source);
+      if (
+        !lastLog ||
+        lastLog.key !== heldKey ||
+        now - lastLog.loggedAt >= RESOLVED_DEPENDENCY_WAKE_EXECUTION_HOLD_LOG_INTERVAL_MS
+      ) {
+        resolvedDependencyWakeExecutionHoldLogState.set(source, { key: heldKey, loggedAt: now });
+        logger.warn(
+          {
+            executionHoldSkipped: result.executionHoldSkipped,
+            issueIds: executionHeldIssueIds,
+            source,
+            blockerIssueId: opts?.blockerIssueId ?? null,
+          },
+          "issue graph liveness backstop skipped resolved dependents held for execution reconciliation",
+        );
+      }
     }
 
     return result;

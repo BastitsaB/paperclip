@@ -16,6 +16,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
+  issueRecoveryActions,
   issueRelations,
   issueTreeHoldMembers,
   issueTreeHolds,
@@ -70,6 +71,7 @@ import { heartbeatService } from "../services/heartbeat.ts";
 import { attentionService } from "../services/attention.ts";
 import { issueService } from "../services/issues.ts";
 import { runningProcesses } from "../adapters/index.ts";
+import { logger } from "../middleware/logger.ts";
 import {
   buildIssueBlockersResolvedWakeStateKey,
   buildIssueBlockersResolvedWakeStateKeyWithoutCycle,
@@ -593,6 +595,153 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
     expect(wakes.every((wake) => wake.idempotencyKey === idempotencyKey)).toBe(true);
     expect(wakes.some((wake) => ["queued", "claimed", "completed"].includes(wake.status))).toBe(true);
   });
+
+  // Production shape: a legacy run on the dependent failed, automatic recovery
+  // settled it without replay, and the queued-run gate then cancelled the
+  // dependency wake's run (execution_reconciliation_required), leaving the
+  // wake `skipped`. Before the fix the backstop re-emitted on every tick.
+  async function seedExecutionHoldOnResolvedDependent(fixture: {
+    companyId: string;
+    agentId: string;
+    blockedIssueId: string;
+    blockerIssueId: string;
+  }) {
+    const { companyId, agentId, blockedIssueId, blockerIssueId } = fixture;
+    const sourceRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: sourceRunId,
+      companyId,
+      agentId,
+      status: "failed",
+      errorCode: "process_lost",
+      invocationSource: "automation",
+      contextSnapshot: { issueId: blockedIssueId },
+      finishedAt: new Date(),
+    });
+    const [holdAction] = await db
+      .insert(issueRecoveryActions)
+      .values({
+        companyId,
+        sourceIssueId: blockedIssueId,
+        kind: "active_run_watchdog",
+        status: "resolved",
+        ownerType: "board",
+        returnOwnerAgentId: agentId,
+        cause: "legacy_execution_requires_reconciliation",
+        fingerprint: `legacy-execution:${sourceRunId}`,
+        outcome: "blocked",
+        resolvedAt: new Date(),
+        nextAction:
+          "Automatic recovery stopped. Recorded work is preserved; actions with unverified outcomes will not be repeated.",
+        evidence: {
+          runId: sourceRunId,
+          automaticRecovery: {
+            policy: "preserve_without_replay_v1",
+            runId: sourceRunId,
+            replay: "blocked",
+            actionOutcome: "unknown",
+          },
+        },
+      })
+      .returning();
+    await db.insert(agentWakeupRequests).values({
+      companyId,
+      agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_blockers_resolved",
+      payload: {
+        issueId: blockedIssueId,
+        resolvedBlockerIssueId: blockerIssueId,
+        blockerIssueIds: [blockerIssueId],
+      },
+      status: "skipped",
+      finishedAt: new Date(),
+      error:
+        "Automatic recovery stopped. Recorded work is preserved; actions with unverified outcomes will not be repeated.",
+      idempotencyKey: buildIssueBlockersResolvedWakeStateKey({
+        dependentIssueId: blockedIssueId,
+        blockerIssueIds: [blockerIssueId],
+      }),
+    });
+    return { sourceRunId, holdActionId: holdAction!.id };
+  }
+
+  it("does not re-emit a dependency wake while an execution reconciliation holds the dependent", async () => {
+    const fixture = await seedResolvedDependencyBackstopFixture({ workspaceState: "none" });
+    const { companyId, blockedIssueId } = fixture;
+    const { sourceRunId, holdActionId } = await seedExecutionHoldOnResolvedDependent(fixture);
+
+    const held = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(held.healed).toBe(0);
+    expect(held.executionHoldSkipped).toBe(1);
+    const dependencyWakes = await db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.reason, "issue_blockers_resolved")));
+    expect(dependencyWakes).toHaveLength(1);
+
+    // Predicate check only: once the no-replay marker is gone the backstop would
+    // heal again. The real reconciliation route also moves the issue to `todo`
+    // (out of the backstop's candidate set) and wakes it under its own key.
+    await db
+      .update(issueRecoveryActions)
+      .set({ evidence: { runId: sourceRunId } })
+      .where(eq(issueRecoveryActions.id, holdActionId));
+
+    const released = await heartbeatService(db).reconcileResolvedDependencyWakes();
+
+    expect(released.healed).toBe(1);
+    expect(released.executionHoldSkipped).toBe(0);
+    expect(released.issueIds).toEqual([blockedIssueId]);
+  });
+
+  it("logs execution-held dependents only when the held set changes or the interval elapses", async () => {
+    const holdLogMessage =
+      "issue graph liveness backstop skipped resolved dependents held for execution reconciliation";
+    const warnSpy = vi.spyOn(logger, "warn");
+    let dateNowSpy: { mockRestore(): void } | null = null;
+    const holdLogCalls = () =>
+      warnSpy.mock.calls.filter((call) => call[1] === holdLogMessage);
+    try {
+      const first = await seedResolvedDependencyBackstopFixture({ workspaceState: "none" });
+      await seedExecutionHoldOnResolvedDependent(first);
+      // One service instance, as in production: the throttle state lives in it.
+      const heartbeat = heartbeatService(db);
+
+      await heartbeat.reconcileResolvedDependencyWakes();
+      await heartbeat.reconcileResolvedDependencyWakes();
+
+      expect(holdLogCalls()).toHaveLength(1);
+      expect(holdLogCalls()[0]![0]).toMatchObject({
+        executionHoldSkipped: 1,
+        issueIds: [first.blockedIssueId],
+        source: "issue_graph_liveness.backstop",
+      });
+
+      const second = await seedResolvedDependencyBackstopFixture({ workspaceState: "none" });
+      await seedExecutionHoldOnResolvedDependent(second);
+
+      await heartbeat.reconcileResolvedDependencyWakes();
+
+      expect(holdLogCalls()).toHaveLength(2);
+      expect(holdLogCalls()[1]![0]).toMatchObject({ executionHoldSkipped: 2 });
+      expect([...(holdLogCalls()[1]![0] as unknown as { issueIds: string[] }).issueIds].sort()).toEqual(
+        [first.blockedIssueId, second.blockedIssueId].sort(),
+      );
+
+      const realNow = Date.now();
+      dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + 61 * 60 * 1000);
+      await heartbeat.reconcileResolvedDependencyWakes();
+
+      expect(holdLogCalls()).toHaveLength(3);
+    } finally {
+      dateNowSpy?.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
 
   it("waits for workspace finalize before healing a resolved blocked dependent", async () => {
     const { companyId, agentId, blockedIssueId, blockerIssueId, executionWorkspaceId } =
