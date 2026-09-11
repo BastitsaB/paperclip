@@ -432,25 +432,85 @@ Measure on the existing ledger, per company, weekly:
 eval, revert the config revision and stop Phase 2. If induced routines raise the rework
 rate, revoke them and stop Phase 3. Both reverts must be one action.
 
+**Measurability on a real instance (2026-09-11).** Checked against the production ledger of
+the one deployment this fork runs, before any of the loop was switched on:
+
+- *Cost per closed issue* is not measurable in money when agents run on subscriptions.
+  Every `cost_events` row there carries `cost_cents = 0` with
+  `billing_type = subscription_included`. Tokens are complete and are the usable proxy —
+  counted across **all** cost events in the window, including those without an `issue_id`
+  (about a third of the events, but under a fifth of the tokens), or the figure can be
+  improved by moving work into issue-less runs. Keep `cached_input_tokens` separate; it is
+  ~40× input + output and swamps any signal.
+- *Automation share* must count every human turn, not only comments. Counting only
+  `issue_comments.author_type = 'user'` missed answered `ask_user_questions` /
+  `request_confirmation` interactions, board approvals, issues still assigned to a user, and
+  status changes made by a human — overstating the share by 2 to 7 points depending on the
+  week. `activity_log` is the broadest source: any action with `actor_type = 'user'`,
+  excluding reads, inbox archiving and the creation of the issue.
+- *Rework rate* can count recovery actions (`issue_recovery_actions.source_issue_id`) **and
+  reopens** — `activity_log` records them, but in four encodings (`changes.status.from`,
+  `reopenedFrom`, `_previous.status`, and a checkout of a `done` issue that is only visible at
+  the next transition through a stale `changes.completedAt.from`). Recovery actions alone are
+  liveness cases and say nothing about whether the result was right. Count per issue.
+- About half of all reopens are **mechanics, not failed work**: a comment on a `done` issue
+  reopens it automatically, including a human's "this is resolved" or an agent's note on its
+  own completion. Most of those are back in `done` within minutes. Counting only reopens that
+  stay open for at least ~10 minutes separates them reasonably, though not perfectly.
+- *Composition shifts the numbers.* Routine runs (`origin_kind = 'routine_execution'`) are
+  almost always automated and cheap, and their share of completed issues grew from 7 to 42 %
+  over four weeks. More routine runs raise automation share and lower tokens per issue without
+  the organization getting any better — and Phase 3 creates routines by design. Report every
+  metric with and without system-created issues.
+- Three of the six metrics — role eval pass rate, loop ROI, memory hygiene — measure the
+  loop itself and have no baseline before it runs. Only the first three can be baselined.
+- **Week-to-week noise is large, and binomial error bars understate it.** Issues in the same
+  tree or from the same routine are not independent; the design effect measured over two
+  weeks was about 1.3 to 18.7 depending on metric and subset. With a cluster-robust standard error
+  (clusters: each routine, otherwise the root of the issue tree), automation share carries
+  about ±5 to 6 points per week. A weekly before/after comparison can only detect a large
+  effect. The control arm B0, not the baseline alone, is what makes a smaller effect visible.
+
+The baseline measurement for that deployment lives outside this repo, as a read-only SQL
+report the operator runs on the host, so that the instrument cannot change what it measures.
+
 ---
 
 ## 7. Open questions
 
+Questions 1, 2, 3 and 5 are decisions; 4 and 6 are validation tasks. The decisions below
+were taken by the operator of this fork on 2026-09-11 and apply to its deployment; they are
+not a product decision for Paperclip at large.
+
 1. **Company vs. instance scope for playbooks.** Company-scoped is the safe default;
    cross-company templates raise IP and leakage questions. Needs a product decision.
+   **Decided: company-scoped.** The deployment has a single company, so the choice has no
+   practical effect there yet; it fixes the default before a second company exists.
 2. **Who owns the consolidation agent?** A dedicated system agent, or the CEO agent? A
    dedicated one keeps the budget and the blast radius clean — but it is another hire.
+   **Decided: a dedicated system agent, the `learning` built-in.** Note that Phase 1 being
+   "shipped" means shipped in code: on the deployment neither the `learning` agent nor the
+   `nightly-consolidation` routine exists yet, so enabling Phase 1 there means creating both.
 3. **Cold start.** Below roughly 50 completed issues there is likely nothing to induce
    from. The number 50 is an assumption, not a finding — it is not derived from any
    source in section 3 and needs calibration against a real company's history. Should
    Phases 2–3 gate on a data threshold at all?
+   **Decided: keep a threshold.** It does not bind on the deployment (about 1,900 completed
+   issues since mid-August), but protects a new or small company. The value 50 stays
+   uncalibrated.
 4. **Human-labeled examples.** `decision_training_examples` is an existing supervised
    signal. Feeding it into the Reflector is likely the cheapest quality win available —
    worth validating in Phase 2.
+   *Finding:* the table is empty on the deployment (as is `work_assessments`, which Phase 3
+   relies on). There is currently no supervised signal to feed.
 5. **Who writes the evals?** The eval gate is the load-bearing safety property of this
    whole proposal, and it is circular if the same loop that writes playbooks also writes
    the evals that approve them. Phase 2 needs a held-out, human-authored eval set that
    the loop cannot edit. That set does not exist yet and is not costed here.
+   **Decided: derive the eval set from completed issues** instead of writing it by hand —
+   under two conditions without which the circularity returns: the cases are **selected
+   outside the loop** (the loop must not choose its own test cases), and the set is
+   **frozen read-only** once selected (the loop must not be able to edit it afterwards).
 6. **Figure verification.** Items marked (S) in §3 were read via search summaries because
    direct access to the primary sources was blocked in this environment. Before any of
    these numbers is used externally, re-verify against the primary papers.
