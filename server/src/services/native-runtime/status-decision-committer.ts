@@ -31,6 +31,7 @@ import {
   buildIssueBlockersResolvedWakeStateKey,
   hasIssueBlockerResolutionInBlockedCycle,
 } from "../issue-dependency-wakeups.js";
+import { logger } from "../../middleware/logger.js";
 import { persistActivity, publishActivity, type ActivityPublication } from "../activity-log.js";
 import { emitAgentTaskRun } from "../agent-task-run-telemetry.js";
 
@@ -1214,17 +1215,40 @@ export async function commitNativeStatusDecision(input: {
         // producers (issue update, issue comment, liveness backstop). Read
         // through `tx` so the blocker's `completedAt`, written by the status
         // projection above, is visible in this transaction.
-        if (
-          !isCompletedChildParent
-          && !(await hasIssueBlockerResolutionInBlockedCycle(tx as unknown as Db, {
-            companyId: input.companyId,
-            dependentIssueId: dependent.id,
-            blockerIssueIds: dependent.blockerIssueIds,
-            blockedTransitionAt: dependent.blockedTransitionAt,
-          }))
-        ) {
-          continue;
+        //
+        // Fails open exactly like the other producers: a transient lookup error
+        // must never swallow a legitimate wake, and here it must also never
+        // abort the surrounding status-commit transaction. The shared state key
+        // still bounds a wrongly permitted wake to one per ready state.
+        //
+        // The lookup runs in a nested transaction so it holds a SAVEPOINT: a
+        // failing statement inside a Postgres transaction poisons the whole
+        // transaction, so catching the error is not enough on its own — the
+        // savepoint is what keeps the outer commit usable.
+        let hasFreshResolution = true;
+        if (!isCompletedChildParent) {
+          try {
+            hasFreshResolution = await tx.transaction(async (guardTx) =>
+              hasIssueBlockerResolutionInBlockedCycle(guardTx as unknown as Db, {
+                companyId: input.companyId,
+                dependentIssueId: dependent.id,
+                blockerIssueIds: dependent.blockerIssueIds,
+                blockedTransitionAt: dependent.blockedTransitionAt,
+              }),
+            );
+          } catch (err) {
+            logger.warn(
+              {
+                err,
+                issueId: input.issueId,
+                dependentIssueId: dependent.id,
+                runId: input.runId,
+              },
+              "failed to check blocker resolution recency in native status decision commit",
+            );
+          }
         }
+        if (!hasFreshResolution) continue;
         // The cycle-aware state key is what makes this producer share ONE
         // idempotency rule with the other three. The legacy per-edge key used
         // here before never covered the ready state, so a wake emitted here and

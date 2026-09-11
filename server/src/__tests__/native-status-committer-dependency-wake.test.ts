@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { and, eq, sql } from "drizzle-orm";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agents,
@@ -23,6 +23,34 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+
+/**
+ * Lets one test make the blocked-cycle guard fail the way a transient database
+ * problem would: a real failing statement issued on the handle the guard was
+ * given, i.e. inside the commit transaction.
+ */
+const guardFault = vi.hoisted(() => ({ mode: "off" as "off" | "database_error" }));
+
+vi.mock("../services/issue-dependency-wakeups.js", async () => {
+  const actual = await vi.importActual<typeof import("../services/issue-dependency-wakeups.js")>(
+    "../services/issue-dependency-wakeups.js",
+  );
+  return {
+    ...actual,
+    hasIssueBlockerResolutionInBlockedCycle: async (
+      db: Parameters<typeof actual.hasIssueBlockerResolutionInBlockedCycle>[0],
+      input: Parameters<typeof actual.hasIssueBlockerResolutionInBlockedCycle>[1],
+    ) => {
+      if (guardFault.mode === "database_error") {
+        // Not a plain thrown Error: this is a genuine Postgres failure on the
+        // caller's handle, which aborts the enclosing transaction unless the
+        // caller isolated the lookup in a savepoint.
+        await db.execute(sql`select 1 / 0`);
+      }
+      return actual.hasIssueBlockerResolutionInBlockedCycle(db, input);
+    },
+  };
+});
 import {
   NATIVE_STATUS_ARBITER_POLICY_VERSION,
   type NativeStatusDecision,
@@ -63,6 +91,7 @@ describeEmbeddedPostgres("native status committer dependency wake", () => {
   }, 30_000);
 
   afterEach(async () => {
+    guardFault.mode = "off";
     await heartbeatService(db).drainActiveRunExecutions();
     await db.delete(statusDecisionEffects);
     await db.delete(nativeRunFinalizations);
@@ -90,12 +119,17 @@ describeEmbeddedPostgres("native status committer dependency wake", () => {
    * free-text `unblockDescriptor` and linked to that blocker by a `blocks` edge
    * created long before the dependent's current blocked cycle.
    */
-  async function seedBlockerWithBlockedDependent(opts: { blockedTransitionAt: Date }) {
+  async function seedBlockerWithBlockedDependent(opts: {
+    blockedTransitionAt: Date;
+    withParent?: boolean;
+  }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const dependentAgentId = randomUUID();
+    const parentAgentId = randomUUID();
     const blockerIssueId = randomUUID();
     const dependentIssueId = randomUUID();
+    const parentIssueId = opts.withParent === true ? randomUUID() : null;
     const runId = randomUUID();
     const contractId = randomUUID();
     const resultId = randomUUID();
@@ -113,11 +147,32 @@ describeEmbeddedPostgres("native status committer dependency wake", () => {
         status: "idle",
         runtimeConfig: { heartbeat: { wakeOnDemand: false, maxConcurrentRuns: 1 } },
       },
+      {
+        id: parentAgentId,
+        companyId,
+        name: "Parent agent",
+        adapterType: "codex_local",
+        status: "idle",
+        runtimeConfig: { heartbeat: { wakeOnDemand: false, maxConcurrentRuns: 1 } },
+      },
     ]);
+    if (parentIssueId) {
+      await db.insert(issues).values({
+        id: parentIssueId,
+        companyId,
+        title: "Native parent",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: parentAgentId,
+        issueNumber: 3,
+        identifier: `${issuePrefix}-3`,
+      });
+    }
     await db.insert(issues).values([
       {
         id: blockerIssueId,
         companyId,
+        parentId: parentIssueId,
         title: "Native blocker",
         status: "in_progress",
         priority: "medium",
@@ -212,8 +267,10 @@ describeEmbeddedPostgres("native status committer dependency wake", () => {
       companyId,
       agentId,
       dependentAgentId,
+      parentAgentId,
       blockerIssueId,
       dependentIssueId,
+      parentIssueId,
       runId,
       assessmentId,
     };
@@ -360,5 +417,60 @@ describeEmbeddedPostgres("native status committer dependency wake", () => {
       .then((rows) => rows[0]!);
     // The status projection itself is unaffected — only the wake is suppressed.
     expect(blocker.status).toBe("done");
+  });
+
+  it("commits the status and still emits the wake when the guard lookup fails", async () => {
+    const seeded = await seedBlockerWithBlockedDependent({
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    guardFault.mode = "database_error";
+
+    // Must not reject: a lookup failure may neither abort the status commit nor
+    // swallow the wake. Catching alone is not enough — the failing statement
+    // poisons the enclosing transaction unless the lookup sits in a savepoint.
+    const committed = await commitDone(seeded);
+    expect(committed.decision.id).toBeTruthy();
+
+    const blocker = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, seeded.blockerIssueId))
+      .then((rows) => rows[0]!);
+    expect(blocker.status).toBe("done");
+
+    const wakes = await dependencyWakes(seeded.companyId, seeded.dependentAgentId);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0].reason).toBe("issue_blockers_resolved");
+    const dependent = await db
+      .select({ blockedTransitionAt: issues.blockedTransitionAt })
+      .from(issues)
+      .where(eq(issues.id, seeded.dependentIssueId))
+      .then((rows) => rows[0]!);
+    // Fail-open keeps the shared state key, so the wake stays deduplicated.
+    expect(wakes[0].idempotencyKey).toBe(
+      buildIssueBlockersResolvedWakeStateKey({
+        dependentIssueId: seeded.dependentIssueId,
+        blockerIssueIds: [seeded.blockerIssueId],
+        blockedTransitionAt: dependent.blockedTransitionAt,
+      }),
+    );
+  });
+
+  it("keeps the parent issue_children_completed wake when the guard lookup fails", async () => {
+    const seeded = await seedBlockerWithBlockedDependent({
+      blockedTransitionAt: new Date(Date.now() - 60 * 60 * 1000),
+      withParent: true,
+    });
+    guardFault.mode = "database_error";
+
+    await commitDone(seeded);
+
+    expect(await dependencyWakes(seeded.companyId, seeded.dependentAgentId)).toHaveLength(1);
+    const parentWakes = await dependencyWakes(seeded.companyId, seeded.parentAgentId);
+    expect(parentWakes).toHaveLength(1);
+    expect(parentWakes[0].reason).toBe("issue_children_completed");
+    expect(parentWakes[0].idempotencyKey).toBe(
+      `issue_children_completed:${seeded.parentIssueId}:${seeded.blockerIssueId}`,
+    );
   });
 });
