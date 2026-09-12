@@ -1,5 +1,5 @@
 {
-  "id": "14949730-e943-4c00-ac25-abd75c60ab67",
+  "id": "092c7808-7c68-4c95-82b9-07bc2244fbb8",
   "prevId": "3e48a0d7-61e6-498a-8c1d-597d1009fa49",
   "version": "7",
   "dialect": "postgresql",
@@ -325,6 +325,12 @@
         "failure_reason": {
           "name": "failure_reason",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result_claim": {
+          "name": "result_claim",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -20672,108 +20678,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.global_run_admission": {
-      "name": "global_run_admission",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "singleton_key": {
-          "name": "singleton_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'default'"
-        },
-        "max_concurrent_runs": {
-          "name": "max_concurrent_runs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 20
-        },
-        "emergency_stop_active": {
-          "name": "emergency_stop_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "emergency_stop_reason": {
-          "name": "emergency_stop_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_actor_type": {
-          "name": "emergency_stop_actor_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_actor_id": {
-          "name": "emergency_stop_actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_activated_at": {
-          "name": "emergency_stop_activated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "authorized_agent_ids": {
-          "name": "authorized_agent_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "global_run_admission_singleton_key_idx": {
-          "name": "global_run_admission_singleton_key_idx",
-          "columns": [
-            {
-              "expression": "singleton_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.goals": {
       "name": "goals",
       "schema": "",
@@ -22088,22 +21992,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "heartbeat_runs_global_running_status_idx": {
-          "name": "heartbeat_runs_global_running_status_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"heartbeat_runs\".\"status\" = 'running'",
           "concurrently": false,
           "method": "btree",
           "with": {}

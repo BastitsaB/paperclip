@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
@@ -38,14 +38,15 @@ import {
   credentialConfigPath,
   getAppDefinitionForUrl,
   getConnectableAppDefinition,
-  getAvailableConnectionMethod,
   getAvailableConnectionMethods,
   getRecommendedConnectionMethod,
+  isGoogleWorkspaceConnectorProfileId,
 } from "@paperclipai/shared";
 import { useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useToast } from "@/context/ToastContext";
+import { useChatConnectorsEnabled } from "@/hooks/useChatConnectorsEnabled";
 import { queryKeys } from "@/lib/queryKeys";
 import { RadioCardGroup } from "@/components/ui/radio-card";
 import { ApiError } from "@/api/client";
@@ -72,6 +73,7 @@ import { appApplicationSourceSlug } from "@/pages/apps/app-definition-display";
 import { UnverifiedServerBadge } from "@/pages/apps/UnverifiedServerBadge";
 import {
   appSourceConnectHref,
+  appSupportsToolCatalogSetup,
   isMcpDirectOAuthConnectSlug,
   resolveAppsConnectRouteKey,
   vercelConnectSourceHref,
@@ -352,10 +354,28 @@ function connectionMethodsForCredentialSource(
   credentialSource: ToolConnectionCredentialSource,
 ): ConnectionMethodDef[] {
   if (!entry) return [];
-  const methods = getAvailableConnectionMethods(entry);
+  const methods = availableToolConnectionMethods(entry);
   return credentialSource === "vercel_connect"
     ? methods.filter((method) => Boolean(method.credentialSources?.vercelConnect))
     : methods;
+}
+
+function availableToolConnectionMethods(
+  entry: AppDefinition,
+): ConnectionMethodDef[] {
+  return getAvailableConnectionMethods(entry).filter(
+    (method) => (method.purpose ?? "tool") === "tool",
+  );
+}
+
+function availableToolConnectionMethod(
+  entry: AppDefinition,
+  methodKey?: string | null,
+): ConnectionMethodDef | null {
+  const methods = availableToolConnectionMethods(entry);
+  return methodKey
+    ? methods.find((method) => method.key === methodKey) ?? null
+    : getRecommendedConnectionMethod(methods);
 }
 
 function recommendedSetupConnectionMethod(
@@ -377,16 +397,20 @@ function recommendedManagedConnectorMethod(
   entry: AppDefinition | null | undefined,
 ): ConnectionMethodDef | null {
   return recommendedSetupConnectionMethod(
-    (entry?.methods ?? []).filter((candidate) =>
-      candidate.oauthStrategy === "paperclip_cloud_connector"
-      || candidate.oauthStrategy === "paperclip_id_connector",
-    ),
+    entry
+      ? entry.methods.filter(
+          (candidate) =>
+            (candidate.purpose ?? "tool") === "tool" &&
+            (candidate.oauthStrategy === "paperclip_cloud_connector" ||
+              candidate.oauthStrategy === "paperclip_id_connector"),
+        )
+      : [],
   );
 }
 
 function canUseAutomaticOAuthFastPath(entry: AppDefinition | null | undefined): boolean {
   if (!entry) return false;
-  const methods = getAvailableConnectionMethods(entry);
+  const methods = availableToolConnectionMethods(entry);
   const method = methods.length === 1 ? methods[0] : null;
   return Boolean(
     method
@@ -397,7 +421,7 @@ function canUseAutomaticOAuthFastPath(entry: AppDefinition | null | undefined): 
 
 function automaticOAuthMethod(entry: AppDefinition | null | undefined): ConnectionMethodDef | null {
   if (!entry) return null;
-  const methods = getAvailableConnectionMethods(entry);
+  const methods = availableToolConnectionMethods(entry);
   const method = methods.length === 1 ? methods[0] : null;
   return method && connectionMethodSupportsAutomaticOAuth(method) ? method : null;
 }
@@ -517,6 +541,7 @@ export function ConnectionSetupFlow({
   }, [host, routeNavigate]);
   const routeParams = useParams<{ appKey?: string }>();
   const { selectedCompany, selectedCompanyId } = useCompany();
+  const { enabled: chatConnectorsEnabled } = useChatConnectorsEnabled();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const [searchParams] = useSearchParams();
@@ -883,6 +908,16 @@ export function ConnectionSetupFlow({
     queryFn: () => toolsApi.listGallery(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+  // Use the same visible catalog for cards and every branded URL shortcut.
+  // Generic custom URLs remain usable without selecting a hidden provider.
+  const visibleGalleryApps = useMemo(
+    () => (galleryQuery.data?.apps ?? []).filter((app) =>
+      chatConnectorsEnabled ||
+      !app.methods.some((method) => method.transport === "chat_sdk") ||
+      appSupportsToolCatalogSetup(app),
+    ),
+    [galleryQuery.data, chatConnectorsEnabled],
+  );
   const fullRequestedDefinition = requestedAppKey
     ? getConnectableAppDefinition(requestedAppKey)
     : null;
@@ -1079,11 +1114,13 @@ export function ConnectionSetupFlow({
   // A curated definition covering the pasted endpoint is offered as a branded
   // convenience only; the generic flow remains the default and stays complete.
   const linkMatchedEntry = useMemo(
-    () => (linkUrl && !entry ? getAppDefinitionForUrl(linkUrl, galleryQuery.data?.apps ?? []) : null),
-    [entry, galleryQuery.data, linkUrl],
+    () => (linkUrl && !entry ? getAppDefinitionForUrl(linkUrl, visibleGalleryApps) : null),
+    [entry, visibleGalleryApps, linkUrl],
   );
 
-  const selectedSetupMethod = entry ? getAvailableConnectionMethod(entry, connectionMethodKey || null) : null;
+  const selectedSetupMethod = entry
+    ? availableToolConnectionMethod(entry, connectionMethodKey || null)
+    : null;
   // Apps with an advanced PAT option still need OAuth progress and recovery
   // screens when their selected method is managed sign-in.
   const entryAutomaticOAuthMethod = selectedSetupMethod && connectionMethodSupportsAutomaticOAuth(selectedSetupMethod)
@@ -1164,7 +1201,10 @@ export function ConnectionSetupFlow({
       let result: ConnectToolAppResult;
       if (connectEntry) {
         const requestedGrantKind = fixedGrantKind ?? grantKind;
-        const selectedMethod = getAvailableConnectionMethod(connectEntry, connectionMethodKey || null);
+        const selectedMethod = availableToolConnectionMethod(
+          connectEntry,
+          connectionMethodKey || null,
+        );
         const sheetIds = isGoogleSheetsRobotMethod(connectEntry, selectedMethod)
           ? parseGoogleSheetIds(googleSheetsLinks).ids
           : [];
@@ -1324,7 +1364,7 @@ export function ConnectionSetupFlow({
   const connectApp = useCallback((entryOverride?: AppDefinition) => {
     const connectEntry = entryOverride ?? entry;
     const method = connectEntry
-      ? getAvailableConnectionMethod(connectEntry, connectionMethodKey || null)
+      ? availableToolConnectionMethod(connectEntry, connectionMethodKey || null)
       : null;
     if (method?.auth === "oauth") {
       reserveOAuthPopup();
@@ -1976,10 +2016,10 @@ export function ConnectionSetupFlow({
     ? [preEnrollmentManagedMethod]
     : credentialSourceMethods;
   const credentialSourceApps = vercelConnectMode
-    ? (galleryQuery.data?.apps ?? []).filter(
+    ? visibleGalleryApps.filter(
         (app) => connectionMethodsForCredentialSource(app, credentialSource).length > 0,
       )
-    : galleryQuery.data?.apps ?? [];
+    : visibleGalleryApps;
   const zapierEntry = zapierSource
     ? galleryQuery.data?.apps.find((app) => app.slug === "zapier") ?? null
     : null;
@@ -2061,7 +2101,7 @@ export function ConnectionSetupFlow({
           source={searchParams.get("source")}
           onPick={useMatchedGalleryEntry}
           onUseLink={(url) => {
-            const matchedEntry = getAppDefinitionForUrl(url, galleryQuery.data?.apps ?? []);
+            const matchedEntry = getAppDefinitionForUrl(url, visibleGalleryApps);
             setEntry(null);
             setGalleryName("");
             setLinkUrl(url);
@@ -2165,7 +2205,13 @@ export function ConnectionSetupFlow({
           methodKey={connectionMethodKey}
           onMethodChange={(nextMethod) => {
             setConnectionMethodKey(nextMethod?.key ?? "");
-            if (!reconnectGrantKind) {
+            // Capability/auth changes must not broaden the audience selected
+            // on Access (including choices restored after Cloud enrollment).
+            if (
+              !reconnectGrantKind
+              && nextMethod?.grantKinds
+              && !nextMethod.grantKinds.includes(grantKind)
+            ) {
               setGrantKind(defaultGrantKindFor(nextMethod, Boolean(requestedAgentId)));
             }
             setCredentials({});
@@ -2198,7 +2244,10 @@ export function ConnectionSetupFlow({
                 return;
               }
             }
-            const selectedMethod = getAvailableConnectionMethod(entry, connectionMethodKey || null);
+            const selectedMethod = availableToolConnectionMethod(
+              entry,
+              connectionMethodKey || null,
+            );
             const selectedMethodHasProviderFields = Boolean(
               selectedMethod?.credentialFields?.length
               || selectedMethod?.tenantFields?.some((field) => !field.hidden)
@@ -2630,8 +2679,7 @@ function GalleryStep({
   }, [byo, byoOnly, loading]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return apps;
-    return apps.filter((a) => a.name.toLowerCase().includes(q));
+    return apps.filter((app) => !q || app.name.toLowerCase().includes(q));
   }, [apps, search]);
   const normalizedLink = normalizeAppLink(linkInput);
   const matchedEntry = normalizedLink ? getAppDefinitionForUrl(normalizedLink, apps) : null;
@@ -2700,7 +2748,7 @@ function GalleryStep({
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {filtered.map((app) => {
               const copy = appCopyFor(app.slug, app.description);
-              const methods = getAvailableConnectionMethods(app);
+              const methods = availableToolConnectionMethods(app);
               const oauthBlocked = methods.length === 0 || methods.every((candidate) =>
                 candidate.auth === "oauth"
                 && !connectionMethodSupportsAutomaticOAuth(candidate)
@@ -3340,7 +3388,29 @@ function KeyStep({
       {!capabilityKey && <p className="mt-2 text-xs text-muted-foreground">Choose an access level to continue.</p>}
     </div>
   ) : null;
-  const authenticationSelection = capabilityMethods.length > 1 ? (
+  const managedGoogleMethod = capabilityMethods.find((candidate) =>
+    candidate.oauthStrategy === "paperclip_cloud_connector"
+    && isGoogleWorkspaceConnectorProfileId(candidate.connectorProfile ?? ""),
+  );
+  const customerGoogleMethod = managedGoogleMethod && capabilityMethods.find((candidate) =>
+    connectionMethodAcceptsCustomerOAuthClient(candidate)
+    && !connectionMethodSupportsAutomaticOAuth(candidate),
+  );
+  const usingCustomGoogleOAuth = method?.key === customerGoogleMethod?.key;
+  const googleOAuthFieldsId = useId();
+  const authenticationSelection = managedGoogleMethod && customerGoogleMethod && capabilityMethods.length === 2 ? (
+    <Button
+      type="button"
+      variant="link"
+      className="h-auto p-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+      aria-expanded={usingCustomGoogleOAuth}
+      aria-controls={googleOAuthFieldsId}
+      disabled={submitting}
+      onClick={() => onMethodChange(usingCustomGoogleOAuth ? managedGoogleMethod : customerGoogleMethod)}
+    >
+      {usingCustomGoogleOAuth ? "Use Paperclip instead" : "Use your own Google OAuth app"}
+    </Button>
+  ) : capabilityMethods.length > 1 ? (
     <div>
       <label className="text-sm font-medium text-foreground">How do you want to connect?</label>
       <RadioCardGroup
@@ -3531,16 +3601,18 @@ function KeyStep({
         )}
 
         {!usingVercel && method?.auth === "oauth" && customerOAuthClientRequired ? (
-          <OAuthClientFields
-            entry={entry}
-            method={method}
-            callbackUrl={oauthCallbackUrl}
-            clientId={oauthClientId}
-            onClientIdChange={onOAuthClientIdChange}
-            clientSecret={oauthClientSecret}
-            onClientSecretChange={onOAuthClientSecretChange}
-            required
-          />
+          <div id={googleOAuthFieldsId} role="region" aria-label="Your OAuth app">
+            <OAuthClientFields
+              entry={entry}
+              method={method}
+              callbackUrl={oauthCallbackUrl}
+              clientId={oauthClientId}
+              onClientIdChange={onOAuthClientIdChange}
+              clientSecret={oauthClientSecret}
+              onClientSecretChange={onOAuthClientSecretChange}
+              required
+            />
+          </div>
         ) : null}
 
         {usingVercel || !method || fields.length === 0 ? null : (

@@ -211,18 +211,26 @@ export const agentMineInboxQuerySchema = z.object({
 export type AgentMineInboxQuery = z.infer<typeof agentMineInboxQuerySchema>;
 
 export const wakeAgentSchema = z.object({
-  source: z.enum(["timer", "assignment", "on_demand", "automation"]).optional().default("on_demand"),
+  source: z
+    .enum(["timer", "assignment", "on_demand", "automation"])
+    .optional()
+    .default("on_demand"),
   triggerDetail: z.enum(["manual", "ping", "callback", "system"]).optional(),
   reason: z.string().optional().nullable(),
+  /** Select an exact failed run; its chat request and actor are server-derived. */
+  failedRunId: z.string().uuid().optional(),
   payload: z.record(z.string(), z.unknown()).optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   forceFreshSession: z.preprocess(
     (value) => (value === null ? undefined : value),
     z.boolean().optional().default(false),
   ),
-  debug: z.object({
-    providerTrace: z.literal("raw"),
-  }).strict().optional(),
+  debug: z
+    .object({
+      providerTrace: z.literal("raw"),
+    })
+    .strict()
+    .optional(),
 });
 
 export type WakeAgent = z.infer<typeof wakeAgentSchema>;
@@ -234,6 +242,8 @@ export const resetAgentSessionSchema = z.object({
 export type ResetAgentSession = z.infer<typeof resetAgentSessionSchema>;
 
 export const testAdapterEnvironmentSchema = z.object({
+  /** Saved agent whose redacted environment entries are restored for this probe. */
+  agentId: z.string().guid().optional(),
   /** One-shot provider keys for a probe. Never persist these in agent config. */
   testCredentials: z.object({
     ANTHROPIC_API_KEY: z.string().max(16384),
