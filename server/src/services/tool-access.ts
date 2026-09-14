@@ -229,7 +229,9 @@ import {
   ComposioApiError,
   createComposioClient,
   type ComposioClient,
+  type ComposioConnectedAccount,
 } from "./composio.js";
+import { selectComposioAccountForChild } from "./composio-account-selection.js";
 import {
   composioChildConfig,
   createComposioSessionManager,
@@ -7003,11 +7005,77 @@ export function toolAccessService(
     );
   }
 
+  /**
+   * Moves a Composio child onto the account a reconnect created. Mirrors the pin
+   * update `syncComposioChild` does after Paperclip's own connect dialog, so both
+   * reconnect routes end in the same state: new pin in config and transport, and
+   * cached Composio sessions dropped because they were minted for the old account.
+   */
+  async function rebindComposioChild(
+    child: typeof toolConnections.$inferSelect,
+    account: ComposioConnectedAccount,
+    previous: { accountId: string | null; status: string },
+    extraConfig: Record<string, unknown> = {},
+    extraSet: Partial<typeof toolConnections.$inferInsert> = {},
+  ) {
+    const [updated] = await db
+      .update(toolConnections)
+      .set({
+        ...extraSet,
+        config: {
+          ...asRecord(child.config),
+          ...extraConfig,
+          connectedAccountId: account.id,
+        },
+        transportConfig: {
+          ...asRecord(child.transportConfig),
+          connectedAccountId: account.id,
+          composioSessions: {},
+        },
+        updatedAt: now(),
+      })
+      .where(eq(toolConnections.id, child.id))
+      .returning();
+    await audit({
+      companyId: child.companyId,
+      connectionId: child.id,
+      action: "tool_connection.composio_account_rebound",
+      outcome: "success",
+      details: {
+        previousConnectedAccountId: previous.accountId,
+        previousConnectedAccountStatus: previous.status,
+        connectedAccountId: account.id,
+        authConfigId: account.auth_config?.id ?? null,
+      },
+    });
+    return updated!;
+  }
+
+  function composioAccountUnavailableMessage(
+    toolkitSlug: string,
+    status: string,
+    reason: "no_active_account" | "ambiguous" | "auth_config_mismatch",
+  ) {
+    const base = `Composio reports the ${toolkitSlug} connected account as ${status}.`;
+    if (reason === "ambiguous")
+      return `${base} Several active ${toolkitSlug} accounts exist; reconnect it through Paperclip to choose one.`;
+    if (reason === "auth_config_mismatch")
+      return `${base} The only active ${toolkitSlug} account uses a different auth config; reconnect it through Paperclip to confirm the change.`;
+    return `${base} Reconnect it in Composio.`;
+  }
+
+  /**
+   * Confirms the child's Composio account is usable and returns the row to use
+   * from here on. When a reconnect in the Composio dashboard left the pin on a
+   * dead account, the child is rebound to the replacement (see
+   * `selectComposioAccountForChild` for when that is allowed) and the rebound row
+   * is returned, so the caller's MCP session is built for the live account.
+   */
   async function assertComposioConnectedAccountActive(
     child: typeof toolConnections.$inferSelect,
-  ) {
+  ): Promise<typeof toolConnections.$inferSelect> {
     const childConfig = composioChildConfig(child);
-    if (!childConfig) return;
+    if (!childConfig) return child;
     const parent = await getConnectionRow(
       childConfig.parentConnectionId,
       child.companyId,
@@ -7018,20 +7086,28 @@ export function toolAccessService(
       userIds: [`paperclip:${child.companyId}`],
       limit: 100,
     });
-    const account = childConfig.connectedAccountId
-      ? accounts.items.find(
-          (candidate) => candidate.id === childConfig.connectedAccountId,
-        )
-      : accounts.items.find(
-          (candidate) => candidate.toolkit.slug === childConfig.toolkitSlug,
-        );
-    if (account?.status.toUpperCase() === "ACTIVE") return;
-    const status = account?.status.trim().toUpperCase() || "MISSING";
+    const selection = selectComposioAccountForChild({
+      accounts: accounts.items,
+      toolkitSlug: childConfig.toolkitSlug,
+      pinnedAccountId: childConfig.connectedAccountId,
+    });
+    if (selection.kind === "pinned_active") return child;
+    if (selection.kind === "rebind") {
+      return rebindComposioChild(child, selection.account, {
+        accountId: selection.previousAccountId,
+        status: selection.previousStatus,
+      });
+    }
     throw unprocessable(
-      `Composio reports the ${childConfig.toolkitSlug} connected account as ${status}. Reconnect it in Composio.`,
+      composioAccountUnavailableMessage(
+        childConfig.toolkitSlug,
+        selection.pinnedStatus,
+        selection.reason,
+      ),
       {
         code: "composio_connected_account_inactive",
-        connectedAccountStatus: status,
+        connectedAccountStatus: selection.pinnedStatus,
+        reason: selection.reason,
       },
     );
   }
@@ -7086,27 +7162,51 @@ export function toolAccessService(
 
     for (const child of restorable) {
       const childConfig = composioChildConfig(child)!;
-      const account = childConfig.connectedAccountId
-        ? accounts.find(
-            (candidate) => candidate.id === childConfig.connectedAccountId,
-          )
-        : accounts.find(
-            (candidate) => candidate.toolkit.slug === childConfig.toolkitSlug,
-          );
+      const selection = selectComposioAccountForChild({
+        accounts,
+        toolkitSlug: childConfig.toolkitSlug,
+        pinnedAccountId: childConfig.connectedAccountId,
+      });
       const config = { ...asRecord(child.config) };
       delete config.disabledByComposioParent;
-      const active = account?.status.toUpperCase() === "ACTIVE";
+      const restoredSet = {
+        enabled: true,
+        healthStatus: "unchecked" as const,
+        healthMessage: null,
+      };
+      if (selection.kind === "rebind") {
+        // The reconnect happened while the parent was paused: restore onto the
+        // live account instead of keeping the child disabled on the dead one.
+        await rebindComposioChild(
+          { ...child, config },
+          selection.account,
+          {
+            accountId: selection.previousAccountId,
+            status: selection.previousStatus,
+          },
+          {},
+          restoredSet,
+        );
+        continue;
+      }
+      const active = selection.kind === "pinned_active";
       await db
         .update(toolConnections)
         .set({
-          enabled: active,
+          ...(active
+            ? restoredSet
+            : {
+                enabled: false,
+                healthStatus: "degraded" as const,
+                healthMessage: composioAccountUnavailableMessage(
+                  childConfig.toolkitSlug,
+                  selection.pinnedStatus,
+                  selection.reason,
+                ),
+              }),
           config: active
             ? config
             : { ...config, disabledByComposioParent: true },
-          healthStatus: active ? "unchecked" : "degraded",
-          healthMessage: active
-            ? null
-            : `Composio reports the ${childConfig.toolkitSlug} connected account as ${account?.status.toUpperCase() ?? "MISSING"}. Reconnect it in Composio.`,
           updatedAt: now(),
         })
         .where(eq(toolConnections.id, child.id));
@@ -7553,14 +7653,17 @@ export function toolAccessService(
       } else if (isAgentMailConnection(connection)) {
         await validateAgentMailConnection(connection);
       } else if (connection.transport === "mcp_remote") {
-        await assertComposioConnectedAccountActive(connection);
+        // May be a rebound row: list tools against the account that is live now,
+        // not the pinned one a dashboard reconnect left behind.
+        const liveConnection =
+          await assertComposioConnectedAccountActive(connection);
         const credentialHeaders =
-          connection.credentialSource === "vercel_connect"
-            ? await resolveCredentialHeaders(connection, actor, {
+          liveConnection.credentialSource === "vercel_connect"
+            ? await resolveCredentialHeaders(liveConnection, actor, {
                 forceRefresh: true,
               })
             : undefined;
-        await remoteTools(connection, credentialHeaders, actor);
+        await remoteTools(liveConnection, credentialHeaders, actor);
       } else if (isComposioConnection(connection)) {
         await validateComposioConnection(connection);
       } else {

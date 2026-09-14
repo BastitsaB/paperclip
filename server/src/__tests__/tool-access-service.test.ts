@@ -5203,6 +5203,131 @@ describeEmbeddedPostgres("tool access service", () => {
     );
   });
 
+  // Reconnecting a toolkit in the Composio dashboard creates a NEW account and
+  // leaves the pinned one EXPIRED. Before this fix the child stayed degraded and
+  // its tools stayed hidden from agents until someone rebound it by hand
+  // (observed for Google Analytics and Search Console on 2026-09-13).
+  function composioClientWithAccounts(
+    accounts: () => Array<{ id: string; status: string; authConfigId: string }>,
+  ): ComposioClient {
+    return {
+      ...fakeComposioClient(() => "ACTIVE"),
+      listConnectedAccounts: vi.fn(async () => ({
+        items: accounts().map((entry) => ({
+          id: entry.id,
+          user_id: "paperclip:test",
+          status: entry.status,
+          toolkit: { slug: "github" },
+          auth_config: {
+            id: entry.authConfigId,
+            auth_scheme: "OAUTH2",
+            is_composio_managed: false,
+          },
+        })),
+      })),
+    };
+  }
+
+  async function childRow(id: string) {
+    const [row] = await db
+      .select()
+      .from(toolConnections)
+      .where(eq(toolConnections.id, id));
+    return row!;
+  }
+
+  it("rebinds a Composio child to the account a dashboard reconnect created", async () => {
+    const company = await createCompany(db);
+    const { child } = await createComposioParentAndChild(db, company.id);
+    const service = createTestToolAccessService(db, {
+      composioClientFactory: () =>
+        composioClientWithAccounts(() => [
+          { id: "account-github", status: "EXPIRED", authConfigId: "auth-github" },
+          { id: "account-github-new", status: "ACTIVE", authConfigId: "auth-github" },
+        ]),
+    });
+
+    // The MCP tools/list afterwards is not mocked here and may fail; what matters
+    // is that the account gate no longer rejects and the pin moved.
+    const outcome = await service.checkHealth(child.id).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(outcome).not.toMatchObject({
+      details: { code: "composio_connected_account_inactive" },
+    });
+
+    const row = await childRow(child.id);
+    expect(row.config).toMatchObject({ connectedAccountId: "account-github-new" });
+    expect(row.transportConfig).toMatchObject({
+      connectedAccountId: "account-github-new",
+      composioSessions: {},
+    });
+    const audits = await db
+      .select()
+      .from(toolAccessAuditEvents)
+      .where(
+        and(
+          eq(toolAccessAuditEvents.connectionId, child.id),
+          eq(toolAccessAuditEvents.action, "tool_connection.composio_account_rebound"),
+        ),
+      );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.details).toMatchObject({
+      previousConnectedAccountId: "account-github",
+      previousConnectedAccountStatus: "EXPIRED",
+      connectedAccountId: "account-github-new",
+    });
+  });
+
+  it("does not rebind a Composio child onto an account of a different auth config", async () => {
+    const company = await createCompany(db);
+    const { child } = await createComposioParentAndChild(db, company.id);
+    const service = createTestToolAccessService(db, {
+      composioClientFactory: () =>
+        composioClientWithAccounts(() => [
+          { id: "account-github", status: "EXPIRED", authConfigId: "auth-github" },
+          { id: "account-github-broad", status: "ACTIVE", authConfigId: "auth-managed" },
+        ]),
+    });
+
+    await expect(service.checkHealth(child.id)).rejects.toMatchObject({
+      details: {
+        code: "composio_connected_account_inactive",
+        connection: expect.objectContaining({ healthStatus: "degraded" }),
+      },
+    });
+    const row = await childRow(child.id);
+    expect(row.config).toMatchObject({ connectedAccountId: "account-github" });
+    await expect(service.getConnection(child.id)).resolves.toMatchObject({
+      healthMessage: expect.stringContaining("different auth config"),
+    });
+  });
+
+  it("restores a paused Composio child onto the reconnected account", async () => {
+    const company = await createCompany(db);
+    const { parent, child } = await createComposioParentAndChild(db, company.id);
+    let accounts = [
+      { id: "account-github", status: "ACTIVE", authConfigId: "auth-github" },
+    ];
+    const service = createTestToolAccessService(db, {
+      composioClientFactory: () => composioClientWithAccounts(() => accounts),
+    });
+
+    await service.updateConnection(parent.id, { enabled: false });
+    accounts = [
+      { id: "account-github", status: "EXPIRED", authConfigId: "auth-github" },
+      { id: "account-github-new", status: "ACTIVE", authConfigId: "auth-github" },
+    ];
+    await service.updateConnection(parent.id, { enabled: true });
+
+    const restored = await service.getConnection(child.id);
+    expect(restored).toMatchObject({ enabled: true, healthStatus: "unchecked" });
+    expect(restored.config).not.toHaveProperty("disabledByComposioParent");
+    const row = await childRow(child.id);
+    expect(row.config).toMatchObject({ connectedAccountId: "account-github-new" });
+  });
+
   it("cascades Composio parent pause, restores active children, and keeps inactive children disabled", async () => {
     const company = await createCompany(db);
     const { parent, child } = await createComposioParentAndChild(
