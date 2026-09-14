@@ -31,6 +31,7 @@ import type {
   AcpxRemoteManagedHomeResult,
 } from "@paperclipai/adapter-utils/acpx-engine/execute";
 import {
+  asBoolean,
   asNumber,
   asString,
   asStringArray,
@@ -146,9 +147,25 @@ export function buildCodexAcpConfig(config: Record<string, unknown>): Record<str
     if (match) networkAccess = match[1] === "true";
   }
 
+  // The CLI lane already honours `dangerouslyBypassApprovalsAndSandbox`; the ACP lane
+  // ignored it and codex-acp started in its sandboxed `agent` mode anyway. On hosts
+  // that cannot create bwrap's namespaces (rootless containers report
+  // "bwrap: pivot_root: Operation not permitted") every managed patch then failed
+  // before touching a file, although the operator had explicitly opted out of the
+  // sandbox. Only an explicit opt-in maps to full access; the default stays
+  // sandboxed. Port of upstream paperclipai/paperclip#10932 (closed unmerged).
+  const bypassSandbox = asBoolean(
+    config.dangerouslyBypassApprovalsAndSandbox,
+    asBoolean(config.dangerouslyBypassSandbox, false),
+  );
+
   return {
     ...config,
-    env: { ...env, PAPERCLIP_CODEX_ACP_NETWORK_ACCESS: String(networkAccess) },
+    env: {
+      ...env,
+      PAPERCLIP_CODEX_ACP_NETWORK_ACCESS: String(networkAccess),
+      ...(bypassSandbox ? { INITIAL_AGENT_MODE: "agent-full-access" } : {}),
+    },
     agent: "codex",
     mode,
     permissionMode,

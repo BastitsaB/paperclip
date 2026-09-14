@@ -274,7 +274,11 @@ describe("paperclip skill utils", () => {
     expect(skillBody).toContain("references/artifacts.md");
     expect(skillBody).not.toContain("/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/attachments");
     expect(referenceBody).toContain("Generated Artifacts and Work Products");
-    expect(referenceBody).toContain("scripts/paperclip-upload-artifact.sh");
+    expect(referenceBody).toContain("bash scripts/paperclip-upload-artifact.sh");
+    expect(normalizedReferenceBody).toContain("package installation may not preserve its executable bit");
+    expect(
+      await fs.readFile(path.resolve("server/src/onboarding-assets/default/AGENTS.md"), "utf8"),
+    ).toContain("bash skills/paperclip/scripts/paperclip-upload-artifact.sh");
     expect(referenceBody).toContain("POST");
     expect(referenceBody).toContain("/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/attachments");
     expect(referenceBody).toContain("/api/issues/$PAPERCLIP_TASK_ID/work-products");
