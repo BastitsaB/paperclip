@@ -5245,12 +5245,13 @@ describeEmbeddedPostgres("tool access service", () => {
     childId: string,
   ) {
     // The MCP tools/list after the account gate is not mocked and may fail; only
-    // the account gate's verdict matters for these tests.
+    // the account gate's verdict matters for these tests. The health check keeps
+    // just `details.code`; the gate's reason surfaces in the health message.
     const error = await service.checkHealth(childId).then(
       () => null,
-      (caught: unknown) => caught as { details?: { code?: string; reason?: string } },
+      (caught: unknown) => caught as { details?: { code?: string } },
     );
-    return { code: error?.details?.code ?? null, reason: error?.details?.reason ?? null };
+    return error?.details?.code ?? null;
   }
 
   it("rebinds a Composio child to the account a dashboard reconnect created", async () => {
@@ -5265,7 +5266,7 @@ describeEmbeddedPostgres("tool access service", () => {
     });
 
     const outcome = await healthCheckOutcomeCode(service, child.id);
-    expect(outcome.code).not.toBe("composio_connected_account_inactive");
+    expect(outcome).not.toBe("composio_connected_account_inactive");
 
     const row = await childRow(child.id);
     expect(row.config).toMatchObject({
@@ -5336,9 +5337,9 @@ describeEmbeddedPostgres("tool access service", () => {
 
     // Legacy child without a recorded auth config: fail closed.
     const unknown = await healthCheckOutcomeCode(service, child.id);
-    expect(unknown).toEqual({
-      code: "composio_connected_account_inactive",
-      reason: "auth_config_unknown",
+    expect(unknown).toBe("composio_connected_account_inactive");
+    await expect(service.getConnection(child.id)).resolves.toMatchObject({
+      healthMessage: expect.stringContaining("cannot tell which auth config"),
     });
     expect((await childRow(child.id)).config).toMatchObject({
       connectedAccountId: "account-github",
@@ -5351,7 +5352,7 @@ describeEmbeddedPostgres("tool access service", () => {
       .where(eq(toolConnections.id, child.id));
 
     const recorded = await healthCheckOutcomeCode(service, child.id);
-    expect(recorded.code).not.toBe("composio_connected_account_inactive");
+    expect(recorded).not.toBe("composio_connected_account_inactive");
     expect((await childRow(child.id)).config).toMatchObject({
       connectedAccountId: "account-github-new",
     });
@@ -5374,9 +5375,9 @@ describeEmbeddedPostgres("tool access service", () => {
     });
 
     const outcome = await healthCheckOutcomeCode(service, child.id);
-    expect(outcome).toEqual({
-      code: "composio_connected_account_inactive",
-      reason: "incomplete_listing",
+    expect(outcome).toBe("composio_connected_account_inactive");
+    await expect(service.getConnection(child.id)).resolves.toMatchObject({
+      healthMessage: expect.stringContaining("full account list"),
     });
     expect((await childRow(child.id)).config).toMatchObject({
       connectedAccountId: "account-github",

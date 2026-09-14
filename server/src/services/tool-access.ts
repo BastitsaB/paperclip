@@ -7010,6 +7010,21 @@ export function toolAccessService(
   }
 
   /**
+   * Optimistic-concurrency guard for Composio child writes: matches the row only
+   * if nobody changed it since `row` was read. `updated_at` is stored with
+   * microseconds while JS Dates carry milliseconds, so a plain equality would
+   * never match a row whose timestamp came from a database default and every
+   * guarded write would silently be skipped. Compare at the millisecond
+   * precision the application actually read.
+   */
+  function composioChildUnchangedSince(row: typeof toolConnections.$inferSelect) {
+    return and(
+      eq(toolConnections.id, row.id),
+      sql`date_trunc('milliseconds', ${toolConnections.updatedAt}) = ${row.updatedAt.toISOString()}::timestamptz`,
+    );
+  }
+
+  /**
    * Moves a Composio child onto the account a reconnect created. Mirrors the pin
    * update `syncComposioChild` does after Paperclip's own connect dialog, so both
    * reconnect routes end in the same state: new pin in config and transport, the
@@ -7046,12 +7061,7 @@ export function toolAccessService(
         },
         updatedAt: now(),
       })
-      .where(
-        and(
-          eq(toolConnections.id, child.id),
-          eq(toolConnections.updatedAt, child.updatedAt),
-        ),
-      )
+      .where(composioChildUnchangedSince(child))
       .returning();
     if (!updated) {
       return { row: await getConnectionRow(child.id, child.companyId), rebound: false };
@@ -7087,12 +7097,7 @@ export function toolAccessService(
     const [updated] = await db
       .update(toolConnections)
       .set({ config: { ...config, authConfigId }, updatedAt: now() })
-      .where(
-        and(
-          eq(toolConnections.id, child.id),
-          eq(toolConnections.updatedAt, child.updatedAt),
-        ),
-      )
+      .where(composioChildUnchangedSince(child))
       .returning();
     return updated ?? child;
   }
