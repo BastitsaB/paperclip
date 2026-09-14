@@ -508,6 +508,35 @@ describe("codex_local ACP lane", () => {
     });
   });
 
+  it("maps the sandbox bypass setting to the Codex ACP full-access agent mode", () => {
+    expect(buildCodexAcpConfig({
+      engine: "acp",
+      dangerouslyBypassApprovalsAndSandbox: true,
+      env: { EXISTING: "keep", INITIAL_AGENT_MODE: "agent" },
+    })).toMatchObject({
+      env: { EXISTING: "keep", INITIAL_AGENT_MODE: "agent-full-access" },
+    });
+  });
+
+  it("maps the legacy sandbox bypass setting to the Codex ACP agent mode", () => {
+    expect(buildCodexAcpConfig({
+      engine: "acp",
+      dangerouslyBypassSandbox: true,
+    })).toMatchObject({
+      env: { INITIAL_AGENT_MODE: "agent-full-access" },
+    });
+  });
+
+  it("keeps the sandboxed agent mode unless the bypass is explicitly enabled", () => {
+    const config = buildCodexAcpConfig({
+      engine: "acp",
+      dangerouslyBypassApprovalsAndSandbox: false,
+    }) as { env: Record<string, string> };
+    expect(config.env).not.toHaveProperty("INITIAL_AGENT_MODE");
+    expect((buildCodexAcpConfig({ engine: "acp" }) as { env: Record<string, string> }).env)
+      .not.toHaveProperty("INITIAL_AGENT_MODE");
+  });
+
   it("forwards GPT-6 Astra controls to the ACPX Codex target", () => {
     expect(buildCodexAcpConfig({
       engine: "acp",
