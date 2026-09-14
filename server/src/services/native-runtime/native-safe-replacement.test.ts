@@ -227,6 +227,72 @@ const support = externalDatabaseUrl
       expect(actions[0]).toMatchObject({ status: "resolved", evidence: { continuationDelivery: "pending", executionReconciliation: { runId: source.runId } } });
       await db.update(issueRecoveryActions).set({ evidence: { ...actions[0]!.evidence, continuationDelivery: "invalidated" } }).where(eq(issueRecoveryActions.id, action!.id));
     });
+    // Periodic stranded-work sweeps revisit a terminal legacy run every tick.
+    // Once the hold is settled (no longer active), the source-scoped upsert no
+    // longer sees it; every revisit used to insert another hold for the same run.
+    it("records one hold per legacy run across repeated sweeps after automatic settlement", async () => {
+      const source = await seed();
+      const [run] = await db.update(heartbeatRuns).set({ runtimeMode: "legacy", status: "cancelled", errorCode: "issue_continuation_waiting_on_review" }).where(eq(heartbeatRuns.id, source.runId)).returning();
+      await terminalizeLegacyExecution({ db, run, status: "cancelled" });
+      await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, source.runId));
+      await settleUnrecoverableExecutions(db);
+      const [settled] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, source.issueId));
+      expect(settled).toMatchObject({ status: "resolved", evidence: { automaticRecovery: { replay: "blocked" } } });
+
+      for (let sweep = 0; sweep < 3; sweep += 1) {
+        await terminalizeLegacyExecution({ db, run, status: "cancelled" });
+      }
+
+      const actions = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, source.issueId));
+      expect(actions).toHaveLength(1);
+      expect(actions[0]!.id).toBe(settled!.id);
+    });
+    it("does not count repeated sweeps before settlement as recovery attempts", async () => {
+      const source = await seed();
+      const [run] = await db.update(heartbeatRuns).set({ runtimeMode: "legacy", status: "cancelled" }).where(eq(heartbeatRuns.id, source.runId)).returning();
+      for (let sweep = 0; sweep < 4; sweep += 1) {
+        await terminalizeLegacyExecution({ db, run: run!, status: "cancelled" });
+      }
+      const actions = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, source.issueId));
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({ status: "active", attemptCount: 1 });
+    });
+    // A hold cancelled before settlement (supersede, revalidation, disposition
+    // repair) neither blocks nor carries a reconciliation; the run's unverified
+    // actions must come back to the operator on the next sweep.
+    it("restores a hold for the run when its previous hold was cancelled unreconciled", async () => {
+      const source = await seed();
+      const [run] = await db.update(heartbeatRuns).set({ runtimeMode: "legacy", status: "cancelled" }).where(eq(heartbeatRuns.id, source.runId)).returning();
+      await terminalizeLegacyExecution({ db, run: run!, status: "cancelled" });
+      await db.update(issueRecoveryActions).set({ status: "cancelled", outcome: "cancelled", resolvedAt: new Date() }).where(eq(issueRecoveryActions.sourceIssueId, source.issueId));
+
+      await terminalizeLegacyExecution({ db, run: run!, status: "cancelled" });
+
+      const actions = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, source.issueId));
+      expect(actions.map((action) => action.status).sort()).toEqual(["active", "cancelled"]);
+    });
+    it("still records a hold for a different failed run on the same issue", async () => {
+      const source = await seed();
+      const [first] = await db.update(heartbeatRuns).set({ runtimeMode: "legacy", status: "cancelled" }).where(eq(heartbeatRuns.id, source.runId)).returning();
+      await terminalizeLegacyExecution({ db, run: first!, status: "cancelled" });
+      await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, source.runId));
+      await settleUnrecoverableExecutions(db);
+
+      const secondRunId = randomUUID();
+      const [second] = await db.insert(heartbeatRuns).values({
+        ...first!,
+        id: secondRunId,
+        runtimeMode: "legacy",
+        status: "cancelled",
+        contextSnapshot: { ...(first!.contextSnapshot ?? {}), issueId: source.issueId },
+      }).returning();
+      await terminalizeLegacyExecution({ db, run: second!, status: "cancelled" });
+
+      const fingerprints = (await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, source.issueId)))
+        .map((action) => action.fingerprint)
+        .sort();
+      expect(fingerprints).toEqual([`legacy-execution:${secondRunId}`, `legacy-execution:${source.runId}`].sort());
+    });
     it("surfaces a failed current reviewer without transferring the original assignment", async () => {
       const source = await seed();
       const reviewerId = randomUUID();
