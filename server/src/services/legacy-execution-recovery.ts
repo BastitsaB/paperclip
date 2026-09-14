@@ -1,7 +1,7 @@
 import { normalizeMaxTurnStopReason } from "./heartbeat-stop-metadata.js";
 import { hasConversationContinuationPolicy } from "./conversation-continuation.js";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { heartbeatRuns, issueRecoveryActions, issues, type Db } from "@paperclipai/db";
 import { issueRecoveryActionService } from "./issue-recovery-actions.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
@@ -117,12 +117,20 @@ export async function terminalizeLegacyExecution(input: {
       // (11 rows for one run within five minutes on a live instance, 46 on
       // another issue). Each extra row keeps the issue held on its own, and an
       // operator reconciliation clears only the row it names.
+      // A cancelled row does not count: supersede, issue-write revalidation and
+      // disposition repair can cancel an unreconciled hold before settlement, and
+      // such a row neither blocks execution nor carries a reconciliation. Treating
+      // it as recorded would drop the run's unverified actions from operator
+      // review, so the next sweep must restore the hold.
       const [recorded] = await tx.select({ id: issueRecoveryActions.id })
         .from(issueRecoveryActions).where(and(
           eq(issueRecoveryActions.companyId, run.companyId),
           eq(issueRecoveryActions.sourceIssueId, task.id),
           or(
-            eq(issueRecoveryActions.fingerprint, `legacy-execution:${run.id}`),
+            and(
+              eq(issueRecoveryActions.fingerprint, `legacy-execution:${run.id}`),
+              ne(issueRecoveryActions.status, "cancelled"),
+            ),
             and(
               eq(issueRecoveryActions.status, "resolved"),
               sql`${issueRecoveryActions.evidence}->'executionReconciliation'->>'runId' = ${run.id}`,
