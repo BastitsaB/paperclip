@@ -867,6 +867,9 @@ async function executeProcess(input: {
   env?: NodeJS.ProcessEnv;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
+  // Operator-authored provision/teardown shell commands (installs, builds) are
+  // agent workloads; git plumbing stays at server priority for API latency.
+  agentWorkload?: boolean;
 }): Promise<{
   stdout: string;
   stderr: string;
@@ -886,6 +889,7 @@ async function executeProcess(input: {
       stdio: ["ignore", "pipe", "pipe"],
       env: input.env ?? process.env,
     });
+    if (input.agentWorkload) applyAgentProcessNice(child.pid);
     const stdout = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
     const stderr = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
     child.stdout?.on("data", (chunk) => {
@@ -2957,6 +2961,7 @@ async function runWorkspaceCommand(input: {
     args: ["-c", input.resolvedCommand ?? input.command],
     cwd: input.cwd,
     env: input.env,
+    agentWorkload: true,
   });
   if (proc.stdout && input.onLog) await input.onLog("stdout", `[runtime-provision] ${proc.stdout}`);
   if (proc.stderr && input.onLog) await input.onLog("stderr", `[runtime-provision] ${proc.stderr}`);
@@ -3066,6 +3071,7 @@ async function recordWorkspaceCommandOperation(
         args: ["-c", input.resolvedCommand ?? input.command],
         cwd: input.cwd,
         env: input.env,
+        agentWorkload: true,
       });
       const seedEvidence = input.phase === "workspace_seed"
         ? readWorkspaceSeedOperationEvidence(input.cwd)
@@ -6394,12 +6400,13 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
       // on an orphaned socketpair during startup reconciliation.
       stdio: ["ignore", serviceLog.handle.fd, serviceLog.handle.fd],
     });
+    // Runtime services are agent workloads (dev servers, watchers); keep them
+    // from starving the API server when agent process priority is configured.
+    // Applied before any await so the service cannot fork at default priority.
+    applyAgentProcessNice(child.pid);
   } finally {
     await serviceLog.handle.close();
   }
-  // Runtime services are agent workloads (dev servers, watchers); keep them
-  // from starving the API server when agent process priority is configured.
-  applyAgentProcessNice(child.pid);
   record.child = child;
   record.providerRef = child.pid ? String(child.pid) : null;
   record.processGroupId = child.pid ?? null;

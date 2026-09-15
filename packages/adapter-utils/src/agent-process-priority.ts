@@ -22,6 +22,7 @@ export const AGENT_PROCESS_NICE_ENV = "PAPERCLIP_AGENT_PROCESS_NICE";
 const AGENT_PROCESS_NICE_MAX = 19;
 
 const warnedInvalidValues = new Set<string>();
+const warnedApplyErrorCodes = new Set<string>();
 
 type Warn = (message: string, detail?: Record<string, unknown>) => void;
 
@@ -60,11 +61,13 @@ export function resolveAgentProcessNice(
 /** Test hook: lets each test observe the warn-once behavior from a clean slate. */
 export function resetAgentProcessNiceWarningsForTests(): void {
   warnedInvalidValues.clear();
+  warnedApplyErrorCodes.clear();
 }
 
 export interface ApplyAgentProcessNiceOptions {
   nice?: number;
   platform?: NodeJS.Platform;
+  getPriority?: (pid: number) => number;
   setPriority?: (pid: number, priority: number) => void;
   listThreadIds?: (pid: number) => number[];
   warn?: Warn;
@@ -92,9 +95,13 @@ function listLinuxThreadIds(pid: number): number[] {
  * `/proc/<pid>/task` is adjusted too; threads and processes created afterwards
  * inherit from an adjusted thread.
  *
- * Never throws: a failure (process already gone, EACCES because the server
- * itself runs at a higher nice value) is logged and the agent keeps running at
- * the default priority.
+ * The configured value is a floor, not a target: a process that already runs
+ * at the same or a higher nice value (inherited from a deprioritized server) is
+ * left alone. That keeps an unprivileged server from logging EACCES on every
+ * spawn and keeps a root server from ever raising an agent's priority.
+ *
+ * Never throws: a failure (for example the process already exited) is logged
+ * once per error code and the agent keeps running at its inherited priority.
  */
 export function applyAgentProcessNice(
   pid: number | undefined,
@@ -106,17 +113,29 @@ export function applyAgentProcessNice(
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") return;
+  const getPriority = options.getPriority ?? os.getPriority;
   const setPriority = options.setPriority ?? os.setPriority;
 
+  const lowerPriority = (id: number): void => {
+    if (getPriority(id) >= nice) return;
+    setPriority(id, nice);
+  };
+
   try {
-    setPriority(pid, nice);
+    lowerPriority(pid);
   } catch (err) {
-    warn("failed to lower agent process priority", {
-      pid,
-      nice,
-      code: (err as NodeJS.ErrnoException)?.code ?? null,
-      message: err instanceof Error ? err.message : String(err),
-    });
+    const code = (err as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+    // One entry per failure class is enough to diagnose a host; a per-spawn
+    // warning would flood the log for every agent run.
+    if (!warnedApplyErrorCodes.has(code)) {
+      warnedApplyErrorCodes.add(code);
+      warn("failed to lower agent process priority", {
+        pid,
+        nice,
+        code,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
     return;
   }
 
@@ -132,7 +151,7 @@ export function applyAgentProcessNice(
   for (const tid of threadIds) {
     if (tid === pid) continue;
     try {
-      setPriority(tid, nice);
+      lowerPriority(tid);
     } catch {
       // A thread can exit while we iterate; that is not an error.
     }

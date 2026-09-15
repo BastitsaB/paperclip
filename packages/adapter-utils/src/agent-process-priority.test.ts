@@ -47,9 +47,12 @@ describe("resolveAgentProcessNice", () => {
 });
 
 describe("applyAgentProcessNice", () => {
+  beforeEach(() => resetAgentProcessNiceWarningsForTests());
+  const getPriority = () => 0;
+
   it("does nothing when the configured nice is 0", () => {
     const setPriority = vi.fn();
-    applyAgentProcessNice(1234, { nice: 0, platform: "linux", setPriority });
+    applyAgentProcessNice(1234, { nice: 0, platform: "linux", getPriority, setPriority });
     expect(setPriority).not.toHaveBeenCalled();
   });
 
@@ -61,8 +64,8 @@ describe("applyAgentProcessNice", () => {
 
   it("does nothing without a valid pid", () => {
     const setPriority = vi.fn();
-    applyAgentProcessNice(undefined, { nice: 10, platform: "linux", setPriority });
-    applyAgentProcessNice(0, { nice: 10, platform: "linux", setPriority });
+    applyAgentProcessNice(undefined, { nice: 10, platform: "linux", getPriority, setPriority });
+    applyAgentProcessNice(0, { nice: 10, platform: "linux", getPriority, setPriority });
     expect(setPriority).not.toHaveBeenCalled();
   });
 
@@ -71,6 +74,7 @@ describe("applyAgentProcessNice", () => {
     applyAgentProcessNice(1234, {
       nice: 10,
       platform: "linux",
+      getPriority,
       setPriority,
       listThreadIds: () => [1234, 1235, 1236],
     });
@@ -84,28 +88,53 @@ describe("applyAgentProcessNice", () => {
   it("only sets the process priority on macOS", () => {
     const setPriority = vi.fn();
     const listThreadIds = vi.fn(() => [1, 2]);
-    applyAgentProcessNice(1234, { nice: 5, platform: "darwin", setPriority, listThreadIds });
+    applyAgentProcessNice(1234, { nice: 5, platform: "darwin", getPriority, setPriority, listThreadIds });
     expect(setPriority.mock.calls).toEqual([[1234, 5]]);
     expect(listThreadIds).not.toHaveBeenCalled();
   });
 
-  it("logs and swallows setPriority failures", () => {
+  it("logs and swallows setPriority failures once per error code", () => {
     const warn = vi.fn();
-    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
-    expect(() =>
-      applyAgentProcessNice(1234, {
-        nice: 10,
-        platform: "linux",
-        warn,
-        setPriority: () => {
-          throw error;
-        },
-      }),
-    ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith(
+    const fail = (code: string) => () => {
+      throw Object.assign(new Error(code), { code });
+    };
+    const apply = (code: string) =>
+      applyAgentProcessNice(1234, { nice: 10, platform: "linux", warn, getPriority, setPriority: fail(code) });
+    expect(() => apply("EACCES")).not.toThrow();
+    apply("EACCES");
+    apply("ESRCH");
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
       "failed to lower agent process priority",
       expect.objectContaining({ pid: 1234, nice: 10, code: "EACCES" }),
     );
+    expect(warn).toHaveBeenNthCalledWith(2, "failed to lower agent process priority", expect.objectContaining({ code: "ESRCH" }));
+  });
+
+  it("leaves a process that already runs at the same or a higher nice value alone", () => {
+    const setPriority = vi.fn();
+    const warn = vi.fn();
+    applyAgentProcessNice(1234, { nice: 10, platform: "linux", warn, getPriority: () => 10, setPriority, listThreadIds: () => [1234, 1235] });
+    applyAgentProcessNice(1234, { nice: 10, platform: "linux", warn, getPriority: () => 15, setPriority, listThreadIds: () => [1234, 1235] });
+    expect(setPriority).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("only lowers threads that still run below the configured nice", () => {
+    const setPriority = vi.fn();
+    const current = new Map([[1234, 0], [1235, 12], [1236, -5]]);
+    applyAgentProcessNice(1234, {
+      nice: 10,
+      platform: "linux",
+      getPriority: (id) => current.get(id) ?? 0,
+      setPriority,
+      listThreadIds: () => [1234, 1235, 1236],
+    });
+    expect(setPriority.mock.calls).toEqual([
+      [1234, 10],
+      [1236, 10],
+    ]);
   });
 
   it("tolerates a process that exits before its threads are listed", () => {
@@ -114,6 +143,7 @@ describe("applyAgentProcessNice", () => {
       applyAgentProcessNice(1234, {
         nice: 10,
         platform: "linux",
+        getPriority,
         setPriority,
         listThreadIds: () => {
           throw Object.assign(new Error("gone"), { code: "ENOENT" });
@@ -146,6 +176,7 @@ describe.skipIf(process.platform === "win32")("runChildProcess agent priority", 
 
   it("applies the configured nice to the spawned child pid", async () => {
     process.env[AGENT_PROCESS_NICE_ENV] = "7";
+    vi.spyOn(os, "getPriority").mockReturnValue(0);
     const setPriority = vi.spyOn(os, "setPriority").mockImplementation(() => {});
     let childPid = 0;
     const result = await runNode("", (pid) => {
@@ -165,7 +196,9 @@ describe.skipIf(process.platform === "win32")("runChildProcess agent priority", 
 
   it("still runs the child when setPriority fails", async () => {
     process.env[AGENT_PROCESS_NICE_ENV] = "7";
+    resetAgentProcessNiceWarningsForTests();
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(os, "getPriority").mockReturnValue(0);
     vi.spyOn(os, "setPriority").mockImplementation(() => {
       throw Object.assign(new Error("denied"), { code: "EACCES" });
     });
@@ -187,17 +220,22 @@ describe.skipIf(process.platform === "win32")("runChildProcess agent priority", 
       const script = [
         "const { readFileSync } = require('node:fs');",
         "const { execFileSync } = require('node:child_process');",
+        "const { readdirSync } = require('node:fs');",
         "setTimeout(() => {",
-        "  const own = readFileSync('/proc/self/stat', 'utf8');",
-        "  const grandchild = execFileSync('cat', ['/proc/self/stat'], { encoding: 'utf8' });",
         "  const nice = (s) => s.slice(s.lastIndexOf(')') + 2).split(' ')[16];",
-        "  process.stdout.write(nice(own) + ' ' + nice(grandchild));",
+        "  // Every thread, including libuv/V8 workers created before setpriority ran.",
+        "  const threads = readdirSync('/proc/self/task').map((tid) => nice(readFileSync('/proc/self/task/' + tid + '/stat', 'utf8')));",
+        "  const grandchild = execFileSync('cat', ['/proc/self/stat'], { encoding: 'utf8' });",
+        "  process.stdout.write(JSON.stringify({ threads, grandchild: nice(grandchild) }));",
         "}, 200);",
       ].join("\n");
       const result = await runNode(script);
       expect(result.exitCode).toBe(0);
-      const serverNice = niceOf("self");
-      expect(result.stdout.trim()).toBe(`${Math.max(9, serverNice)} ${Math.max(9, serverNice)}`);
+      const expected = String(Math.max(9, niceOf("self")));
+      const reported = JSON.parse(result.stdout) as { threads: string[]; grandchild: string };
+      expect(reported.threads.length).toBeGreaterThan(1);
+      expect(new Set(reported.threads)).toEqual(new Set([expected]));
+      expect(reported.grandchild).toBe(expected);
     },
   );
 });
