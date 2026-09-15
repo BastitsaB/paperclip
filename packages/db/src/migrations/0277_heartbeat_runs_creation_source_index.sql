@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "heartbeat_runs_company_creation_source_idx" ON "heartbeat_runs" USING btree ("company_id",(coalesce("native_issue_id"::text, nullif("context_snapshot" ->> 'issueId', ''), nullif("context_snapshot" ->> 'taskId', ''), nullif("context_snapshot" ->> 'taskKey', ''))));

@@ -152,6 +152,21 @@ export const heartbeatRuns = pgTable(
       sql`(${table.contextSnapshot} ->> 'issueId')`,
       table.createdAt.desc(),
     ),
+    // Run-secret redaction looks runs up by `issueId` OR `paperclipIssue.id`.
+    // Without this second expression index the OR cannot use a BitmapOr and
+    // falls back to a full scan that detoasts every context snapshot.
+    companyCtxPaperclipIssueCreatedIdx: index("heartbeat_runs_company_ctx_paperclip_issue_created_idx").on(
+      table.companyId,
+      sql`(${table.contextSnapshot} -> 'paperclipIssue' ->> 'id')`,
+      table.createdAt.desc(),
+    ),
+    // createdFromIssueCondition resolves a task's originating runs through this
+    // exact coalesce; without a matching expression index every call detoasts
+    // all company run snapshots twice.
+    companyCreationSourceIdx: index("heartbeat_runs_company_creation_source_idx").on(
+      table.companyId,
+      sql`(coalesce(${table.nativeIssueId}::text, nullif(${table.contextSnapshot} ->> 'issueId', ''), nullif(${table.contextSnapshot} ->> 'taskId', ''), nullif(${table.contextSnapshot} ->> 'taskKey', '')))`,
+    ),
     companyCtxTaskCreatedIdx: index("heartbeat_runs_company_ctx_task_created_idx").on(
       table.companyId,
       sql`(${table.contextSnapshot} ->> 'taskId')`,

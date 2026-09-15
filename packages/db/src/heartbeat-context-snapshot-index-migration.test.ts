@@ -27,6 +27,8 @@ d("heartbeat context_snapshot expression index migration", () => {
     expect(names).toContain("heartbeat_runs_company_ctx_issue_created_idx");
     expect(names).toContain("heartbeat_runs_company_ctx_task_created_idx");
     expect(names).toContain("heartbeat_runs_company_ctx_taskkey_created_idx");
+    expect(names).toContain("heartbeat_runs_company_ctx_paperclip_issue_created_idx");
+    expect(names).toContain("heartbeat_runs_company_creation_source_idx");
     expect(names).toContain("agent_wakeup_requests_company_payload_issue_idx");
 
     await sql.unsafe("SET enable_seqscan = off");
@@ -52,6 +54,24 @@ d("heartbeat context_snapshot expression index migration", () => {
     const taskKeyText = taskKeyPlan.map((r) => Object.values(r)[0]).join("\n");
     expect(taskKeyText).toContain("heartbeat_runs_company_ctx_taskkey_created_idx");
 
+    // Run-secret redaction ORs issueId with paperclipIssue.id; without the
+    // second expression index that OR degrades to a full snapshot scan. As
+    // with taskKey, an empty table will not plan the BitmapOr, so assert the
+    // paperclipIssue.id index directly.
+    const paperclipIssuePlan = await sql.unsafe(
+      "EXPLAIN SELECT id FROM heartbeat_runs WHERE company_id = '00000000-0000-0000-0000-000000000001' AND context_snapshot -> 'paperclipIssue' ->> 'id' = 'x' ORDER BY created_at DESC, id DESC LIMIT 1",
+    );
+    const paperclipIssueText = paperclipIssuePlan.map((r) => Object.values(r)[0]).join("\n");
+    expect(paperclipIssueText).toContain("heartbeat_runs_company_ctx_paperclip_issue_created_idx");
+
+    // createdFromIssueCondition matches runs on this exact coalesce; the
+    // expression must stay byte-identical to the query or the index is unused.
+    const creationSourcePlan = await sql.unsafe(
+      "EXPLAIN SELECT id FROM heartbeat_runs WHERE company_id = '00000000-0000-0000-0000-000000000001' AND coalesce(native_issue_id::text, nullif(context_snapshot ->> 'issueId', ''), nullif(context_snapshot ->> 'taskId', ''), nullif(context_snapshot ->> 'taskKey', '')) IN ('x', 'MAI-1')",
+    );
+    const creationSourceText = creationSourcePlan.map((r) => Object.values(r)[0]).join("\n");
+    expect(creationSourceText).toContain("heartbeat_runs_company_creation_source_idx");
+
     const wakePlan = await sql.unsafe(
       "EXPLAIN SELECT id FROM agent_wakeup_requests WHERE company_id = '00000000-0000-0000-0000-000000000001' AND status = 'deferred_issue_execution' AND payload ->> 'issueId' = 'x' LIMIT 1",
     );
@@ -63,6 +83,8 @@ d("heartbeat context_snapshot expression index migration", () => {
     for (const migration of [
       "./migrations/0209_heartbeat_context_snapshot_indexes.sql",
       "./migrations/0210_heartbeat_context_taskkey_index.sql",
+      "./migrations/0276_heartbeat_runs_paperclip_issue_index.sql",
+      "./migrations/0277_heartbeat_runs_creation_source_index.sql",
     ]) {
       const migrationSql = await readFile(
         fileURLToPath(new URL(migration, import.meta.url)),
