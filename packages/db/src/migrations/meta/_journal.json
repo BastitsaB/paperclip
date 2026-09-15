@@ -1919,6 +1919,13 @@
       "when": 1789219070889,
       "tag": "0275_third_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 276,
+      "version": "7",
+      "when": 1789444703858,
+      "tag": "0276_heartbeat_runs_paperclip_issue_index",
+      "breakpoints": true
     }
   ]
 }
