@@ -4183,6 +4183,23 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         flushChildStderr(childStderrState);
         childStderrState.logPath = prepared.childStderrLogPath;
         const persistedRuntimeStore = createRuntimeStore({ stateDir: prepared.stateDir });
+        // A persistent ACPX session is looked up by `sessionKey`, not by
+        // `resumeSessionId`: omitting the resume id alone still reattaches the
+        // stored provider thread. When Paperclip decided to start fresh (timer
+        // wake, forced fresh session, cleared session params) that thread would
+        // keep growing across runs until the provider rejects every turn with a
+        // context-window failure. Mark the stored record the same way ACPX's own
+        // `close({ discardPersistentState: true })` does, so `ensureSession`
+        // opens a new provider session under the same key.
+        if (!canResume && prepared.mode === "persistent") {
+          const staleRecord = await persistedRuntimeStore.load(prepared.sessionKey);
+          if (staleRecord && staleRecord.acpx?.reset_on_next_ensure !== true) {
+            await persistedRuntimeStore.save({
+              ...staleRecord,
+              acpx: { ...staleRecord.acpx, reset_on_next_ensure: true },
+            });
+          }
+        }
         const runtimeStore: AcpSessionStore = {
           async load(id) {
             const record = await persistedRuntimeStore.load(id);
