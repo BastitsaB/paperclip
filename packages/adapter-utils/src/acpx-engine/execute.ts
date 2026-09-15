@@ -36,6 +36,7 @@ import {
   type SandboxAdditionalSource,
 } from "@paperclipai/adapter-utils/execution-target";
 import { captureLocalProcess, capturedProcessExited, killCapturedLocalProcess } from "./local-process-control.js";
+import { applyAgentProcessNice } from "../agent-process-priority.js";
 import type { DuplexLossReason } from "../duplex-observability.js";
 import { DUPLEX_CHANNEL_LOST_ERROR_CODE } from "../bridge-transport-contract.js";
 import type { WorkspaceRestoreFailureCode, WorkspaceRestoreOutcome } from "../workspace-restore-merge.js";
@@ -4246,6 +4247,9 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             ? (chunk) => routeChildStderr(childStderrState, chunk)
             : undefined,
           onAgentSpawn: async (meta) => {
+            // Only a local-lane PID names a host process worth deprioritizing;
+            // the remote process-session lane runs the agent in the sandbox.
+            if (!prepared.processSessionBridge) applyAgentProcessNice(meta.pid);
             processIdentitySink.latest = meta;
             processIdentitySink.localProcess = prepared.processSessionBridge ? undefined : captureLocalProcess(meta.pid);
             await processIdentitySink.current?.({

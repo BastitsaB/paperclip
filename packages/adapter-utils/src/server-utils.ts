@@ -5,6 +5,7 @@ import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CONNECTION_INTENT_AGENT_GUIDANCE } from "@paperclipai/shared";
+import { applyAgentProcessNice } from "./agent-process-priority.js";
 import { sanitizeRemoteExecutionEnv } from "./remote-execution-env.js";
 import {
   buildLocalProcessSandboxSpawnTarget,
@@ -4645,6 +4646,7 @@ export async function runChildProcess(
           shell: false,
           stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
         }) as ChildProcessWithEvents;
+        applyAgentProcessNice(child.pid);
         const startedAt = new Date().toISOString();
         const processGroupId = resolveProcessGroupId(child);
 

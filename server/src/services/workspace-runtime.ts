@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AdapterRuntimeServiceReport } from "@paperclipai/adapter-utils";
+import { applyAgentProcessNice } from "@paperclipai/adapter-utils/agent-process-priority";
 import type { Db } from "@paperclipai/db";
 import { executionWorkspaces, issueComments, issues, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import {
@@ -6396,6 +6397,9 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
   } finally {
     await serviceLog.handle.close();
   }
+  // Runtime services are agent workloads (dev servers, watchers); keep them
+  // from starving the API server when agent process priority is configured.
+  applyAgentProcessNice(child.pid);
   record.child = child;
   record.providerRef = child.pid ? String(child.pid) : null;
   record.processGroupId = child.pid ?? null;
