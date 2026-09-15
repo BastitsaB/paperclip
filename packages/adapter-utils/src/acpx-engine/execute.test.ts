@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpRuntimeOptions } from "acpx/runtime";
+import { createRuntimeStore, type AcpRuntimeOptions } from "acpx/runtime";
 import type { AdapterExecutionContext, AdapterRuntimeMcpAccess } from "@paperclipai/adapter-utils";
 import {
   DEFAULT_REMOTE_SANDBOX_ADAPTER_TIMEOUT_SEC,
@@ -715,6 +715,49 @@ describe("shared ACPX engine runtime behavior", () => {
     const ordinary = await runExecutor({ ...config, promptTemplate: "" }, { context: { ...context, conversationMode: false } });
     expect(String(ordinary.meta[0]?.prompt)).toContain("Execution contract:");
     expect(String(ordinary.meta[0]?.prompt)).toContain("Create child issues from the approved plan");
+  });
+
+  it("marks the stored persistent ACPX record for reset when a run starts fresh, but not on resume", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const config = { agent: "codex", cwd: root, stateDir, mode: "persistent" };
+    const context = { taskId: "__heartbeat__", wakeReason: "heartbeat_timer" };
+    const fresh = await runExecutor(config, { context });
+    const sessionKey = String(fresh.sessionInputs[0]?.sessionKey);
+    const store = createRuntimeStore({ stateDir });
+    // Seeds the minimal record the ACPX file store round-trips (schema + conversation
+    // fields); `as never` because the exported record type also demands runtime-only
+    // fields (event log, capabilities) the store fills in on load.
+    const seedStoredThread = async () => {
+      const now = new Date().toISOString();
+      await store.save({
+        schema: "acpx.session.v1",
+        acpxRecordId: sessionKey,
+        acpSessionId: "provider-thread-1",
+        agentCommand: "codex-acp",
+        cwd: root,
+        name: sessionKey,
+        createdAt: now,
+        lastUsedAt: now,
+        lastSeq: 0,
+        closed: true,
+        title: null,
+        messages: [],
+        updated_at: now,
+        cumulative_token_usage: {},
+        request_token_usage: {},
+      } as never);
+    };
+
+    await seedStoredThread();
+    expect((await store.load(sessionKey))?.acpSessionId).toBe("provider-thread-1");
+    await runExecutor(config, { context, runtime: { sessionParams: fresh.result.sessionParams } });
+    expect((await store.load(sessionKey))?.acpx?.reset_on_next_ensure).not.toBe(true);
+
+    await runExecutor(config, { context });
+    const stored = await store.load(sessionKey);
+    expect(stored?.acpSessionId).toBe("provider-thread-1");
+    expect(stored?.acpx?.reset_on_next_ensure).toBe(true);
   });
 
   it("uses only the guarded external-chat contract for a default ACPX prompt", async () => {
