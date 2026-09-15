@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
 
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import { applyAgentProcessNice } from "@paperclipai/adapter-utils/agent-process-priority";
 import type { Db } from "@paperclipai/db";
 import { agentSessionGoalActions, agentTaskSessions } from "@paperclipai/db";
 
@@ -402,6 +403,7 @@ export async function executeNativeCodexRunner(input: {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  applyAgentProcessNice(child.pid);
   const exit = waitForExit(child);
   child.stdout?.on("data", (chunk: Buffer) => {
     void input.onLog("stdout", chunk.toString("utf8"));

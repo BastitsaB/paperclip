@@ -26,6 +26,13 @@ vi.mock("@paperclipai/adapter-utils/execution-target", async (importActual) => {
     startAdapterExecutionTargetProcessSessionBridge: vi.fn(actual.startAdapterExecutionTargetProcessSessionBridge),
   };
 });
+// Pass-through spy so a test can assert the engine deprioritizes the spawned
+// agent PID without depending on the host platform or scheduler permissions.
+vi.mock("../agent-process-priority.js", async (importActual) => {
+  const actual = await importActual<typeof import("../agent-process-priority.js")>();
+  return { ...actual, applyAgentProcessNice: vi.fn(actual.applyAgentProcessNice) };
+});
+import { applyAgentProcessNice } from "../agent-process-priority.js";
 import {
   buildAcpxRunSummary,
   createAcpxEngineExecutor,
@@ -7735,4 +7742,48 @@ describe("ACPX startup handshake guard and late-completion fence", () => {
       vi.useRealTimers();
     }
   }, 10000);
+});
+
+describe("ACPX engine agent process priority", () => {
+  it("applies the configured agent process nice to the locally spawned agent pid", async () => {
+    const root = await makeTempRoot();
+    vi.mocked(applyAgentProcessNice).mockClear();
+    const execute = createAcpxEngineExecutor({
+      createRuntime: (options) => {
+        const opts = options as AcpRuntimeOptions & {
+          onAgentSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
+        };
+        return {
+          ensureSession: async () => {
+            await opts.onAgentSpawn?.({ pid: 4343, startedAt: "2026-01-01T00:00:00.000Z" });
+            return {
+              backendSessionId: "backend-session",
+              agentSessionId: "agent-session",
+              runtimeSessionName: "runtime-session",
+            };
+          },
+          startTurn: () => ({
+            events: (async function* () {})(),
+            result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
+            cancel: async () => {},
+          }),
+          close: async () => {},
+        } as never;
+      },
+    });
+
+    const result = await execute({
+      runId: "agent-nice",
+      agent: { id: "agent-1", companyId: "company-1" },
+      runtime: {},
+      config: { agent: "custom", agentCommand: "node ./fake-acp.js", stateDir: path.join(root, "state") },
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    } as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(applyAgentProcessNice).toHaveBeenCalledWith(4343);
+  });
 });

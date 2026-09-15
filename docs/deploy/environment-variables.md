@@ -28,6 +28,7 @@ All environment variables that Paperclip uses for server configuration.
 | `PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH` | (unset) | Host-local path to the immutable provider pack built by `pnpm --filter @paperclipai/paperclip-runner build:provider-pack`. The pack includes its target-built Node 24.11 runtime, locked production dependencies, OpenCode proxy/executable, and ACPX sidecar. Remote OpenCode and ACPX fail closed without it. A preinstalled pack is accepted only when its complete digested manifest matches this build-owned pack; otherwise Paperclip stages this pack into the sandbox. |
 | `PAPERCLIP_HIDDEN_SETTINGS` | (unset) | Comma-separated settings surfaces to hide from the UI and floor at the API, for operators hosting Paperclip for others (managed cloud, internal shared server). See [Hiding settings surfaces](#hiding-settings-surfaces). |
 | `PAPERCLIP_SETTING_DEFAULTS` | (unset) | JSON object replacing the schema default of selected instance settings, for hosting operators. See [Operator setting defaults](#operator-setting-defaults). |
+| `PAPERCLIP_AGENT_PROCESS_NICE` | (unset) | Minimum Unix nice value (integer `0`–`19`) for locally launched agent workloads, so agent builds cannot starve the API server on a shared host or container. Unset, empty, or `0` changes nothing. See [Agent process priority](#agent-process-priority). |
 
 Daytona connectivity for `paperclip_runner` uses authenticated provider
 WebSocket ingress and follows the instance experimental setting
@@ -136,6 +137,45 @@ also hides the control and floors value-changing writes.
 Unknown field names are logged and ignored (mixed-version fleet safe).
 Malformed JSON or an invalid value for a known field refuses startup — policy
 configuration fails closed.
+
+### Agent process priority
+
+`PAPERCLIP_AGENT_PROCESS_NICE` lowers the CPU priority of agent workloads that
+Paperclip starts on its own host. Every process and thread they start inherits
+the value. `10` is a reasonable choice for single-container deployments.
+
+Covered:
+
+- local adapter processes (`claude_local`, `codex_local` and the other local
+  adapters, including their CLI fallback paths)
+- locally spawned ACPX agents (for example `claude-agent-acp`, `codex-acp`)
+- the native Codex runner
+- workspace runtime services (dev servers, watchers)
+- workspace provision, seed, runtime-provision, and teardown shell commands
+
+Deliberately not covered, because they serve API requests or are not agent
+work: the server's own git operations, database backups, plugin workers, tool
+gateway stdio servers, board chat, and quota probes. Remote and sandbox targets
+are unaffected; so is Windows.
+
+ACP client terminals (`terminal/create`) would run inside the server process
+tree rather than under the agent. The bundled `claude-agent-acp` and
+`codex-acp` never request them (they run commands in their own child
+processes), so they are not adjusted. A custom ACP agent that relies on client
+terminals runs those commands at server priority.
+
+The value is a floor: a process that already runs at the same or a higher nice
+value, for example because the server itself was started with `nice`, is left
+unchanged, and priority is never raised. An invalid value is logged once and
+ignored; a failure to adjust a process is logged once per error code and never
+stops the agent.
+
+Nice values compete within one scheduling group. On a host with
+`kernel.sched_autogroup_enabled=1`, processes in the root cgroup that start a
+new session (`setsid`) get their own autogroup, and nice then has no effect
+between the server and the agents. Processes in a cgroup with the `cpu`
+controller enabled (typical for Docker containers) are not affected, because the
+kernel ignores autogroups there.
 
 ## Secrets
 
