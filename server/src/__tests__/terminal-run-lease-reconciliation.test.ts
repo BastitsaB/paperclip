@@ -117,8 +117,12 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     /**
      * When the run reached its terminal status. The reconciler ignores a run
      * that only just finished, so the default is comfortably past that gate.
+     * Pass `null` for the legacy shape that never recorded a finish time; the
+     * age gate then falls back to `updatedAt`.
      */
-    finishedAt?: Date;
+    finishedAt?: Date | null;
+    /** Overrides the row's last write, which is the age fallback. */
+    updatedAt?: Date;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -158,7 +162,11 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
       status: input.runStatus,
       invocationSource: "manual",
       startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      finishedAt: input.finishedAt ?? new Date(Date.now() - 60 * 60 * 1000),
+      finishedAt:
+        input.finishedAt === undefined
+          ? new Date(Date.now() - 60 * 60 * 1000)
+          : input.finishedAt,
+      ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
       ...(input.runErrorCode
         ? { error: "Interrupted by platform restart", errorCode: input.runErrorCode }
         : {}),
@@ -332,6 +340,65 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     },
   );
 
+  it("releases a local lease of a legacy run that never recorded finished_at", async () => {
+    // The production rows predate the finish timestamp, so the age gate has to
+    // fall back to the row's last write.
+    const { leaseId } = await seed({
+      runStatus: "interrupted",
+      runErrorCode: "server_shutdown_interrupted",
+      finishedAt: null,
+      updatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 1, skipped: 0 });
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).not.toBeNull();
+    expect(lease?.status).toBe("released");
+  });
+
+  it("leaves a run without finished_at whose row was just written", async () => {
+    const { leaseId } = await seed({
+      runStatus: "interrupted",
+      runErrorCode: "server_shutdown_interrupted",
+      finishedAt: null,
+    });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 0, released: 0 });
+    expect((await readLease(leaseId))?.releasedAt).toBeNull();
+  });
+
+  it("leaves a run that holds a provider lease next to its local one", async () => {
+    // The release is run-scoped, so a run with both would drag the provider
+    // lease along. The candidate filter alone does not catch this.
+    const { companyId, environmentId, issueId, runId, leaseId } = await seed({
+      runStatus: "cancelled",
+      runErrorCode: "orphaned_running_run",
+    });
+    const [sandboxLease] = await db
+      .insert(environmentLeases)
+      .values({
+        companyId,
+        environmentId,
+        issueId,
+        heartbeatRunId: runId,
+        status: "active",
+        leasePolicy: "ephemeral",
+        provider: "daytona",
+        releasedAt: null,
+      })
+      .returning();
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 0, skipped: 1 });
+    expect((await readLease(leaseId))?.releasedAt).toBeNull();
+    expect((await readLease(sandboxLease!.id))?.releasedAt).toBeNull();
+  });
+
   it("leaves the lease of a run that only just reached its terminal status", async () => {
     // The ordinary teardown writes the terminal run status before it releases
     // the lease. A backstop reading in that window would race the owner that is
@@ -406,6 +473,26 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     expect(lease?.releasedAt).not.toBeNull();
     expect(lease?.status).toBe("released");
   });
+
+  it("leaves a provider lease alone when the stale-lock sweep terminalizes its run", async () => {
+    // The hook releases per run, so it needs the same narrowing as the
+    // reconciler: `stop_and_retain` does not stop an ephemeral sandbox lease
+    // from being torn down.
+    const { issueId, runId, leaseId } = await seed({
+      runStatus: "running",
+      leaseProvider: "daytona",
+    });
+    await db
+      .update(issues)
+      .set({ status: "done", executionRunId: runId })
+      .where(eq(issues.id, issueId));
+
+    const swept = await heartbeatService(db).sweepStaleIssueLocks();
+
+    expect(swept.terminalizedRunIds).toContain(runId);
+    expect((await readLease(leaseId))?.releasedAt).toBeNull();
+  });
+
 
   it("unblocks the recovery resolve that the open lease rejected with a 409", async () => {
     const { companyId, agentId, issueId, runId } = await seed({

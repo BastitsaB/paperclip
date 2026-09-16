@@ -670,7 +670,7 @@ const TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON =
 
 // A terminal run keeps its lease for at least this long before a backstop may
 // close it. The ordinary teardown writes the terminal run status
-// (`heartbeat.ts:25363`) well before it releases the lease (`:25405`), and the
+// (`heartbeat.ts:25349`) before it releases the lease (`:25391`), and the
 // shutdown loop and the orphaned-run reaper have the same two-step shape. A
 // backstop that reads in between would race the owner that is still working on
 // the very same lease. The window is generous on purpose: nothing here is
@@ -10035,6 +10035,44 @@ export function heartbeatService(
     await acknowledgeRemoteStop(input.runId, input.companyId);
   }
 
+  /**
+   * True when a run still holds an active lease that owns something outside the
+   * database, so a backstop must leave the whole run alone.
+   *
+   * The release boundary is run-scoped, not lease-scoped: `releaseRunLeases`
+   * selects every active lease of the run
+   * (`environment-runtime.ts:3703-3711`). Filtering a candidate lease row by
+   * provider therefore does not by itself keep a sandbox out of the release — a
+   * run holding both a local and a provider lease would drag the provider one
+   * along. Checking the whole run makes the narrowing actually hold. Fails
+   * closed: a failed probe reports the run as provider-backed.
+   */
+  async function runHoldsNonLocalActiveLease(runId: string): Promise<boolean> {
+    return await db
+      .select({ id: environmentLeases.id })
+      .from(environmentLeases)
+      .where(
+        and(
+          eq(environmentLeases.heartbeatRunId, runId),
+          eq(environmentLeases.status, "active"),
+          // An unset provider is not proof of a database-only lease either.
+          or(
+            isNull(environmentLeases.provider),
+            ne(environmentLeases.provider, "local"),
+          ),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows.length > 0)
+      .catch((err) => {
+        logger.warn(
+          { err, runId },
+          "could not determine whether a run holds a provider-backed lease; leaving it alone",
+        );
+        return true;
+      });
+  }
+
   async function acknowledgeRemoteStop(runId: string, companyId: string) {
     // The provider receipt arrives after adapter settlement. A remote ACP child
     // has no host PID, so only this target-aware boundary can acknowledge Stop.
@@ -18132,14 +18170,16 @@ export function heartbeatService(
   // because a backstop cannot tell a stranded lease from one its owner still
   // intends to use:
   //
-  // - Only `provider = 'local'` qualifies. A `local` lease owns nothing outside
-  //   the database, so closing it can destroy nothing. Every other provider is
-  //   excluded so no provider teardown can ever originate here: the sandbox
-  //   release path turns an `expired` reusable lease into
-  //   `destroyReusableSandboxLease` (`environment-runtime.ts:2393-2399`), and a
-  //   `cancelled` run maps to exactly that status (`heartbeat.ts:2036`). The
-  //   ordinary teardown, which knows whether the sandbox is still needed, stays
-  //   the only path that stops one.
+  // - Only `provider = 'local'` qualifies, and `runHoldsNonLocalActiveLease`
+  //   re-checks the whole run, because the release is run-scoped. A `local`
+  //   lease owns nothing outside the database, so closing it can destroy
+  //   nothing. Every other provider is excluded to keep provider teardowns out
+  //   of this path: the sandbox release turns an `expired` reusable lease into
+  //   `destroyReusableSandboxLease` (`environment-runtime.ts:2393-2399`), a
+  //   `cancelled` run maps to exactly that status (`heartbeat.ts:2004`), and an
+  //   ephemeral sandbox lease is stopped outright (`:2426-2441`). The ordinary
+  //   teardown, which knows whether the sandbox is still needed, stays the only
+  //   path that stops one.
   // - A run with a `native_run_finalizations` row is skipped whatever its phase.
   //   The coordinator owns that run's lease across resumes, workspace copy-back
   //   retries and status commits, and no phase reliably says "nobody wants this
@@ -18247,6 +18287,12 @@ export function heartbeatService(
           (typeof row.processGroupId === "number" &&
             isProcessGroupAlive(row.processGroupId));
         if (processAlive) {
+          skippedRunIds.add(row.runId);
+          continue;
+        }
+        // The candidate row is local, but the release covers the whole run, so
+        // confirm no sibling lease owns a provider resource.
+        if (await runHoldsNonLocalActiveLease(row.runId)) {
           skippedRunIds.add(row.runId);
           continue;
         }
@@ -19242,6 +19288,12 @@ export function heartbeatService(
         .then((rows) => rows.length > 0)
         .catch(() => true);
       if (coordinated) continue;
+      // Same narrowing as the reconciler: only runs whose leases own nothing
+      // outside the database. `stop_and_retain` alone would not cover this,
+      // because it only rewrites the status of a `reuse_by_environment` lease
+      // (`environment-runtime.ts:3786-3792`); an ephemeral sandbox lease would
+      // still reach `releaseSandboxProviderLease` (`:2426-2441`) and be stopped.
+      if (await runHoldsNonLocalActiveLease(run.id)) continue;
       // `stop_and_retain` keeps a reusable provider lease out of the `expired`
       // status that triggers `destroyReusableSandboxLease`
       // (`environment-runtime.ts:3786-3792`, `:2393-2399`), and is neutral for an
