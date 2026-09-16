@@ -668,46 +668,14 @@ const TERMINAL_RUN_LEASE_RECONCILE_REASON = "terminal_run_lease_reconciled";
 const TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON =
   "terminal_run_lease_reconciled_environment_missing";
 
-/**
- * True while the native finalization coordinator still owns a terminal run's
- * environment lease, so no backstop may release it.
- *
- * A terminal run status is not proof that the environment is free. The run
- * teardown deliberately skips the lease release while a native session resume or
- * a workspace copy-back is scheduled, and both of those project a terminal run
- * status first. Releasing such a lease destroys work:
- *
- * - The session-resume claim accepts a run in status `failed`
- *   (`native-finalization-reconciler.ts:379`, `resultId IS NULL` and phase
- *   `retryable_failure`). Releasing with run status `failed` maps to lease
- *   status `failed`, which the reacquire predicate no longer accepts
- *   (`environments.ts:1579-1583`), so the resume dies.
- * - The workspace copy-back retry keeps the sandbox that still holds unexported
- *   changes (`heartbeat.ts:23863-23889`, "workspace copy-back will retry without
- *   another provider turn"). Releasing with run status `cancelled` maps to
- *   `expired`, and `destroyReusableSandboxLease` then deletes that sandbox
- *   (`environment-runtime.ts:2393-2399`).
- *
- * The phase check is deliberately broader than `resultId IS NULL`: the copy-back
- * case has already recorded a result, so a `resultId` test would miss exactly the
- * destructive case. `terminal_failure` is the one phase that hands the lease back
- * (`heartbeat.ts:24715-24720` releases it through ordinary teardown), and the
- * generic reconciler still owns every other phase
- * (`native-finalization-reconciler.ts:567`). `leaseOwner` and a linked successor
- * run mirror the refusal in `execution-recovery-resolution.ts:99-102`.
- */
-function nativeFinalizationHoldsLease(
-  coordinator: {
-    phase: string | null;
-    leaseOwner: string | null;
-    failureDetail: Record<string, unknown> | null;
-  } | null,
-): boolean {
-  if (!coordinator?.phase) return false;
-  if (coordinator.leaseOwner) return true;
-  if (readNonEmptyString(coordinator.failureDetail?.successorRunId)) return true;
-  return coordinator.phase !== "terminal_failure";
-}
+// A terminal run keeps its lease for at least this long before a backstop may
+// close it. The ordinary teardown writes the terminal run status
+// (`heartbeat.ts:25363`) well before it releases the lease (`:25405`), and the
+// shutdown loop and the orphaned-run reaper have the same two-step shape. A
+// backstop that reads in between would race the owner that is still working on
+// the very same lease. The window is generous on purpose: nothing here is
+// urgent, and the leases this reconciler exists for have been open for days.
+const TERMINAL_RUN_LEASE_RECONCILE_MIN_AGE_MS = 5 * 60 * 1000;
 
 // Read the stored retry attempt count as a safe value, directly in SQL. A
 // provider can write a malformed value under the attempts key. The type guard
@@ -18159,11 +18127,31 @@ export function heartbeatService(
   // previous environment never gave its authority up. This reconciler is the
   // backstop for exactly those rows, so an operator needs no manual SQL.
   //
+  // The scope is deliberately narrow: only a `local` lease of a non-native run
+  // that has been terminal for a while. Everything outside that is left alone,
+  // because a backstop cannot tell a stranded lease from one its owner still
+  // intends to use:
+  //
+  // - Only `provider = 'local'` qualifies. A `local` lease owns nothing outside
+  //   the database, so closing it can destroy nothing. Every other provider is
+  //   excluded so no provider teardown can ever originate here: the sandbox
+  //   release path turns an `expired` reusable lease into
+  //   `destroyReusableSandboxLease` (`environment-runtime.ts:2393-2399`), and a
+  //   `cancelled` run maps to exactly that status (`heartbeat.ts:2036`). The
+  //   ordinary teardown, which knows whether the sandbox is still needed, stays
+  //   the only path that stops one.
+  // - A run with a `native_run_finalizations` row is skipped whatever its phase.
+  //   The coordinator owns that run's lease across resumes, workspace copy-back
+  //   retries and status commits, and no phase reliably says "nobody wants this
+  //   environment any more". LIMITATION: a native run whose coordinator is
+  //   genuinely finished keeps its lease, and its issue keeps failing the
+  //   recovery resolve with a 409. Releasing those needs the coordinator's own
+  //   ownership signal, not a guess from outside; that is follow-up work.
+  //
   // It routes through `releaseEnvironmentLeasesForRun`, the same boundary the
-  // teardown uses, so a provider-backed lease still receives its driver teardown
-  // and never leaks a paid sandbox. That boundary never touches the host file
-  // system: `environmentService.releaseLease` writes the lease row only, and no
-  // driver release path removes a workspace directory. This matters for a
+  // teardown uses. That boundary never touches the host file system:
+  // `environmentService.releaseLease` writes the lease row only, and no driver
+  // release path removes a workspace directory. This matters for a
   // `shared_workspace` lease, whose workspace path is the shared project folder;
   // releasing such a lease must never delete or reset it.
   async function reconcileLeasesOfTerminalRuns(opts?: {
@@ -18181,11 +18169,13 @@ export function heartbeatService(
     }
     terminalRunLeaseReconcileInProgress = true;
     try {
+      const terminalSince = new Date(
+        Date.now() - TERMINAL_RUN_LEASE_RECONCILE_MIN_AGE_MS,
+      );
       const rows = await db
         .select({
           leaseId: environmentLeases.id,
           environmentId: environmentLeases.environmentId,
-          leaseProvider: environmentLeases.provider,
           runId: heartbeatRuns.id,
           companyId: heartbeatRuns.companyId,
           agentId: heartbeatRuns.agentId,
@@ -18193,9 +18183,7 @@ export function heartbeatService(
           runError: heartbeatRuns.error,
           processPid: heartbeatRuns.processPid,
           processGroupId: heartbeatRuns.processGroupId,
-          coordinatorPhase: nativeRunFinalizations.phase,
-          coordinatorLeaseOwner: nativeRunFinalizations.leaseOwner,
-          coordinatorFailureDetail: nativeRunFinalizations.failureDetail,
+          coordinatorRunId: nativeRunFinalizations.runId,
         })
         .from(environmentLeases)
         .innerJoin(
@@ -18203,7 +18191,8 @@ export function heartbeatService(
           eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
         )
         // Left join: a legacy run has no coordinator row, and its absence must
-        // not hide the lease from this reconciler.
+        // not hide the lease from this reconciler. The row's mere presence is the
+        // skip signal, so no column of it is read beyond the key.
         .leftJoin(
           nativeRunFinalizations,
           eq(nativeRunFinalizations.runId, heartbeatRuns.id),
@@ -18212,9 +18201,14 @@ export function heartbeatService(
           and(
             isNull(environmentLeases.releasedAt),
             eq(environmentLeases.status, "active"),
+            // Only a lease that owns nothing outside the database.
+            eq(environmentLeases.provider, "local"),
             // A `queued` or `running` run keeps its lease; this reconciler never
             // takes an environment away from a live execution.
             inArray(heartbeatRuns.status, [...HEARTBEAT_RUN_TERMINAL_STATUSES]),
+            // Stay out of the owner's own two-step teardown. `finished_at` is
+            // nullable on older rows, so fall back to the row's last write.
+            sql`coalesce(${heartbeatRuns.finishedAt}, ${heartbeatRuns.updatedAt}) < ${terminalSince}`,
           ),
         )
         .orderBy(asc(environmentLeases.updatedAt))
@@ -18227,16 +18221,11 @@ export function heartbeatService(
         if (handledRunIds.has(row.runId) || skippedRunIds.has(row.runId)) {
           continue;
         }
-        // A terminal run status alone does not free the environment. The native
-        // finalization coordinator may still own the lease for a scheduled
-        // session resume or workspace copy-back.
-        if (
-          nativeFinalizationHoldsLease({
-            phase: row.coordinatorPhase,
-            leaseOwner: row.coordinatorLeaseOwner,
-            failureDetail: row.coordinatorFailureDetail,
-          })
-        ) {
+        // A terminal run status alone does not free the environment of a native
+        // run: the finalization coordinator owns that lease across resumes,
+        // copy-back retries and status commits. Skip on the row's existence, not
+        // on its phase — see the limitation note above this function.
+        if (row.coordinatorRunId) {
           skippedRunIds.add(row.runId);
           continue;
         }
@@ -18256,12 +18245,19 @@ export function heartbeatService(
         // Best effort per run: one failing driver release must not stop the
         // reconciliation of the remaining runs. The lease keeps
         // `released_at IS NULL`, so a later tick retries it.
+        //
+        // `stop_and_retain` is the belt to the provider filter's braces. It is
+        // neutral for the `ephemeral` leases this reconciler closes, and for a
+        // reusable lease it rewrites the release status to `released`
+        // (`environment-runtime.ts:3786-3792`), which is the one status
+        // `destroyReusableSandboxLease` does not act on.
         await releaseEnvironmentLeasesForRun({
           runId: row.runId,
           companyId: row.companyId,
           agentId: row.agentId,
           status: row.runStatus,
           failureReason: row.runError ?? undefined,
+          providerResourceDisposition: "stop_and_retain",
         }).catch((err) =>
           logger.warn(
             { err, runId: row.runId },
@@ -18294,22 +18290,10 @@ export function heartbeatService(
       // A lease whose environment row is gone resolves to no driver, so
       // `releaseRunLeases` skips it (`environment-runtime.ts:3726`). Without a
       // fallback it blocks its issue forever while this reconciler re-reads it on
-      // every tick. Only an `ephemeral` lease can reach that state: the delete
-      // predicate refuses to remove an environment that still has a
-      // `pending_cleanup` or an active `reuse_by_environment` lease
-      // (`environments.ts:1177-1192`).
-      //
-      // How to close it depends on whether a provider resource is at stake:
-      //
-      // - `local` owns nothing outside the database, so closing the record is
-      //   the whole cleanup.
-      // - Any other provider may still hold a live, paid sandbox. Closing it as
-      //   `released` would strand that sandbox with no owner at all, because the
-      //   cleanup sweep only reads `status = 'pending_cleanup'`
-      //   (`heartbeat.ts:17947`). So hand it to that sweep instead: it is built
-      //   for exactly this row, tearing an orphan ephemeral lease down from its
-      //   recorded provider data without an environment row. Both statuses set
-      //   `released_at`, so either way the 409 clears.
+      // every tick. Closing the record is the whole cleanup here, because the
+      // query admits `local` leases only and those own nothing outside the
+      // database. A provider lease that loses its environment row needs the
+      // `pending_cleanup` sweep instead, and reaching it is out of this scope.
       for (const row of rows) {
         if (
           closedLeaseIds.has(row.leaseId) ||
@@ -18318,19 +18302,11 @@ export function heartbeatService(
         ) {
           continue;
         }
-        const ownsProviderResource = row.leaseProvider !== "local";
         const closed = await environmentsSvc
           .releaseLease(
             row.leaseId,
-            ownsProviderResource
-              ? "pending_cleanup"
-              : leaseReleaseStatusForRunStatus(row.runStatus),
-            {
-              failureReason: TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON,
-              ...(ownsProviderResource
-                ? { cleanupStatus: "failed" as const }
-                : {}),
-            },
+            leaseReleaseStatusForRunStatus(row.runStatus),
+            { failureReason: TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON },
           )
           .catch((err) => {
             logger.warn(
@@ -19244,29 +19220,30 @@ export function heartbeatService(
     for (const runId of swept.terminalizedRunIds) {
       const run = await getRun(runId).catch(() => null);
       if (!run || !isHeartbeatRunTerminalStatus(run.status)) continue;
-      // `terminalizeOrphanedRunningRun` already refuses a run whose native
-      // resume owns it (`recovery/service.ts:5621-5639`), so this repeats a
-      // check rather than adding one. Repeat it anyway: the release, not the
-      // terminalization, is what destroys a scheduled resume or copy-back, and
-      // that guard must live next to the release it protects.
-      const coordinator = await db
-        .select({
-          phase: nativeRunFinalizations.phase,
-          leaseOwner: nativeRunFinalizations.leaseOwner,
-          failureDetail: nativeRunFinalizations.failureDetail,
-        })
+      // Leave every native run to its finalization coordinator, whatever phase
+      // it is in. `terminalizeOrphanedRunningRun` already refuses a run whose
+      // resume owns it (`recovery/service.ts:5621-5639`), but the release, not
+      // the terminalization, is what destroys a scheduled resume or workspace
+      // copy-back, so the guard belongs next to the release it protects.
+      const coordinated = await db
+        .select({ runId: nativeRunFinalizations.runId })
         .from(nativeRunFinalizations)
         .where(eq(nativeRunFinalizations.runId, run.id))
         .limit(1)
-        .then((rows) => rows[0] ?? null)
-        .catch(() => null);
-      if (nativeFinalizationHoldsLease(coordinator)) continue;
+        .then((rows) => rows.length > 0)
+        .catch(() => true);
+      if (coordinated) continue;
+      // `stop_and_retain` keeps a reusable provider lease out of the `expired`
+      // status that triggers `destroyReusableSandboxLease`
+      // (`environment-runtime.ts:3786-3792`, `:2393-2399`), and is neutral for an
+      // ephemeral lease.
       await releaseEnvironmentLeasesForRun({
         runId: run.id,
         companyId: run.companyId,
         agentId: run.agentId,
         status: run.status,
         failureReason: run.error ?? undefined,
+        providerResourceDisposition: "stop_and_retain",
       }).catch((err) =>
         logger.warn(
           { err, runId },

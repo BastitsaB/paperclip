@@ -114,6 +114,11 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     leaseProvider?: string;
     /** Marks the run native so a finalization coordinator can reference it. */
     native?: boolean;
+    /**
+     * When the run reached its terminal status. The reconciler ignores a run
+     * that only just finished, so the default is comfortably past that gate.
+     */
+    finishedAt?: Date;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -152,7 +157,8 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
       agentId,
       status: input.runStatus,
       invocationSource: "manual",
-      startedAt: new Date(),
+      startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      finishedAt: input.finishedAt ?? new Date(Date.now() - 60 * 60 * 1000),
       ...(input.runErrorCode
         ? { error: "Interrupted by platform restart", errorCode: input.runErrorCode }
         : {}),
@@ -189,7 +195,10 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
       .then((rows) => rows[0] ?? null);
   }
 
-  it("closes the open lease of a run the platform restart interrupted", async () => {
+  // The production defect this reconciler exists for: a legacy run the platform
+  // restart interrupted, holding a `local` lease, with no finalization
+  // coordinator and terminal for far longer than the minimum age.
+  it("closes the open local lease of a run the platform restart interrupted", async () => {
     const { leaseId } = await seed({
       runStatus: "interrupted",
       runErrorCode: "orphaned_running_run",
@@ -231,46 +240,37 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     expect(lease?.releasedAt).toBeNull();
   });
 
-  // The native finalization coordinator keeps a terminal run's lease on purpose
-  // while a session resume or a workspace copy-back is still scheduled. The run
-  // teardown skips the release for exactly that reason, so the backstop must too.
   async function seedCoordinator(input: {
     companyId: string;
     issueId: string;
     runId: string;
     phase: string;
-    resultId?: string | null;
-    leaseOwner?: string | null;
-    failureDetail?: Record<string, unknown> | null;
   }) {
     await db.insert(nativeRunFinalizations).values({
       runId: input.runId,
       companyId: input.companyId,
       issueId: input.issueId,
       phase: input.phase,
-      resultId: input.resultId ?? null,
-      leaseOwner: input.leaseOwner ?? null,
-      failureDetail: input.failureDetail ?? null,
     });
   }
 
-  it("leaves the lease of a terminal native run whose resume is still scheduled", async () => {
-    // The session-resume claim accepts a run in status `failed` with a
-    // `retryable_failure` coordinator and no result. Releasing the lease here
-    // would map to lease status `failed`, which the reacquire predicate rejects,
-    // and the resume would die.
+  it.each([
+    "retryable_failure",
+    "observed",
+    "committed",
+    "terminal_failure",
+  ])("leaves the lease of a terminal native run with a %s coordinator", async (phase) => {
+    // The coordinator owns its run's environment across session resumes,
+    // workspace copy-back retries and status commits, and no phase reliably says
+    // the environment is free. A resume claim accepts a run in status `failed`,
+    // and a pending copy-back keeps a sandbox that still holds unexported
+    // changes. So the presence of the row is the whole gate.
     const { companyId, issueId, runId, leaseId } = await seed({
       runStatus: "failed",
       runErrorCode: "native_session_interrupted",
       native: true,
     });
-    await seedCoordinator({
-      companyId,
-      issueId,
-      runId,
-      phase: "retryable_failure",
-      resultId: null,
-    });
+    await seedCoordinator({ companyId, issueId, runId, phase });
 
     const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
 
@@ -278,67 +278,6 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     const lease = await readLease(leaseId);
     expect(lease?.releasedAt).toBeNull();
     expect(lease?.status).toBe("active");
-  });
-
-  it("leaves the lease of a terminal native run whose workspace copy-back is pending", async () => {
-    // The copy-back retry has already recorded a result, so a `resultId IS NULL`
-    // test would miss it — while the sandbox it keeps still holds unexported
-    // changes. Only the coordinator phase separates this case from a finished one.
-    const { companyId, issueId, runId, leaseId } = await seed({
-      runStatus: "cancelled",
-      runErrorCode: "native_workspace_sync_out_failed",
-      native: true,
-      leaseProvider: "daytona",
-    });
-    await seedCoordinator({
-      companyId,
-      issueId,
-      runId,
-      // A real copy-back retry also carries a result id. The column has an owner
-      // foreign key onto native_run_results, so the phase alone stands in for it
-      // here; the guard never reads the result.
-      phase: "retryable_failure",
-    });
-
-    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
-
-    expect(result).toMatchObject({ released: 0, skipped: 1 });
-    expect((await readLease(leaseId))?.releasedAt).toBeNull();
-  });
-
-  it("releases the lease once the coordinator reached terminal_failure", async () => {
-    // `terminal_failure` is the one phase that hands the lease back to ordinary
-    // teardown, so the guard must not block it.
-    const { companyId, issueId, runId, leaseId } = await seed({
-      runStatus: "failed",
-      runErrorCode: "native_workspace_sync_out_unrecoverable",
-      native: true,
-    });
-    await seedCoordinator({ companyId, issueId, runId, phase: "terminal_failure" });
-
-    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
-
-    expect(result).toMatchObject({ scanned: 1, released: 1, skipped: 0 });
-    expect((await readLease(leaseId))?.releasedAt).not.toBeNull();
-  });
-
-  it("leaves the lease of a run that a successor continuation already owns", async () => {
-    const { companyId, issueId, runId, leaseId } = await seed({
-      runStatus: "failed",
-      native: true,
-    });
-    await seedCoordinator({
-      companyId,
-      issueId,
-      runId,
-      phase: "terminal_failure",
-      failureDetail: { successorRunId: randomUUID() },
-    });
-
-    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
-
-    expect(result).toMatchObject({ released: 0, skipped: 1 });
-    expect((await readLease(leaseId))?.releasedAt).toBeNull();
   });
 
   it("maps a cancelled run to an expired lease", async () => {
@@ -371,24 +310,44 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     );
   });
 
-  it("hands a provider orphan lease whose environment row is gone to the cleanup sweep", async () => {
-    // Closing this as `released` would strand a live, paid sandbox that no sweep
-    // ever reads again. `pending_cleanup` still sets `released_at`, so the
-    // recovery resolve unblocks while the teardown stays owned.
+  it.each(["sandbox", "daytona", "ssh"])(
+    "never touches a %s lease of a terminal run",
+    async (provider) => {
+      // A provider lease may hold a live resource the ordinary teardown still
+      // wants. Releasing a reusable one with a cancelled run's `expired` status
+      // would destroy its sandbox, so no provider teardown may originate here at
+      // all. The query excludes them outright.
+      const { leaseId } = await seed({
+        runStatus: "cancelled",
+        runErrorCode: "orphaned_running_run",
+        leaseProvider: provider,
+      });
+
+      const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+      expect(result).toMatchObject({ scanned: 0, released: 0, skipped: 0 });
+      const lease = await readLease(leaseId);
+      expect(lease?.releasedAt).toBeNull();
+      expect(lease?.status).toBe("active");
+    },
+  );
+
+  it("leaves the lease of a run that only just reached its terminal status", async () => {
+    // The ordinary teardown writes the terminal run status before it releases
+    // the lease. A backstop reading in that window would race the owner that is
+    // still working on the same lease.
     const { leaseId } = await seed({
-      runStatus: "interrupted",
-      runErrorCode: "orphaned_running_run",
-      leaseProvider: "daytona",
+      runStatus: "failed",
+      runErrorCode: "process_lost",
+      finishedAt: new Date(),
     });
-    await db.delete(environments);
 
     const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
 
-    expect(result).toMatchObject({ scanned: 1, released: 1 });
+    expect(result).toMatchObject({ scanned: 0, released: 0 });
     const lease = await readLease(leaseId);
-    expect(lease?.releasedAt).not.toBeNull();
-    expect(lease?.status).toBe("pending_cleanup");
-    expect(lease?.cleanupStatus).toBe("failed");
+    expect(lease?.releasedAt).toBeNull();
+    expect(lease?.status).toBe("active");
   });
 
   it("leaves the lease open when the driver release fails", async () => {
