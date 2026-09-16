@@ -11,6 +11,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
+  nativeRunFinalizations,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -20,7 +21,10 @@ import {
 const mockTelemetryClient = vi.hoisted(() => ({ track: vi.fn() }));
 vi.mock("../telemetry.ts", () => ({ getTelemetryClient: () => mockTelemetryClient }));
 
-import { heartbeatService } from "../services/heartbeat.ts";
+import {
+  heartbeatService,
+  type HeartbeatEnvironmentRuntime,
+} from "../services/heartbeat.ts";
 import { validateExecutionReconciliation } from "../services/execution-recovery-resolution.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -51,6 +55,7 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(nativeRunFinalizations);
     await db.delete(environmentLeases);
     await db.delete(heartbeatRunEvents);
     await db.delete(issues);
@@ -105,6 +110,10 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     runStatus: string;
     runErrorCode?: string;
     processPid?: number | null;
+    /** The lease's provider; anything but `local` owns a provider resource. */
+    leaseProvider?: string;
+    /** Marks the run native so a finalization coordinator can reference it. */
+    native?: boolean;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -148,6 +157,10 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
         ? { error: "Interrupted by platform restart", errorCode: input.runErrorCode }
         : {}),
       ...(input.processPid === undefined ? {} : { processPid: input.processPid }),
+      // The coordinator's owner foreign key is (companyId, nativeIssueId, id),
+      // so a native run must carry the issue on the column, not only in the
+      // context snapshot.
+      ...(input.native ? { runtimeMode: "native", nativeIssueId: issueId } : {}),
       contextSnapshot: { issueId },
     });
     const [lease] = await db
@@ -159,7 +172,7 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
         heartbeatRunId: runId,
         status: "active",
         leasePolicy: "ephemeral",
-        provider: "local",
+        provider: input.leaseProvider ?? "local",
         releasedAt: null,
         metadata: { driver: "local", executionWorkspaceMode: "shared_workspace" },
       })
@@ -216,6 +229,190 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     expect(result).toMatchObject({ scanned: 1, released: 0, skipped: 1 });
     const lease = await readLease(leaseId);
     expect(lease?.releasedAt).toBeNull();
+  });
+
+  // The native finalization coordinator keeps a terminal run's lease on purpose
+  // while a session resume or a workspace copy-back is still scheduled. The run
+  // teardown skips the release for exactly that reason, so the backstop must too.
+  async function seedCoordinator(input: {
+    companyId: string;
+    issueId: string;
+    runId: string;
+    phase: string;
+    resultId?: string | null;
+    leaseOwner?: string | null;
+    failureDetail?: Record<string, unknown> | null;
+  }) {
+    await db.insert(nativeRunFinalizations).values({
+      runId: input.runId,
+      companyId: input.companyId,
+      issueId: input.issueId,
+      phase: input.phase,
+      resultId: input.resultId ?? null,
+      leaseOwner: input.leaseOwner ?? null,
+      failureDetail: input.failureDetail ?? null,
+    });
+  }
+
+  it("leaves the lease of a terminal native run whose resume is still scheduled", async () => {
+    // The session-resume claim accepts a run in status `failed` with a
+    // `retryable_failure` coordinator and no result. Releasing the lease here
+    // would map to lease status `failed`, which the reacquire predicate rejects,
+    // and the resume would die.
+    const { companyId, issueId, runId, leaseId } = await seed({
+      runStatus: "failed",
+      runErrorCode: "native_session_interrupted",
+      native: true,
+    });
+    await seedCoordinator({
+      companyId,
+      issueId,
+      runId,
+      phase: "retryable_failure",
+      resultId: null,
+    });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 0, skipped: 1 });
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).toBeNull();
+    expect(lease?.status).toBe("active");
+  });
+
+  it("leaves the lease of a terminal native run whose workspace copy-back is pending", async () => {
+    // The copy-back retry has already recorded a result, so a `resultId IS NULL`
+    // test would miss it — while the sandbox it keeps still holds unexported
+    // changes. Only the coordinator phase separates this case from a finished one.
+    const { companyId, issueId, runId, leaseId } = await seed({
+      runStatus: "cancelled",
+      runErrorCode: "native_workspace_sync_out_failed",
+      native: true,
+      leaseProvider: "daytona",
+    });
+    await seedCoordinator({
+      companyId,
+      issueId,
+      runId,
+      // A real copy-back retry also carries a result id. The column has an owner
+      // foreign key onto native_run_results, so the phase alone stands in for it
+      // here; the guard never reads the result.
+      phase: "retryable_failure",
+    });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ released: 0, skipped: 1 });
+    expect((await readLease(leaseId))?.releasedAt).toBeNull();
+  });
+
+  it("releases the lease once the coordinator reached terminal_failure", async () => {
+    // `terminal_failure` is the one phase that hands the lease back to ordinary
+    // teardown, so the guard must not block it.
+    const { companyId, issueId, runId, leaseId } = await seed({
+      runStatus: "failed",
+      runErrorCode: "native_workspace_sync_out_unrecoverable",
+      native: true,
+    });
+    await seedCoordinator({ companyId, issueId, runId, phase: "terminal_failure" });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 1, skipped: 0 });
+    expect((await readLease(leaseId))?.releasedAt).not.toBeNull();
+  });
+
+  it("leaves the lease of a run that a successor continuation already owns", async () => {
+    const { companyId, issueId, runId, leaseId } = await seed({
+      runStatus: "failed",
+      native: true,
+    });
+    await seedCoordinator({
+      companyId,
+      issueId,
+      runId,
+      phase: "terminal_failure",
+      failureDetail: { successorRunId: randomUUID() },
+    });
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ released: 0, skipped: 1 });
+    expect((await readLease(leaseId))?.releasedAt).toBeNull();
+  });
+
+  it("maps a cancelled run to an expired lease", async () => {
+    const { leaseId } = await seed({ runStatus: "cancelled" });
+
+    await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).not.toBeNull();
+    expect(lease?.status).toBe("expired");
+  });
+
+  it("closes a local orphan lease whose environment row is gone", async () => {
+    const { leaseId } = await seed({
+      runStatus: "interrupted",
+      runErrorCode: "orphaned_running_run",
+    });
+    // `on delete set null` keeps the lease but drops its environment reference,
+    // so the driver lookup finds nothing and the normal release path skips it.
+    await db.delete(environments);
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 1 });
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).not.toBeNull();
+    expect(lease?.status).toBe("released");
+    expect(lease?.failureReason).toBe(
+      "terminal_run_lease_reconciled_environment_missing",
+    );
+  });
+
+  it("hands a provider orphan lease whose environment row is gone to the cleanup sweep", async () => {
+    // Closing this as `released` would strand a live, paid sandbox that no sweep
+    // ever reads again. `pending_cleanup` still sets `released_at`, so the
+    // recovery resolve unblocks while the teardown stays owned.
+    const { leaseId } = await seed({
+      runStatus: "interrupted",
+      runErrorCode: "orphaned_running_run",
+      leaseProvider: "daytona",
+    });
+    await db.delete(environments);
+
+    const result = await heartbeatService(db).reconcileLeasesOfTerminalRuns();
+
+    expect(result).toMatchObject({ scanned: 1, released: 1 });
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).not.toBeNull();
+    expect(lease?.status).toBe("pending_cleanup");
+    expect(lease?.cleanupStatus).toBe("failed");
+  });
+
+  it("leaves the lease open when the driver release fails", async () => {
+    const { leaseId } = await seed({
+      runStatus: "interrupted",
+      runErrorCode: "orphaned_running_run",
+    });
+    const failingRuntime = {
+      releaseRunLeases: async () => {
+        throw new Error("driver release failed");
+      },
+    } as unknown as HeartbeatEnvironmentRuntime;
+
+    const result = await heartbeatService(db, {
+      environmentRuntime: failingRuntime,
+    }).reconcileLeasesOfTerminalRuns();
+
+    // The run was attempted, so it is not "skipped"; nothing closed, so a later
+    // tick retries it.
+    expect(result).toMatchObject({ scanned: 1, released: 0, skipped: 0 });
+    const lease = await readLease(leaseId);
+    expect(lease?.releasedAt).toBeNull();
+    expect(lease?.status).toBe("active");
+    expect(lease?.failureReason).toBeNull();
   });
 
   it("is idempotent across repeated ticks", async () => {
