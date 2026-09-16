@@ -1227,7 +1227,26 @@ async function startServerWithDatabaseTeardown(
       })
       .catch((err) => {
         logger.error({ err }, "environment lease cleanup sweep failed");
-      });
+      })
+      // Reconcile the leases that a terminal run left open. A platform restart
+      // between a run's terminal write and its lease release strands the lease
+      // with `released_at IS NULL`, and the issue then fails every recovery
+      // resolve with a 409. This reconciler rides the same startup and interval
+      // hook as the sweep above, so the backstop is likewise independent of the
+      // heartbeat scheduler toggle. Its own catch keeps a reconciler failure
+      // from hiding the sweep result.
+      .then(() =>
+        environmentLeaseCleanupHeartbeat
+          .reconcileLeasesOfTerminalRuns()
+          .then((result) => {
+            if (result.released > 0) {
+              logger.warn(result, "reconciled environment leases of terminal runs");
+            }
+          })
+          .catch((err) => {
+            logger.error({ err }, "terminal-run environment lease reconciliation failed");
+          }),
+      );
   const scheduleEnvironmentLeaseCleanupSweep = () => {
     if (heartbeatSchedulerStopped) return;
     trackHeartbeatSchedulerWork(runEnvironmentLeaseCleanupSweep(ENVIRONMENT_LEASE_CLEANUP_SWEEP_BACKOFF_MS));

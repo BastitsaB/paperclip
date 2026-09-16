@@ -57,6 +57,7 @@ import {
   gt,
   gte,
   inArray,
+  isNotNull,
   isNull,
   lt,
   lte,
@@ -411,6 +412,7 @@ import {
   type WorkspaceOperationRecorder,
 } from "./workspace-operations.js";
 import {
+  isPidAlive,
   isProcessGroupAlive,
   terminateLocalService,
 } from "./local-service-supervisor.js";
@@ -657,6 +659,14 @@ const PENDING_CLEANUP_CAP_WARNED_METADATA_KEY = "pendingCleanupRetryCapWarned";
 // catch site logs a constant, locally generated `errorKind` instead.
 const PENDING_CLEANUP_RETRY_ERROR_KIND = "destroy_failed";
 const PENDING_CLEANUP_SWEEP_ERROR_KIND = "sweep_failed";
+
+// The terminal-run lease reconciler closes at most this many leases per tick.
+const TERMINAL_RUN_LEASE_RECONCILE_PAGE_SIZE = 50;
+// The reasons the reconciler stamps on `environment_leases.failure_reason`, so a
+// row it closed explains itself without the log.
+const TERMINAL_RUN_LEASE_RECONCILE_REASON = "terminal_run_lease_reconciled";
+const TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON =
+  "terminal_run_lease_reconciled_environment_missing";
 
 // Read the stored retry attempt count as a safe value, directly in SQL. A
 // provider can write a malformed value under the attempts key. The type guard
@@ -18092,6 +18102,160 @@ export function heartbeatService(
     return { swept: rows.length, destroyed, capped };
   }
 
+  // Close the environment leases of runs that already reached a terminal status.
+  //
+  // Every ordinary path releases its lease: the run teardown, the graceful
+  // shutdown loop, and the orphaned-run reaper. None of them runs when the
+  // platform dies between the run's terminal write and the release. The recovery
+  // backstop that terminalizes such a row later
+  // (`recovery.sweepStaleIssueLocks` -> `terminalizeOrphanedRunningRun`) owns no
+  // environment authority, and a shutdown whose status write loses its race
+  // skips the release too. The lease then keeps `released_at IS NULL` forever,
+  // and `resolveExecutionRecovery` refuses the issue with a 409 because the
+  // previous environment never gave its authority up. This reconciler is the
+  // backstop for exactly those rows, so an operator needs no manual SQL.
+  //
+  // It routes through `releaseEnvironmentLeasesForRun`, the same boundary the
+  // teardown uses, so a provider-backed lease still receives its driver teardown
+  // and never leaks a paid sandbox. That boundary never touches the host file
+  // system: `environmentService.releaseLease` writes the lease row only, and no
+  // driver release path removes a workspace directory. This matters for a
+  // `shared_workspace` lease, whose workspace path is the shared project folder;
+  // releasing such a lease must never delete or reset it.
+  async function reconcileLeasesOfTerminalRuns(opts?: {
+    limit?: number;
+  }): Promise<{ scanned: number; released: number; skipped: number }> {
+    const rows = await db
+      .select({
+        leaseId: environmentLeases.id,
+        environmentId: environmentLeases.environmentId,
+        runId: heartbeatRuns.id,
+        companyId: heartbeatRuns.companyId,
+        agentId: heartbeatRuns.agentId,
+        runStatus: heartbeatRuns.status,
+        runError: heartbeatRuns.error,
+        processPid: heartbeatRuns.processPid,
+        processGroupId: heartbeatRuns.processGroupId,
+      })
+      .from(environmentLeases)
+      .innerJoin(
+        heartbeatRuns,
+        eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
+      )
+      .where(
+        and(
+          isNull(environmentLeases.releasedAt),
+          eq(environmentLeases.status, "active"),
+          // The run status is the only admission gate. A `queued` or `running`
+          // run keeps its lease; this reconciler never takes an environment
+          // away from a live execution.
+          inArray(heartbeatRuns.status, [...HEARTBEAT_RUN_TERMINAL_STATUSES]),
+        ),
+      )
+      .orderBy(asc(environmentLeases.updatedAt))
+      .limit(opts?.limit ?? TERMINAL_RUN_LEASE_RECONCILE_PAGE_SIZE);
+    if (rows.length === 0) return { scanned: 0, released: 0, skipped: 0 };
+
+    const skippedRunIds = new Set<string>();
+    const handledRunIds = new Set<string>();
+    for (const row of rows) {
+      if (handledRunIds.has(row.runId) || skippedRunIds.has(row.runId)) continue;
+      // A terminal run row whose recorded process still answers means the
+      // previous execution has not actually stopped. Never revoke its
+      // environment; `resolveExecutionRecovery` gates on the same liveness
+      // proof before it continues an issue.
+      const processAlive =
+        (typeof row.processPid === "number" && isPidAlive(row.processPid)) ||
+        (typeof row.processGroupId === "number" &&
+          isProcessGroupAlive(row.processGroupId));
+      if (processAlive) {
+        skippedRunIds.add(row.runId);
+        continue;
+      }
+      handledRunIds.add(row.runId);
+      // Best effort per run: one failing driver release must not stop the
+      // reconciliation of the remaining runs. The lease keeps
+      // `released_at IS NULL`, so a later tick retries it.
+      await releaseEnvironmentLeasesForRun({
+        runId: row.runId,
+        companyId: row.companyId,
+        agentId: row.agentId,
+        status: row.runStatus,
+        failureReason: row.runError ?? undefined,
+      }).catch((err) =>
+        logger.warn(
+          { err, runId: row.runId },
+          "failed to release environment leases for a terminal run",
+        ),
+      );
+    }
+
+    const closedLeaseIds = new Set(
+      await db
+        .select({ id: environmentLeases.id })
+        .from(environmentLeases)
+        .where(
+          and(
+            inArray(
+              environmentLeases.id,
+              rows.map((row) => row.leaseId),
+            ),
+            isNotNull(environmentLeases.releasedAt),
+          ),
+        )
+        .then((released) => released.map((lease) => lease.id)),
+    );
+
+    // A lease whose environment row is gone resolves to no driver, so
+    // `releaseRunLeases` skips it. Without this fallback it would block its
+    // issue forever while the reconciler re-reads it on every tick. Close the
+    // record itself, which is the non-destructive path: it writes the lease row
+    // and runs no provider teardown. A real orphan sandbox is not lost by that,
+    // because the `pending_cleanup` sweep owns those rows and tears them down
+    // from their recorded provider data.
+    for (const row of rows) {
+      if (
+        closedLeaseIds.has(row.leaseId) ||
+        row.environmentId ||
+        skippedRunIds.has(row.runId)
+      ) {
+        continue;
+      }
+      const closed = await environmentsSvc
+        .releaseLease(row.leaseId, leaseReleaseStatusForRunStatus(row.runStatus), {
+          failureReason: TERMINAL_RUN_LEASE_RECONCILE_ORPHAN_REASON,
+        })
+        .catch((err) => {
+          logger.warn(
+            { err, leaseId: row.leaseId },
+            "failed to close the lease record of a terminal run whose environment is gone",
+          );
+          return null;
+        });
+      if (closed) closedLeaseIds.add(row.leaseId);
+    }
+
+    // Stamp why the reconciler closed these leases, so the row explains itself
+    // without the log. Never overwrite a reason a driver already recorded.
+    if (closedLeaseIds.size > 0) {
+      await db
+        .update(environmentLeases)
+        .set({ failureReason: TERMINAL_RUN_LEASE_RECONCILE_REASON })
+        .where(
+          and(
+            inArray(environmentLeases.id, [...closedLeaseIds]),
+            isNull(environmentLeases.failureReason),
+          ),
+        );
+    }
+
+    return {
+      scanned: rows.length,
+      released: closedLeaseIds.size,
+      skipped: rows.filter((row) => skippedRunIds.has(row.runId)).length,
+    };
+  }
+
   async function markNativeOwnershipUnverified(
     run: typeof heartbeatRuns.$inferSelect,
     evidence: {
@@ -18950,7 +19114,30 @@ export function heartbeatService(
   }
 
   async function sweepStaleIssueLocks() {
-    return recovery.sweepStaleIssueLocks();
+    const swept = await recovery.sweepStaleIssueLocks();
+    // The recovery backstop terminalizes an orphaned `running` row but owns no
+    // environment authority, so its run's lease would stay open forever and
+    // block `resolveExecutionRecovery` with a 409. Release it here, at the
+    // boundary that does own the environment. Best effort: the sweep result
+    // must stand even when a driver release fails, and the terminal-run lease
+    // reconciler retries a lease this pass could not close.
+    for (const runId of swept.terminalizedRunIds) {
+      const run = await getRun(runId).catch(() => null);
+      if (!run || !isHeartbeatRunTerminalStatus(run.status)) continue;
+      await releaseEnvironmentLeasesForRun({
+        runId: run.id,
+        companyId: run.companyId,
+        agentId: run.agentId,
+        status: run.status,
+        failureReason: run.error ?? undefined,
+      }).catch((err) =>
+        logger.warn(
+          { err, runId },
+          "failed to release environment leases for a run the stale-lock sweep terminalized",
+        ),
+      );
+    }
+    return swept;
   }
 
   function issueIdFromRunContext(contextSnapshot: unknown) {
@@ -28450,6 +28637,7 @@ export function heartbeatService(
     recoverNativeRunsAfterRestart,
     reapOrphanedRuns,
     sweepPendingCleanupLeases,
+    reconcileLeasesOfTerminalRuns,
     // Override-aware scheduling-suppression check (honors the worktree
     // run-execution experimental setting). Callers outside the service that
     // gate on suppression should prefer this over the env-only resolver.
