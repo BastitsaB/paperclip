@@ -18207,8 +18207,17 @@ export function heartbeatService(
             // takes an environment away from a live execution.
             inArray(heartbeatRuns.status, [...HEARTBEAT_RUN_TERMINAL_STATUSES]),
             // Stay out of the owner's own two-step teardown. `finished_at` is
-            // nullable on older rows, so fall back to the row's last write.
-            sql`coalesce(${heartbeatRuns.finishedAt}, ${heartbeatRuns.updatedAt}) < ${terminalSince}`,
+            // nullable on older rows, so fall back to the row's last write. Both
+            // arms use typed column operators rather than one `coalesce`
+            // fragment: a raw fragment binds the JS `Date` without the column's
+            // timestamptz type and the driver then rejects it.
+            or(
+              lt(heartbeatRuns.finishedAt, terminalSince),
+              and(
+                isNull(heartbeatRuns.finishedAt),
+                lt(heartbeatRuns.updatedAt, terminalSince),
+              ),
+            ),
           ),
         )
         .orderBy(asc(environmentLeases.updatedAt))
