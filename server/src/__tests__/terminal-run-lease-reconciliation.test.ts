@@ -64,6 +64,40 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
     await tempDb?.cleanup();
   });
 
+  // The local environment is instance-scoped, not company-scoped: the schema
+  // permits exactly one row with `driver = 'local'`
+  // (`environments_local_driver_idx`) and unique environment names
+  // (`environments_name_idx`). A fixture that inserts its own row therefore
+  // collides with any local environment that already exists. So resolve the
+  // single local environment instead of creating a second one — the same
+  // select-or-insert shape `environmentService.ensureLocalEnvironment` uses in
+  // production. The `afterEach` truncation still removes the row, so each case
+  // starts from an empty table and shares no state with the next.
+  async function ensureLocalEnvironment(): Promise<string> {
+    const readLocal = () =>
+      db
+        .select({ id: environments.id })
+        .from(environments)
+        .where(eq(environments.driver, "local"))
+        .then((rows) => rows[0]?.id ?? null);
+
+    const existing = await readLocal();
+    if (existing) return existing;
+
+    // The bare `do nothing` covers both partial unique indexes at once.
+    const inserted = await db
+      .insert(environments)
+      .values({ name: "Local", driver: "local", status: "active", config: {} })
+      .onConflictDoNothing()
+      .returning({ id: environments.id })
+      .then((rows) => rows[0]?.id ?? null);
+    if (inserted) return inserted;
+
+    const winner = await readLocal();
+    if (!winner) throw new Error("could not resolve the local environment fixture");
+    return winner;
+  }
+
   // The production shape of the stranded rows: a `local` provider, an
   // `ephemeral` lease policy, and a `shared_workspace` execution workspace mode
   // whose path is the shared project folder.
@@ -74,7 +108,6 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
-    const environmentId = randomUUID();
     const issueId = randomUUID();
     const runId = randomUUID();
 
@@ -95,13 +128,7 @@ describeEmbeddedPostgres("terminal-run environment lease reconciliation", () => 
       runtimeConfig: {},
       permissions: {},
     });
-    await db.insert(environments).values({
-      id: environmentId,
-      name: "Local",
-      driver: "local",
-      status: "active",
-      config: {},
-    });
+    const environmentId = await ensureLocalEnvironment();
     await db.insert(issues).values({
       id: issueId,
       companyId,
