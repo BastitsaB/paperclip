@@ -681,4 +681,168 @@ describe("issue dependency wakeups in issue routes", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(mockWakeup).not.toHaveBeenCalled();
   });
+
+  // MAI-2749 / MAI-2739: a `blocked` + `unblockDescriptor` issue with no real
+  // blocker edge must never emit `issue_blockers_resolved`, including across a
+  // checkout->restore round trip that re-enters `blocked` from a non-blocked
+  // status and re-stamps `blockedTransitionAt`. Kept separate from MAI-1819's
+  // own coverage (which exercises the already-fixed "some blockedBy, now all
+  // done" shape) because this suite's premise is the opposite one: zero formal
+  // blockers, only a free-text descriptor.
+  describe("issue_blockers_resolved guard for blocked+unblockDescriptor without a blocker edge (MAI-2749)", () => {
+  const issueId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+  function blockedRestoreIssue(overrides: Record<string, unknown> = {}) {
+    return {
+      id: issueId,
+      companyId: "company-1",
+      identifier: "PAP-300",
+      title: "External owner gate",
+      description: null,
+      status: "blocked",
+      priority: "medium",
+      parentId: null,
+      assigneeAgentId: "agent-1",
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      blockedTransitionAt: new Date("2026-09-16T13:00:00.000Z"),
+      labels: [],
+      labelIds: [],
+      ...overrides,
+    };
+  }
+
+  const zeroBlockerReadiness = {
+    issueId,
+    blockerIssueIds: [] as string[],
+    unresolvedBlockerIssueIds: [] as string[],
+    unresolvedBlockerCount: 0,
+    pendingFinalizeBlockerIssueIds: [] as string[],
+    allBlockersDone: true,
+    isDependencyReady: true,
+  };
+
+  it("does not wake on restore-PATCH when blockedByIssueIds is absent (null) and only unblockDescriptor is present", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      blockedRestoreIssue({ status: "in_progress", blockedTransitionAt: null }),
+    );
+    mockIssueService.update.mockResolvedValue(blockedRestoreIssue());
+    mockIssueService.getDependencyReadiness.mockResolvedValue(zeroBlockerReadiness);
+
+    const res = await request(await createApp())
+      .patch(`/api/issues/${issueId}`)
+      .send({
+        status: "blocked",
+        unblockDescriptor: { owner: "board", action: "Wait for the PR label" },
+      });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockWakeup).not.toHaveBeenCalled();
+  });
+
+  it("does not wake on restore-PATCH when blockedByIssueIds is explicitly an empty array", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      blockedRestoreIssue({ status: "in_progress", blockedTransitionAt: null }),
+    );
+    mockIssueService.update.mockResolvedValue(blockedRestoreIssue());
+    mockIssueService.getDependencyReadiness.mockResolvedValue(zeroBlockerReadiness);
+
+    const res = await request(await createApp())
+      .patch(`/api/issues/${issueId}`)
+      .send({
+        status: "blocked",
+        blockedByIssueIds: [],
+        unblockDescriptor: { owner: "board", action: "Wait for the PR label" },
+      });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockWakeup).not.toHaveBeenCalled();
+  });
+
+  it("does not re-evaluate dependency readiness when only the unblockDescriptor is set/renewed on an issue already blocked", async () => {
+    mockIssueService.getById.mockResolvedValue(blockedRestoreIssue());
+    mockIssueService.update.mockResolvedValue(
+      blockedRestoreIssue({
+        unblockDescriptor: { owner: "board", action: "Wait for the PR label (renewed)" },
+      }),
+    );
+
+    const res = await request(await createApp())
+      .patch(`/api/issues/${issueId}`)
+      .send({
+        unblockDescriptor: { owner: "board", action: "Wait for the PR label (renewed)" },
+      });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockWakeup).not.toHaveBeenCalled();
+    expect(mockIssueService.getDependencyReadiness).not.toHaveBeenCalled();
+  });
+
+  it("stays silent across repeated checkout->restore cycles with no new fact (the observed MAI-2667 thrash)", async () => {
+    const app = await createApp();
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      mockIssueService.getById.mockResolvedValue(
+        blockedRestoreIssue({ status: "in_progress", blockedTransitionAt: null }),
+      );
+      mockIssueService.update.mockResolvedValue(
+        blockedRestoreIssue({ blockedTransitionAt: new Date(Date.now() + cycle) }),
+      );
+      mockIssueService.getDependencyReadiness.mockResolvedValue(zeroBlockerReadiness);
+
+      const res = await request(app)
+        .patch(`/api/issues/${issueId}`)
+        .send({
+          status: "blocked",
+          unblockDescriptor: { owner: "board", action: "Wait for the PR label" },
+        });
+      expect(res.status).toBe(200);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockWakeup).not.toHaveBeenCalled();
+  });
+
+  it("still wakes exactly once for a genuine real blocker transition into blocked (legitimate semantics preserved)", async () => {
+    const blockerIssueId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const blockedTransitionAt = new Date("2026-09-16T14:00:00.000Z");
+    mockIssueService.getById.mockResolvedValue(
+      blockedRestoreIssue({ status: "in_progress", blockedTransitionAt: null }),
+    );
+    mockIssueService.update.mockResolvedValue(
+      blockedRestoreIssue({ blockedTransitionAt }),
+    );
+    mockIssueService.getDependencyReadiness.mockResolvedValue({
+      ...zeroBlockerReadiness,
+      blockerIssueIds: [blockerIssueId],
+    });
+
+    const res = await request(await createApp())
+      .patch(`/api/issues/${issueId}`)
+      .send({
+        status: "blocked",
+        blockedByIssueIds: [blockerIssueId],
+        unblockDescriptor: { owner: "board", action: "Confirm the restored dependency" },
+      });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-1",
+        expect.objectContaining({
+          reason: "issue_blockers_resolved",
+          payload: expect.objectContaining({
+            issueId,
+            resolvedBlockerIssueId: blockerIssueId,
+            mutation: "blocked_dependency_restored",
+          }),
+        }),
+      );
+    });
+    expect(mockWakeup).toHaveBeenCalledTimes(1);
+  });
+  });
 });
