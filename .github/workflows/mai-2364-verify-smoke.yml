@@ -1,7 +1,8 @@
 name: MAI-2364 verify smoke (temporary)
 
 on:
-  workflow_dispatch: {}
+  push:
+    branches: [mai-2364-verify-smoke]
 
 jobs:
   verify:
