@@ -2,11 +2,65 @@
 ARG BASE_TAG=dev
 FROM paperclipai/agent-runtime-base:${BASE_TAG}
 
+# Google Cloud CLI, pinned to one release archive plus its sha256. Objects in
+# the cloud-sdk-release bucket are immutable, so these two ARGs reproduce the
+# same gcloud on every build, and gcloud ships inside the published image
+# instead of being installed per run. Bump both ARGs together.
+ARG GCLOUD_VERSION=584.0.0
+ARG GCLOUD_SHA256=02f0a54a1c5f9e582c568cd8da8258e22275b8ab033532fa03fd46bd9f7a3398
+
 USER root
 RUN npm install -g @openai/codex@latest \
     && { chown -R 1000:1000 /usr/lib/node_modules || true; }
+
+# The archive carries its own interpreter (platform/bundledpythonunix), which
+# bin/gcloud selects on x86_64, so the base image gains no python and nothing
+# outside /opt changes. Every bake target builds linux/amd64; fail the build
+# rather than ship a gcloud whose interpreter is missing on another arch.
+#
+# The symlink goes into /usr/local/bin instead of a PATH entry or a profile
+# snippet: a provider that wraps each command in a login shell takes its PATH
+# from /etc/profile, which resets it to /usr/local/bin:/usr/bin:/bin:... and
+# would drop an /opt path. The runtime never writes a profile or an rc file
+# (packages/plugins/sandbox-providers/SANDBOX-REQUIREMENTS.md, "Firm rule").
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" != "amd64" ]; then \
+      echo "gcloud install supports amd64 only, got $arch"; exit 1; \
+    fi; \
+    curl -fsSL -o /tmp/gcloud.tar.gz \
+      "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-${GCLOUD_VERSION}-linux-x86_64.tar.gz"; \
+    echo "${GCLOUD_SHA256}  /tmp/gcloud.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gcloud.tar.gz -C /opt; \
+    rm -f /tmp/gcloud.tar.gz; \
+    CLOUDSDK_CONFIG=/tmp/gcloud-build /opt/google-cloud-sdk/install.sh --quiet \
+      --usage-reporting=false --path-update=false --bash-completion=false \
+      --command-completion=false; \
+    rm -rf /tmp/gcloud-build /root/.config/gcloud /opt/google-cloud-sdk/.install/.backup; \
+    ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+
+# gcloud writes its logs, its active configuration and any credential it is
+# later handed below CLOUDSDK_CONFIG. /home/paperclip belongs to the root
+# filesystem, which is read-only under PSS Restricted; /tmp is a writable
+# mount. Without this the CLI warns on every invocation and fails as soon as a
+# command has to persist state. The install above deliberately leaves no
+# root-owned directory at this path, so uid 1000 creates it on first use.
+ENV CLOUDSDK_CONFIG=/tmp/gcloud \
+    CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true \
+    CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK=true
 
 USER 1000:1000
 
 # Verify the CLI is on PATH for the shim's exec.LookPath
 RUN command -v codex >/dev/null 2>&1 || (echo "codex not on PATH"; exit 1)
+
+# Same probe for gcloud, plus one through a login shell because that PATH comes
+# from /etc/profile rather than from this image's ENV. `--version` starts the
+# bundled interpreter, so it also proves gcloud runs as uid 1000 against the
+# root-owned install tree.
+RUN set -eu; \
+    command -v gcloud >/dev/null 2>&1 || { echo "gcloud not on PATH"; exit 1; }; \
+    sh -lc 'command -v gcloud >/dev/null 2>&1' \
+      || { echo "gcloud not on login-shell PATH"; exit 1; }; \
+    gcloud --version >/dev/null; \
+    rm -rf "${CLOUDSDK_CONFIG}"
