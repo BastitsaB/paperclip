@@ -62,6 +62,19 @@ docker buildx bake -f docker/agent-runtime/buildx-bake.hcl base claude --load
 docker run --rm ghcr.io/paperclipai/agent-runtime-claude:dev claude-code --version
 ```
 
+## Google Cloud CLI in the Codex Image
+
+`agent-runtime-codex` bundles `gcloud`, pinned via `GCLOUD_VERSION`/`GCLOUD_SHA256` in `Dockerfile.codex` against an immutable object in the `cloud-sdk-release` bucket — both ARGs move together on a version bump. The CLI is a build-time install baked into the published image (no per-run installation, no runtime write access needed to `/opt`). `CLOUDSDK_CONFIG=/tmp/gcloud` keeps writable state off the read-only root filesystem; the symlink lives in `/usr/local/bin` instead of a `PATH`/profile entry because a login-shell-wrapping provider resets `PATH` from `/etc/profile` before an `/opt` entry would apply (see `packages/plugins/sandbox-providers/SANDBOX-REQUIREMENTS.md`, "Firm rule"). The install only targets `linux/amd64` — the release archive's bundled Python interpreter has no other-arch build, so the build fails closed rather than shipping a `gcloud` with no interpreter.
+
+Smoke-test the CLI directly:
+
+```bash
+docker buildx bake -f docker/agent-runtime/buildx-bake.hcl codex --load
+docker run --rm ghcr.io/paperclipai/agent-runtime-codex:dev sh -lc 'command -v gcloud && gcloud --version && command -v codex'
+```
+
+Scope note: this covers `agent-runtime-codex`, consumed by the kubernetes sandbox provider (`packages/plugins/sandbox-providers/kubernetes/src/adapter-defaults.ts`). A `codex_local` run that does not go through that provider (e.g. the plain Paperclip container defined by the top-level `Dockerfile`) does not get `gcloud` from this image — that path is tracked separately.
+
 ## Agent Container (paperclip-agent-shim)
 
 The main agent process runs as the shim (PID 1 under tini). The shim:
