@@ -73,6 +73,7 @@ import {
   lt,
   lte,
   ne,
+  notExists,
   notInArray,
   or,
   sql,
@@ -18313,13 +18314,31 @@ export function heartbeatService(
   // sweep finds both stranded classes and moves each lease to pending_cleanup,
   // so the existing pending_cleanup sweep tears the sandbox down from the
   // data already on the lease row.
+  //
+  // Fork guards (see the coordinator note on the query below):
+  // - A run with a `native_run_finalizations` row is never touched. The
+  //   finalization coordinator deliberately keeps that run's lease open across
+  //   resumes, workspace copy-back retries and status commits; a terminal run
+  //   status is not proof that nobody needs the sandbox any more, and a
+  //   teardown here would destroy the workspace the copy-back still reads.
+  // - The run itself must have been terminal for the backoff window, not only
+  //   the lease row. The ordinary teardown writes the terminal run status
+  //   before it releases the lease, with awaited work in between; a lease
+  //   acquired long ago is already "stale" by `updatedAt`, so without this
+  //   guard a tick landing in that window would race the owner.
+  // - A `local` lease is closed directly instead of moved to pending_cleanup.
+  //   The local driver implements neither `destroyRunLease` nor
+  //   `retryPendingSandboxTeardown`, so the pending_cleanup sweep can never
+  //   finish such a row: it would stay unreleased forever and keep blocking
+  //   the execution-recovery resolve. A local lease owns nothing outside the
+  //   database, so closing the record is the whole cleanup.
   async function sweepOrphanedActiveLeases(opts: {
     backoffMs: number;
   }): Promise<{ recovered: number }> {
     const cutoff = new Date(Date.now() - opts.backoffMs);
 
     const rows = await db
-      .select({ lease: environmentLeases })
+      .select({ lease: environmentLeases, runStatus: heartbeatRuns.status })
       .from(environmentLeases)
       .leftJoin(
         heartbeatRuns,
@@ -18330,9 +18349,32 @@ export function heartbeatService(
           eq(environmentLeases.status, "active"),
           or(
             isNull(environmentLeases.heartbeatRunId),
-            inArray(heartbeatRuns.status, [
-              ...HEARTBEAT_RUN_TERMINAL_STATUSES,
-            ]),
+            and(
+              inArray(heartbeatRuns.status, [
+                ...HEARTBEAT_RUN_TERMINAL_STATUSES,
+              ]),
+              // `finished_at` is nullable on older rows, so fall back to the
+              // row's last write. Typed column operators on purpose: a raw
+              // `coalesce` fragment would bind the JS Date untyped.
+              or(
+                lte(heartbeatRuns.finishedAt, cutoff),
+                and(
+                  isNull(heartbeatRuns.finishedAt),
+                  lte(heartbeatRuns.updatedAt, cutoff),
+                ),
+              ),
+            ),
+          ),
+          // Coordinator guard: filtered in SQL rather than skipped per row, so
+          // coordinator-held leases never fill the fixed-size page and never
+          // get their `updatedAt` churned by a defer.
+          notExists(
+            db
+              .select({ runId: nativeRunFinalizations.runId })
+              .from(nativeRunFinalizations)
+              .where(
+                eq(nativeRunFinalizations.runId, environmentLeases.heartbeatRunId),
+              ),
           ),
           lte(environmentLeases.updatedAt, cutoff),
         ),
@@ -18341,7 +18383,26 @@ export function heartbeatService(
       .limit(ORPHANED_ACTIVE_LEASE_SWEEP_PAGE_SIZE);
 
     let recovered = 0;
-    for (const { lease } of rows) {
+    for (const { lease, runStatus } of rows) {
+      if (lease.provider === "local") {
+        const closed = await db
+          .update(environmentLeases)
+          .set({
+            status: leaseReleaseStatusForRunStatus(runStatus),
+            releasedAt: new Date(),
+            updatedAt: new Date(),
+            failureReason: "orphaned_active_lease_recovered",
+          })
+          .where(
+            and(
+              eq(environmentLeases.id, lease.id),
+              eq(environmentLeases.status, "active"),
+            ),
+          )
+          .returning({ id: environmentLeases.id });
+        if (closed.length > 0) recovered += 1;
+        continue;
+      }
       // A provider resource id names one physical sandbox. A different lease
       // row can still hold that same resource in a live status, so this sweep
       // must not tear down a sandbox that a different lease still owns.

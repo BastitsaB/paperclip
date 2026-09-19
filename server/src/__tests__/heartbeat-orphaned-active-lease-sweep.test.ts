@@ -8,6 +8,8 @@ import {
   environmentLeases,
   environments,
   heartbeatRuns,
+  issues,
+  nativeRunFinalizations,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -61,8 +63,10 @@ describeEmbeddedPostgres("heartbeat sweepOrphanedActiveLeases", () => {
   });
 
   afterEach(async () => {
+    await db.delete(nativeRunFinalizations);
     await db.delete(environmentLeases);
     await db.delete(heartbeatRuns);
+    await db.delete(issues);
     await db.delete(environments);
     await db.delete(agents);
     await db.delete(companies);
@@ -108,6 +112,10 @@ describeEmbeddedPostgres("heartbeat sweepOrphanedActiveLeases", () => {
     companyId: string;
     agentId: string;
     status: string;
+    // Fork: the sweep also requires the run itself to be terminal for the
+    // backoff window, so runs default to having finished an hour ago.
+    finishedAt?: Date;
+    nativeIssueId?: string;
   }): Promise<string> {
     const id = randomUUID();
     await db.insert(heartbeatRuns).values({
@@ -117,6 +125,10 @@ describeEmbeddedPostgres("heartbeat sweepOrphanedActiveLeases", () => {
       invocationSource: "on_demand",
       status: input.status,
       nextEventSeq: 1,
+      finishedAt: input.finishedAt ?? new Date(Date.now() - 60 * 60 * 1000),
+      ...(input.nativeIssueId
+        ? { runtimeMode: "native", nativeIssueId: input.nativeIssueId }
+        : {}),
     });
     return id;
   }
@@ -495,5 +507,145 @@ describeEmbeddedPostgres("heartbeat sweepOrphanedActiveLeases", () => {
     } finally {
       selectSpy.mockRestore();
     }
+  });
+  // Fork guards on top of upstream #13515: the finalization coordinator keeps
+  // its run's lease, a just-finished run is left to its own teardown, and a
+  // `local` lease is closed directly because the pending_cleanup sweep has no
+  // local teardown path.
+  describe("fork guards", () => {
+    async function seedLocalEnvironment(companyId: string): Promise<string> {
+      const id = randomUUID();
+      await db.insert(environments).values({
+        id,
+        companyId,
+        name: "Local",
+        driver: "local",
+        status: "active",
+        config: {},
+      });
+      return id;
+    }
+
+    async function seedNativeCoordinator(input: {
+      companyId: string;
+      agentId: string;
+    }): Promise<string> {
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId,
+        companyId: input.companyId,
+        title: "Native run with a finalization coordinator",
+        status: "in_progress",
+        priority: "high",
+        assigneeAgentId: input.agentId,
+      });
+      const runId = await insertHeartbeatRun({
+        companyId: input.companyId,
+        agentId: input.agentId,
+        status: "succeeded",
+        nativeIssueId: issueId,
+      });
+      await db.insert(nativeRunFinalizations).values({
+        runId,
+        companyId: input.companyId,
+        issueId,
+        phase: "committed",
+      });
+      return runId;
+    }
+
+    it("closes the local lease of a terminal legacy run directly", async () => {
+      const { companyId, agentId } = await seedCompanyAgentAndEnvironment();
+      const localEnvironmentId = await seedLocalEnvironment(companyId);
+      const runId = await insertHeartbeatRun({ companyId, agentId, status: "failed" });
+      const leaseId = await insertActiveLease({
+        companyId,
+        environmentId: localEnvironmentId,
+        heartbeatRunId: runId,
+        updatedAt: oldEnough(),
+        provider: "local",
+      });
+
+      const result = await heartbeatService(db).sweepOrphanedActiveLeases({
+        backoffMs: 5 * 60 * 1000,
+      });
+
+      expect(result).toEqual({ recovered: 1 });
+      const row = await leaseRow(leaseId);
+      // Released, not pending_cleanup: the local driver has no teardown the
+      // pending_cleanup sweep could complete.
+      expect(row?.status).toBe("failed");
+      expect(row?.releasedAt).not.toBeNull();
+      expect(row?.failureReason).toBe("orphaned_active_lease_recovered");
+    });
+
+    it("leaves the sandbox lease of a run with a finalization coordinator active, also on the startup call", async () => {
+      const { companyId, agentId, environmentId } = await seedCompanyAgentAndEnvironment();
+      const runId = await seedNativeCoordinator({ companyId, agentId });
+      const leaseId = await insertActiveLease({
+        companyId,
+        environmentId,
+        heartbeatRunId: runId,
+        updatedAt: oldEnough(),
+      });
+      const destroyRunLease = vi.fn(async () => null);
+      const heartbeat = heartbeatService(db, {
+        environmentRuntime: { destroyRunLease } as unknown as HeartbeatEnvironmentRuntime,
+      });
+
+      expect(await heartbeat.sweepOrphanedActiveLeases({ backoffMs: 5 * 60 * 1000 })).toEqual({
+        recovered: 0,
+      });
+      await heartbeat.reapOrphanedRuns({ staleThresholdMs: 0 });
+
+      expect(destroyRunLease).not.toHaveBeenCalled();
+      const row = await leaseRow(leaseId);
+      expect(row?.status).toBe("active");
+      expect(row?.releasedAt).toBeNull();
+    });
+
+    it("leaves the local lease of a run with a finalization coordinator active", async () => {
+      const { companyId, agentId } = await seedCompanyAgentAndEnvironment();
+      const localEnvironmentId = await seedLocalEnvironment(companyId);
+      const runId = await seedNativeCoordinator({ companyId, agentId });
+      const leaseId = await insertActiveLease({
+        companyId,
+        environmentId: localEnvironmentId,
+        heartbeatRunId: runId,
+        updatedAt: oldEnough(),
+        provider: "local",
+      });
+
+      const result = await heartbeatService(db).sweepOrphanedActiveLeases({
+        backoffMs: 5 * 60 * 1000,
+      });
+
+      expect(result).toEqual({ recovered: 0 });
+      expect((await leaseRow(leaseId))?.status).toBe("active");
+    });
+
+    it("leaves the sandbox lease of a run that finished inside the backoff window active", async () => {
+      const { companyId, agentId, environmentId } = await seedCompanyAgentAndEnvironment();
+      const runId = await insertHeartbeatRun({
+        companyId,
+        agentId,
+        status: "failed",
+        finishedAt: new Date(),
+      });
+      // The lease itself is old: it was acquired when the run started.
+      const leaseId = await insertActiveLease({
+        companyId,
+        environmentId,
+        heartbeatRunId: runId,
+        updatedAt: oldEnough(),
+      });
+
+      const result = await heartbeatService(db).sweepOrphanedActiveLeases({
+        backoffMs: 5 * 60 * 1000,
+      });
+
+      expect(result).toEqual({ recovered: 0 });
+      expect((await leaseRow(leaseId))?.status).toBe("active");
+    });
   });
 });
