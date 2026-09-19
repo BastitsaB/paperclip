@@ -18,7 +18,6 @@ import {
   issueComments,
   issueRecoveryActions,
   issueRelations,
-  issueRecoveryActions,
   issueTreeHoldMembers,
   issueTreeHolds,
   issues,
@@ -578,8 +577,11 @@ describeEmbeddedPostgres("heartbeat resolved dependency wake reconciliation", ()
     }
     const waits = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, companyId));
     expect(waits).toHaveLength(1);
+    // Fork: 5 statt upstream 8. Der Backstop ueberspringt execution-gehaltene Abhaengige schon vor dem
+    // Emit (ed67c85ce), die 3 Reconcile-Ticks koaleszieren daher nicht mehr in die Wartezeile; es
+    // bleiben die 5 koaleszierten Producer-Wakes.
     expect(waits[0]).toMatchObject({
-      status: "skipped", runId: null, reason: "execution_reconciliation_required", coalescedCount: 8,
+      status: "skipped", runId: null, reason: "execution_reconciliation_required", coalescedCount: 5,
       payload: { issueId: blockedIssueId, executionWait: { recoveryActionId: action.id } },
     });
     expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId))).toHaveLength(0);
