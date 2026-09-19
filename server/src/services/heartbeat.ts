@@ -13,6 +13,7 @@ import { aiConnectionBindingSchema } from "@paperclipai/shared";
 import { executionBlockerPredicate, getExecutionBlocker } from "./execution-blocker.js";
 import { CONVERSATION_CONTINUATION_POLICY, claimedAdapterType, runUsedConversationAdapter, hasConversationContinuationPolicy, isConversationAdapter } from "./conversation-continuation.js";
 import { recordExecutionWait } from "./execution-wait.js";
+import { isUniqueViolation } from "../db-errors.js";
 import { getNativeReviewAssignment, readNativeReviewAssignmentContext } from "./native-runtime/native-review-participant.js";
 import { claimQueuedNativeReviewRun } from "./native-runtime/native-review-dispatch.js";
 import { buildNativeReviewRequest } from "./native-runtime/native-review-prompt.js";
@@ -17651,6 +17652,66 @@ export function heartbeatService(
         }, false, true);
     if (!claimed) return null;
 
+    // Fix A (lazy locking): stamp executionRunId now that the run is actually running,
+    // not at queue time. Guard is idempotent — safe if called more than once.
+    //
+    // Stamped before any "running" side effect (live event, plugin lifecycle,
+    // wakeup "claimed") is published: the issues_open_routine_execution_uq
+    // partial index allows only one *locked* open routine_execution issue per
+    // routine identity, so a sibling execution issue that got its lock first
+    // makes this write fail with 23505. Previously that error escaped after the
+    // run had already been committed as "running", leaving it without a process
+    // until the orphan reaper marked it process_lost. Now the claim is released
+    // back to "queued" (same transactional release used for suppression races)
+    // and a later scheduling pass retries once the sibling's run drops the lock.
+    const claimedContext = parseObject(claimed.contextSnapshot);
+    const claimedIssueId = readNonEmptyString(claimedContext.issueId);
+    const claimedWakeReason = readNonEmptyString(claimedContext.wakeReason);
+    if (
+      !nativeReviewContext && claimedIssueId &&
+      claimedWakeReason !== "source_scoped_recovery_action"
+    ) {
+      const claimedAgent = await getAgent(claimed.agentId);
+      try {
+        await db
+          .update(issues)
+          .set({
+            executionRunId: claimed.id,
+            executionAgentNameKey: normalizeAgentNameKey(claimedAgent?.name),
+            executionLockedAt: claimedAt,
+            updatedAt: claimedAt,
+          })
+          .where(
+            and(
+              eq(issues.id, claimedIssueId),
+              eq(issues.companyId, claimed.companyId),
+              // Mention/context runs can touch an issue, but only the current assignee
+              // owns the issue execution lock shown as the active run.
+              eq(issues.assigneeAgentId, claimed.agentId),
+              claimed.scheduledRetryReason === "native_safe_replacement"
+                ? or(
+                    isNull(issues.checkoutRunId),
+                    eq(issues.checkoutRunId, claimed.id),
+                  )
+                : undefined,
+              or(
+                isNull(issues.executionRunId),
+                eq(issues.executionRunId, claimed.id),
+              ),
+            ),
+          );
+      } catch (error) {
+        if (!isUniqueViolation(error, "issues_open_routine_execution_uq"))
+          throw error;
+        await releaseRunClaimedJustBeforeSuppression(claimed.id);
+        logger.info(
+          { runId: claimed.id, issueId: claimedIssueId, agentId: claimed.agentId },
+          "claimQueuedRun: deferred run; routine execution lock held by a sibling execution issue",
+        );
+        return null;
+      }
+    }
+
     publishLiveEvent({
       companyId: claimed.companyId,
       type: "heartbeat.run.status",
@@ -17674,45 +17735,6 @@ export function heartbeatService(
 
     if (!nativeReviewContext) {
       await setWakeupStatus(claimed.wakeupRequestId, "claimed", { claimedAt });
-    }
-
-    // Fix A (lazy locking): stamp executionRunId now that the run is actually running,
-    // not at queue time. Guard is idempotent — safe if called more than once.
-    const claimedContext = parseObject(claimed.contextSnapshot);
-    const claimedIssueId = readNonEmptyString(claimedContext.issueId);
-    const claimedWakeReason = readNonEmptyString(claimedContext.wakeReason);
-    if (
-      !nativeReviewContext && claimedIssueId &&
-      claimedWakeReason !== "source_scoped_recovery_action"
-    ) {
-      const claimedAgent = await getAgent(claimed.agentId);
-      await db
-        .update(issues)
-        .set({
-          executionRunId: claimed.id,
-          executionAgentNameKey: normalizeAgentNameKey(claimedAgent?.name),
-          executionLockedAt: claimedAt,
-          updatedAt: claimedAt,
-        })
-        .where(
-          and(
-            eq(issues.id, claimedIssueId),
-            eq(issues.companyId, claimed.companyId),
-            // Mention/context runs can touch an issue, but only the current assignee
-            // owns the issue execution lock shown as the active run.
-            eq(issues.assigneeAgentId, claimed.agentId),
-            claimed.scheduledRetryReason === "native_safe_replacement"
-              ? or(
-                  isNull(issues.checkoutRunId),
-                  eq(issues.checkoutRunId, claimed.id),
-                )
-              : undefined,
-            or(
-              isNull(issues.executionRunId),
-              eq(issues.executionRunId, claimed.id),
-            ),
-          ),
-        );
     }
 
     return claimed;
