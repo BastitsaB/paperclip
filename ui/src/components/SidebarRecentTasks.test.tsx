@@ -153,7 +153,7 @@ describe("SidebarRecentTasks", () => {
       }
     });
 
-    const link = container.querySelector('a[href="/issues/issue-1"]');
+    const link = container.querySelector('a[href="/issues/PAP-1"]');
     expect(mockIssuesApi.get).toHaveBeenCalledWith("issue-1");
     expect(queryClient.getQueryData(["issues", "detail", "issue-1"])).toMatchObject({
       title: "Refreshed title",
@@ -185,7 +185,7 @@ describe("SidebarRecentTasks", () => {
     mockIssuesApi.get.mockImplementation(async (id: string) => tasks.find((task) => task.id === id));
     const queryClient = await render();
     const order = () => Array.from(container.querySelectorAll("a")).map((link) => link.getAttribute("href"));
-    const originalOrder = ["/issues/issue-3", "/issues/issue-2", "/issues/issue-1"];
+    const originalOrder = ["/issues/PAP-3", "/issues/PAP-2", "/issues/PAP-1"];
     expect(order()).toEqual(originalOrder);
     vi.useFakeTimers();
 
@@ -205,7 +205,7 @@ describe("SidebarRecentTasks", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(499); });
     expect(order()).toEqual(originalOrder);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(order()).toEqual(["/issues/issue-2", "/issues/issue-1", "/issues/issue-3"]);
+    expect(order()).toEqual(["/issues/PAP-2", "/issues/PAP-1", "/issues/PAP-3"]);
     expect(mockIssuesApi.get).toHaveBeenCalledTimes(3);
     queryClient.clear();
   });
@@ -290,7 +290,7 @@ describe("SidebarRecentTasks", () => {
     expect(mockIssuesApi.archiveFromInbox).toHaveBeenCalledWith("issue-1");
     expect(mockIssuesApi.update).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Recent Tasks");
-    expect(container.querySelector('a[href="/issues/issue-1"]')?.textContent).toContain(
+    expect(container.querySelector('a[href="/issues/PAP-1"]')?.textContent).toContain(
       "Archive me",
     );
     expect(readRecentTasks(
@@ -488,7 +488,7 @@ describe("SidebarRecentTasks", () => {
       await Promise.resolve();
     });
 
-    expect(container.querySelector('a[href="/issues/issue-2"]')?.textContent).toContain("Cross-tab task");
+    expect(container.querySelector('a[href="/issues/PAP-2"]')?.textContent).toContain("Cross-tab task");
   });
 
   it("preserves pending restart wake retries from before the snapshot storage migration", async () => {
@@ -518,6 +518,25 @@ describe("SidebarRecentTasks", () => {
     expect(window.localStorage.getItem("paperclip.recentTasks:company-1:user-1:restart-wake-retry")).toBeNull();
   });
 
+  it("links by identifier and falls back to the id when a task has none", async () => {
+    // A UUID link redirects to the identifier URL and reloads every task query.
+    recordRecentTask({
+      id: "issue-1", companyId: "company-1", title: "With identifier", identifier: "PAP-1",
+      status: "todo", updatedAt: new Date(1),
+    }, "user-1");
+    recordRecentTask({
+      id: "issue-2", companyId: "company-1", title: "Without identifier", identifier: null,
+      status: "todo", updatedAt: new Date(2),
+    }, "user-1");
+    mockIssuesApi.get.mockImplementation(async () => new Promise(() => undefined));
+
+    await render();
+
+    expect(container.querySelector('a[href="/issues/PAP-1"]')?.textContent).toContain("With identifier");
+    expect(container.querySelector('a[href="/issues/issue-2"]')?.textContent).toContain("Without identifier");
+    expect(container.querySelector('a[href="/issues/issue-1"]')).toBeNull();
+  });
+
   it("prunes tasks that become hidden", async () => {
     recordRecentTask({
       id: "issue-hidden",
@@ -543,7 +562,7 @@ describe("SidebarRecentTasks", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
 
-    expect(container.querySelector('a[href="/issues/issue-hidden"]')).toBeNull();
+    expect(container.querySelector('a[href="/issues/PAP-3"]')).toBeNull();
     expect(readRecentTasks(
       getRecentTasksStorageKey("company-1", "user-1"),
       "company-1",

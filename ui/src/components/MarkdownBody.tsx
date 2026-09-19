@@ -7,6 +7,7 @@ import { cn } from "../lib/utils";
 import { GithubIcon } from "@/components/icons/github-icon";
 import { Link, useCaseHref } from "@/lib/router";
 import { useTheme } from "../context/ThemeContext";
+import { useMarkdownIssueSummary } from "../context/MarkdownIssueSummariesContext";
 import { useOptionalCompany } from "../context/CompanyContext";
 import { mentionChipInlineStyle, parseMentionChipHref } from "../lib/mention-chips";
 import { issuesApi } from "../api/issues";
@@ -110,15 +111,19 @@ function MarkdownIssueLink({
   issuePathId: string;
   children: ReactNode;
 }) {
+  const knownSummary = useMarkdownIssueSummary(issuePathId);
   const { data } = useQuery({
     queryKey: queryKeys.issues.detail(issuePathId),
     queryFn: () => issuesApi.get(issuePathId),
     staleTime: 60_000,
+    // A summary from the page already carries everything this link renders.
+    enabled: knownSummary === null,
   });
 
-  const identifier = data?.identifier ?? issuePathId;
-  const title = data?.title ?? identifier;
-  const status = data?.status;
+  const summary = data ?? knownSummary;
+  const identifier = summary?.identifier ?? issuePathId;
+  const title = summary?.title ?? identifier;
+  const status = summary?.status;
   const issueLabel = title !== identifier ? `Issue ${identifier}: ${title}` : `Issue ${identifier}`;
 
   return (

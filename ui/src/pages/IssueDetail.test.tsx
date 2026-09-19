@@ -46,6 +46,7 @@ import type { issuesApi } from "../api/issues";
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
+  listCompact: vi.fn(),
   listAll: vi.fn(),
   listAcceptedPlanDecompositions: vi.fn(),
   listComments: vi.fn(),
@@ -1315,6 +1316,7 @@ describe("IssueDetail", () => {
 
     mockIssuesApi.list.mockResolvedValue([]);
     mockIssuesApi.listAll.mockImplementation((...args) => mockIssuesApi.list(...args));
+    mockIssuesApi.listCompact.mockResolvedValue([]);
     mockIssuesApi.listComments.mockResolvedValue([]);
     mockIssuesApi.listAttachments.mockResolvedValue([]);
     mockIssuesApi.listWorkProducts.mockResolvedValue([]);
@@ -5207,7 +5209,7 @@ describe("IssueDetail", () => {
       identifier: "PAP-9",
       title: "Mentionable task",
     };
-    mockIssuesApi.list.mockImplementation(
+    mockIssuesApi.listCompact.mockImplementation(
       (_companyId: string, filters?: { sortField?: string }) =>
         Promise.resolve(
           filters?.sortField === "updated" ? [mentionPoolIssue] : [],
@@ -5232,7 +5234,7 @@ describe("IssueDetail", () => {
         ]),
       );
     });
-    expect(mockIssuesApi.list).toHaveBeenCalledWith(
+    expect(mockIssuesApi.listCompact).toHaveBeenCalledWith(
       "company-1",
       expect.objectContaining({ sortField: "updated" }),
     );

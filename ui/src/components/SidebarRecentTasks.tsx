@@ -5,6 +5,7 @@ import { agentsApi } from "@/api/agents";
 import { authApi } from "@/api/auth";
 import { issuesApi } from "@/api/issues";
 import { queryKeys } from "@/lib/queryKeys";
+import { createIssueDetailPath } from "@/lib/issueDetailBreadcrumb";
 import { useRecentTasks } from "@/hooks/useRecentTasks";
 import { useSidebar } from "@/context/SidebarContext";
 import { useOptionalToastActions } from "@/context/ToastContext";
@@ -253,7 +254,9 @@ function RecentTasksList({
         {entries.map((entry) => (
           <div key={entry.id} className="sidebar-action-row group/recent-task relative">
             <SidebarNavItem
-              to={`/issues/${entry.id}`}
+              // Link by identifier: a UUID link lands on the task, then
+              // redirects to the identifier URL and reloads every task query.
+              to={createIssueDetailPath(entry.identifier ?? entry.id)}
               label={entry.title}
               className={rail ? undefined : "sidebar-action-link pointer-coarse:pr-8"}
               liveCount={liveIssueIds.has(entry.id) ? 1 : undefined}
