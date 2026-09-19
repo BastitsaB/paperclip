@@ -1,5 +1,5 @@
 import { executionProjectionsForRuns } from "./execution-projection.js";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -422,16 +422,40 @@ export function activityService(db: Db) {
         .where(
           and(
             eq(heartbeatRuns.companyId, companyId),
-            or(
-              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-              sql`exists (
-                select 1
-                from ${activityLog}
-                where ${activityLog.companyId} = ${companyId}
-                  and ${activityLog.entityType} = 'issue'
-                  and ${activityLog.entityId} = ${issueId}
-                  and ${activityLog.runId} = ${heartbeatRuns.id}
-              )`,
+            // Resolve the candidate run ids first and join them through the
+            // primary key. The former `snapshot OR exists(activity)` predicate
+            // could use neither index, so the planner read and detoasted every
+            // run snapshot of the company. Each union arm is indexable on its
+            // own: the snapshot arm through
+            // heartbeat_runs_company_ctx_issue_created_idx (the expression must
+            // stay byte-identical to that index), the activity arm through
+            // activity_log_entity_type_id_idx.
+            inArray(
+              heartbeatRuns.id,
+              db
+                .select({ runId: heartbeatRuns.id })
+                .from(heartbeatRuns)
+                .where(
+                  and(
+                    eq(heartbeatRuns.companyId, companyId),
+                    sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+                  ),
+                )
+                .union(
+                  db
+                    // `run_id` is nullable in the schema; the isNotNull filter
+                    // below makes the non-null union row type true.
+                    .select({ runId: sql<string>`${activityLog.runId}` })
+                    .from(activityLog)
+                    .where(
+                      and(
+                        eq(activityLog.companyId, companyId),
+                        eq(activityLog.entityType, "issue"),
+                        eq(activityLog.entityId, issueId),
+                        isNotNull(activityLog.runId),
+                      ),
+                    ),
+                ),
             ),
           ),
         )

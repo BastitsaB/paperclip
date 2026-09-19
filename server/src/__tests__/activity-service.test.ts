@@ -117,6 +117,84 @@ describeEmbeddedPostgres("activity service", () => {
     expect(result.map((event) => event.action)).toEqual(["test.newest", "test.middle"]);
   });
 
+  it("lists issue runs linked by snapshot or by issue activity, once each, scoped to the company", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const issueId = randomUUID();
+    for (const [id, agent] of [[companyId, agentId], [otherCompanyId, otherAgentId]] as const) {
+      await db.insert(companies).values({
+        id,
+        name: "Paperclip",
+        issuePrefix: `T${id.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await db.insert(agents).values({
+        id: agent,
+        companyId: id,
+        name: "CodexCoder",
+        role: "engineer",
+        status: "idle",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      });
+    }
+
+    const snapshotOnlyRunId = randomUUID();
+    const activityOnlyRunId = randomUUID();
+    const bothRunId = randomUUID();
+    const unrelatedRunId = randomUUID();
+    const foreignRunId = randomUUID();
+    const run = (id: string, createdAt: string, contextSnapshot: Record<string, unknown>) => ({
+      id,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "succeeded",
+      contextSnapshot,
+      createdAt: new Date(createdAt),
+    });
+    await db.insert(heartbeatRuns).values([
+      run(snapshotOnlyRunId, "2026-04-21T10:00:00.000Z", { issueId }),
+      run(activityOnlyRunId, "2026-04-21T11:00:00.000Z", {}),
+      run(bothRunId, "2026-04-21T12:00:00.000Z", { issueId }),
+      run(unrelatedRunId, "2026-04-21T13:00:00.000Z", { issueId: randomUUID() }),
+      {
+        ...run(foreignRunId, "2026-04-21T14:00:00.000Z", { issueId }),
+        companyId: otherCompanyId,
+        agentId: otherAgentId,
+      },
+    ]);
+    const issueActivity = (runId: string, company = companyId) => ({
+      companyId: company,
+      actorType: "system",
+      actorId: "system",
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: issueId,
+      runId,
+    });
+    await db.insert(activityLog).values([
+      issueActivity(activityOnlyRunId),
+      issueActivity(bothRunId),
+      issueActivity(bothRunId),
+      issueActivity(foreignRunId, otherCompanyId),
+      // Activity on a different entity never links a run to this issue.
+      { ...issueActivity(unrelatedRunId), entityType: "project" },
+    ]);
+
+    const runs = await activityService(db).runsForIssue(companyId, issueId);
+
+    expect(runs.map((entry) => entry.runId)).toEqual([
+      bothRunId,
+      activityOnlyRunId,
+      snapshotOnlyRunId,
+    ]);
+  });
+
   it("returns compact usage and result summaries for issue runs", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
