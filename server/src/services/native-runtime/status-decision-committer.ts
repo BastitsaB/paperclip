@@ -581,14 +581,14 @@ async function materializeDecisionEffect(input: {
       { kind: "request_confirmation" }
     > = {
       kind: "request_confirmation",
-      idempotencyKey: `native-review:${input.decisionId}`,
+      idempotencyKey: `native-review:${input.decisionId}${effect.requestKey ? `:${effect.requestKey}` : ""}`,
       sourceRunId: input.runId,
       resolverPolicy: effect.ownerAgentId ? "anyone" : "human_only",
       addresseeAgentId: effect.ownerAgentId ?? null,
       addresseeUserId: effect.ownerUserId,
-      title: "Native completion review",
+      title: "Review requested",
       summary:
-        "The native runner requires authoritative review before completion.",
+        effect.prompt,
       continuationPolicy: "wake_assignee",
       payload: {
         version: 1,
@@ -612,6 +612,24 @@ async function materializeDecisionEffect(input: {
       reviewInput,
       { systemId: "native-status-committer", runId: input.runId },
     );
+    // The card and its next actor commit together. The post-commit dispatcher
+    // revalidates this exact review before granting a scoped reviewer run.
+    const reviewContext = {
+      nativeReviewInteractionId: interaction.id,
+      nativeReviewDecisionId: input.decisionId,
+    };
+    const reviewerWakeId = effect.ownerAgentId && interaction.effectiveResolverPolicy !== "human_only"
+      ? await enqueueWake({
+          tx: input.tx,
+          companyId: input.companyId,
+          issueId: input.issue.id,
+          agentId: effect.ownerAgentId,
+          reason: "native_completion_review",
+          idempotencyKey: `native-review:${interaction.id}`,
+          payload: reviewContext,
+          contextSnapshot: { ...reviewContext, forceFreshSession: true },
+        })
+      : null;
     return {
       effectKind: effect.kind,
       targetType: "issue_thread_interaction",
@@ -621,6 +639,7 @@ async function materializeDecisionEffect(input: {
         interactionKind: interaction.kind,
         ownerUserId: effect.ownerUserId,
         ownerAgentId: effect.ownerAgentId ?? null,
+        reviewerWakeId,
       },
     };
   }

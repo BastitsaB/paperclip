@@ -83,8 +83,8 @@ d("heartbeat context_snapshot expression index migration", () => {
     for (const migration of [
       "./migrations/0209_heartbeat_context_snapshot_indexes.sql",
       "./migrations/0210_heartbeat_context_taskkey_index.sql",
-      "./migrations/0276_heartbeat_runs_paperclip_issue_index.sql",
-      "./migrations/0277_heartbeat_runs_creation_source_index.sql",
+      "./migrations/0281_heartbeat_runs_paperclip_issue_index.sql",
+      "./migrations/0282_heartbeat_runs_creation_source_index.sql",
     ]) {
       const migrationSql = await readFile(
         fileURLToPath(new URL(migration, import.meta.url)),

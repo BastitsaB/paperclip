@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { AiConnectionCredentialStep } from "@/components/ai-connections/AiConnectionCredentialStep";
+import { ConnectionChoiceList } from "./ConnectionChoiceList";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
@@ -32,6 +34,7 @@ import type {
   ToolOAuthStartResult,
 } from "@paperclipai/shared";
 import {
+  aiConnectionMetadataSchema,
   connectionMethodAcceptsCustomerOAuthClient,
   connectionMethodRequiresConfiguration,
   connectionMethodSupportsAutomaticOAuth,
@@ -63,7 +66,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { copyTextToClipboard } from "@/lib/clipboard";
+import { useCopyAction } from "@/lib/use-copy-action";
 import { resolveAuthorizationTarget } from "@/lib/authorizationUrl";
 import { navigateTopLevel } from "@/lib/browserNavigation";
 import { prepareOAuthNavigation, savePendingCloudHandoff } from "@/lib/oauthHandoff";
@@ -276,6 +279,7 @@ function appConnectHref(
     resumeConnectionId?: string | null;
     reconnectConnectionId?: string | null;
     interactionId?: string | null;
+    connectionMethodKey?: string | null;
   },
 ): string {
   const stage = ROUTE_STAGE_BY_STEP[step] ?? "setup";
@@ -283,6 +287,7 @@ function appConnectHref(
   if (existing?.resumeConnectionId) params.set("resume", existing.resumeConnectionId);
   if (existing?.reconnectConnectionId) params.set("reconnect", existing.reconnectConnectionId);
   if (existing?.interactionId) params.set("intent", existing.interactionId);
+  if (existing?.connectionMethodKey) params.set("method", existing.connectionMethodKey);
   const path = credentialSource === "vercel_connect" ? "/apps/vercel-connect" : "/apps/connect";
   return `${path}?${params.toString()}`;
 }
@@ -310,6 +315,11 @@ const SELECTED_APP_STEP_INDEX: Record<Exclude<Step, "gallery" | "success">, numb
   key: 1,
 };
 const ZAPIER_STEP_LABELS = ["Access", "Add MCP URL"];
+// Waiting for browser sign-in happens *inside* the flow's last step, so the
+// waiting screen reuses the step model of the flow that opened it. It must not
+// append a trailing step the flow never lands on: a stepper that grows from two
+// dots to three the moment you press Connect reads as a step you missed.
+const OAUTH_SIGN_IN_STEP_LABELS = ["Access", "Sign in"];
 
 /**
  * Which identity a fresh connection should default to (PAP-17835).
@@ -364,7 +374,7 @@ function availableToolConnectionMethods(
   entry: AppDefinition,
 ): ConnectionMethodDef[] {
   return getAvailableConnectionMethods(entry).filter(
-    (method) => (method.purpose ?? "tool") === "tool",
+    (method) => (method.purpose ?? "tool") !== "channel",
   );
 }
 
@@ -495,6 +505,9 @@ export function readConnectionIntentOAuthOutcome(
 }
 
 export interface ConnectionSetupFlowProps {
+  aiConnection?: import("@paperclipai/shared").AiConnectionBinding;
+  /** Provider-specific authentication inside the existing access/setup shell. Undefined retains the standard credential form. */
+  renderCredentialStep?: (context: { app: AppDefinition; name: string; grantKind: ConnectionGrantKind; agentIds: string[]; allAgents: boolean; onBack: () => void }) => ReactNode;
   byoOnly?: boolean;
   credentialSource?: ToolConnectionCredentialSource;
   host?: "page" | "dialog";
@@ -530,8 +543,10 @@ export function ConnectionSetupFlow({
   onUseExisting,
   onComplete,
   onOAuthDeclined,
+  aiConnection,
   onPhaseChange,
   onCancel,
+  renderCredentialStep,
 }: ConnectionSetupFlowProps = {}) {
   const routeNavigate = useNavigate();
   const navigate = useCallback((to: string, options?: { replace?: boolean }) => {
@@ -552,6 +567,7 @@ export function ConnectionSetupFlow({
   const sourceSlug = searchParams.get("source")?.trim() || null;
   const createNewConnection = forceNewConnection || searchParams.get("new") === "1";
   const routeStage = searchParams.get("stage")?.trim() || null;
+  const requestedMethodKey = searchParams.get("method")?.trim() || null;
   const resumeConnectionId = searchParams.get("resume")?.trim() || null;
   const oauthCallbackOutcome = searchParams.get("oauth");
   const oauthCallbackCode = searchParams.get("code");
@@ -621,7 +637,7 @@ export function ConnectionSetupFlow({
   const [curatedOAuthClientId, setCuratedOAuthClientId] = useState("");
   const [curatedOAuthClientSecret, setCuratedOAuthClientSecret] = useState("");
   const [vercelConnector, setVercelConnector] = useState("");
-  const [connectionMethodKey, setConnectionMethodKey] = useState("");
+  const [connectionMethodKey, setConnectionMethodKey] = useState(aiConnection && aiConnection.mode !== "responsible_user" ? `ai-${aiConnection.method}` : "");
   const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({});
   const [googleSheetsLinks, setGoogleSheetsLinks] = useState("");
   const [googleSheetsError, setGoogleSheetsError] = useState<string | null>(null);
@@ -906,6 +922,10 @@ export function ConnectionSetupFlow({
   const galleryQuery = useQuery({
     queryKey: queryKeys.apps.gallery(selectedCompanyId ?? "__none__"),
     queryFn: () => toolsApi.listGallery(selectedCompanyId!),
+    select: useCallback((data: Awaited<ReturnType<typeof toolsApi.listGallery>>) => connectionIntentId ? {
+      ...data,
+      apps: data.apps.map(app => ({ ...app, methods: app.methods.filter(method => aiConnection ? method.ai?.provider === aiConnection.provider && (aiConnection.mode === "responsible_user" || method.ai.method === aiConnection.method) : method.transport !== "runtime_auth") })).filter(app => app.methods.length > 0),
+    } : data, [connectionIntentId, aiConnection?.provider, aiConnection?.method, aiConnection?.mode]),
     enabled: !!selectedCompanyId,
   });
   // Use the same visible catalog for cards and every branded URL shortcut.
@@ -1136,6 +1156,7 @@ export function ConnectionSetupFlow({
     setStep(nextStep);
     if (entry) {
       navigate(appConnectHref(entry.slug, nextStep, credentialSource, {
+        connectionMethodKey: entry.methods.find(method => method.key === connectionMethodKey)?.ai ? connectionMethodKey : undefined,
         resumeConnectionId,
         reconnectConnectionId,
         interactionId: connectionIntentId,
@@ -1402,7 +1423,13 @@ export function ConnectionSetupFlow({
       && connectorEnrollmentQuery.isLoading
     ) return;
     const methods = connectionMethodsForCredentialSource(requestedEntry, credentialSource);
-    const initialMethod = (
+    const requestedAi = aiConnection ?? (reconnectConnection?.connectionPurpose === "ai"
+      ? aiConnectionMetadataSchema.safeParse(reconnectConnection.config?.ai).data
+      : undefined);
+    const explicitMethod = methods.find(candidate => requestedAi
+      ? candidate.ai?.provider === requestedAi.provider && (!("mode" in requestedAi) || requestedAi.mode !== "responsible_user") && candidate.ai.method === requestedAi.method
+      : candidate.key === requestedMethodKey);
+    const initialMethod = explicitMethod ?? (
       requestedDefinitionUsesManagedConnector
         && !requestedEntryAdvertisesManagedConnector
         ? recommendedManagedConnectorMethod(fullRequestedDefinition)
@@ -1502,6 +1529,8 @@ export function ConnectionSetupFlow({
       return;
     }
   }, [
+    aiConnection,
+    requestedMethodKey,
     applicationsQuery.isError,
     applicationsQuery.isFetchedAfterMount,
     applicationsQuery.data,
@@ -1528,6 +1557,10 @@ export function ConnectionSetupFlow({
     routeStage,
     zapierSource,
   ]);
+
+  useEffect(() => {
+    if (reconnectConnection?.connectionPurpose === "ai" && step === "access") setStep("key");
+  }, [reconnectConnection?.connectionPurpose, step]);
 
   // Resume the exact method and non-secret provider configuration that the
   // interrupted draft already chose. Secrets are intentionally never read back
@@ -1662,7 +1695,7 @@ export function ConnectionSetupFlow({
   });
 
   if (!selectedCompanyId) {
-    return <div className="p-6 text-sm text-muted-foreground">Select a company to connect apps.</div>;
+    return <div className="p-6 text-sm text-muted-foreground">Select an organization to connect apps.</div>;
   }
 
   if (
@@ -1704,7 +1737,7 @@ export function ConnectionSetupFlow({
       <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-6">
         <h2 className="text-lg font-semibold text-foreground">This setup can’t be resumed</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          The saved connection no longer exists or is not available to this company.
+          The saved connection no longer exists or is not available to this organization.
         </p>
         <Button type="button" variant="outline" className="mt-5" onClick={() => navigate("/apps")}>
           Back to apps
@@ -1724,7 +1757,7 @@ export function ConnectionSetupFlow({
         <h2 className="text-lg font-semibold text-foreground">This connection can’t be reconnected</h2>
         <p className="mt-2 text-sm text-muted-foreground">
           {!reconnectConnection
-            ? "The retained connection no longer exists or is not available to this company."
+            ? "The retained connection no longer exists or is not available to this organization."
             : "This reconnect link does not match the retained connection's provider."}
         </p>
         <Button type="button" variant="outline" className="mt-5" onClick={() => navigate("/apps")}>
@@ -1806,38 +1839,22 @@ export function ConnectionSetupFlow({
             Reuse a connection without changing who already has access, or connect a new one.
           </p>
         </div>
-        <div className="space-y-2">
-          {existingConnections.map((connection) => (
-            <button
-              key={connection.id}
-              type="button"
-              className="flex w-full items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={existingConnectionPendingId !== null}
-              onClick={async () => {
-                setExistingConnectionPendingId(connection.id);
-                setExistingConnectionError(null);
-                try {
-                  await onUseExisting(connection.id);
-                } catch (error) {
-                  setExistingConnectionError(error instanceof Error ? error.message : "Couldn’t use this connection.");
-                  setExistingConnectionPendingId(null);
-                }
-              }}
-            >
-              <span>
-                <span className="block font-medium text-foreground">{connection.name}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {connection.status === "active" && connection.enabled ? "Ready to use" : "Setup needs attention"}
-                </span>
-              </span>
-              {existingConnectionPendingId === connection.id ? (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              )}
-            </button>
-          ))}
-        </div>
+        <ConnectionChoiceList
+          choices={existingConnections.map((connection) => ({
+            id: connection.id, name: connection.name,
+            description: connection.status === "active" && connection.enabled ? "Ready to use" : "Setup needs attention",
+          }))}
+          pendingId={existingConnectionPendingId}
+          onSelect={async (id) => {
+            setExistingConnectionPendingId(id);
+            setExistingConnectionError(null);
+            try { await onUseExisting(id); }
+            catch (error) {
+              setExistingConnectionError(error instanceof Error ? error.message : "Couldn’t use this connection.");
+              setExistingConnectionPendingId(null);
+            }
+          }}
+        />
         {existingConnectionError ? (
           <InlineBanner tone="danger" className="mt-4">{existingConnectionError}</InlineBanner>
         ) : null}
@@ -1975,6 +1992,9 @@ export function ConnectionSetupFlow({
           name: linkName.trim() || endpointHost(linkUrl) || "this server",
           unverifiedHost: endpointHost(linkUrl),
         }}
+        // A pasted endpoint walks the generic three-step wizard, so keep that
+        // model rather than dropping to the curated two-step one.
+        steps={{ labels: STEP_LABELS, activeIndex: STEP_INDEX.key }}
         phase={oauthPhase}
         error={oauthError}
         authorizationHost={authorizationHost}
@@ -2023,7 +2043,23 @@ export function ConnectionSetupFlow({
   const zapierEntry = zapierSource
     ? galleryQuery.data?.apps.find((app) => app.slug === "zapier") ?? null
     : null;
-  const stepLabels = zapierSource
+  const reconnectAiMethod = reconnectConnection?.connectionPurpose === "ai"
+    ? aiConnectionMetadataSchema.safeParse(reconnectConnection.config?.ai).data
+    : undefined;
+  const aiMethod = reconnectAiMethod ?? entry?.methods.find(method => method.key === connectionMethodKey)?.ai
+    ?? (!connectionMethodKey && entry?.methods.every(method => method.ai) ? entry.methods[0]?.ai : undefined);
+  const credentialStep = entry ? renderCredentialStep?.({ app: entry, name: galleryName || entry.name, grantKind: effectiveGrantKind, agentIds: [...installAgentIds], allAgents: installChoice === "all", onBack: () => setAppStep("access") }) ?? (aiMethod && selectedCompanyId ? <><AiConnectionCredentialStep
+    companyId={selectedCompanyId} provider={aiMethod.provider} fixedMethod={Boolean(aiConnection && aiConnection.mode !== "responsible_user")} initialMethod={reconnectConnection?.connectionPurpose === "ai" ? (reconnectConnection.config?.ai as { method: "subscription" | "api_key" }).method : aiMethod.method}
+    connectionId={reconnectConnection?.connectionPurpose === "ai" ? reconnectConnection.id : undefined}
+    name={reconnectConnection?.connectionPurpose === "ai" ? reconnectConnection.name : galleryName || `My ${entry.name} ${aiMethod.method === "subscription" ? "subscription" : "API"}`}
+    ownership={(reconnectConnection?.connectionPurpose === "ai" ? reconnectConnection.credentialPolicy === "shared" : effectiveGrantKind === "organization") ? "shared" : "personal"}
+    agentIds={[...installAgentIds]} allAgents={installChoice === "all"}
+    onCancel={() => onCancel ? onCancel() : navigate("/apps")}
+    onComplete={result => { onComplete?.({ connectionId: result.connectionId }); if (!onComplete) navigate(`/apps/${result.connectionId}/permissions`); }}
+  /></> : undefined) : undefined;
+  const stepLabels = reconnectConnection?.connectionPurpose === "ai" ? ["Reconnect account"] : credentialStep !== undefined
+    ? ["Access", "Connect account"]
+    : zapierSource
     ? ZAPIER_STEP_LABELS
     : entry && setupCredentialSourceMethods.length > 1
       ? ["Access", "Choose connection"]
@@ -2055,7 +2091,7 @@ export function ConnectionSetupFlow({
     ? `Continue to ${entry?.name ?? "sign-in"}`
     : accessStepAuthKind === "oauth" ? "Continue" : "Save and continue";
 
-  const stepIndex = (zapierSource || entry) && step !== "gallery" && step !== "success"
+  const stepIndex = reconnectConnection?.connectionPurpose === "ai" ? 0 : (zapierSource || entry) && step !== "gallery" && step !== "success"
     ? SELECTED_APP_STEP_INDEX[step]
     : step === "success"
       ? stepLabels.length
@@ -2188,7 +2224,7 @@ export function ConnectionSetupFlow({
             </div>
           </div>
         </div>
-      ) : step === "key" && entry ? (
+      ) : step === "key" && entry && credentialStep !== undefined ? credentialStep : step === "key" && entry ? (
         <KeyStep
           entry={entry}
           error={connectMutation.isError ? (connectMutation.error instanceof Error ? connectMutation.error.message : "Please check your key and try again.") : null}
@@ -2330,6 +2366,15 @@ export function ConnectionSetupFlow({
       )}
 
       {step === "access" && (
+        <>
+        {entry?.slug === "railway" && (
+          <div className="mb-6 space-y-3 text-sm text-muted-foreground">
+            <p>{accessStepMethod?.guidanceMd}</p>
+            <ul className="list-disc space-y-2 pl-5">
+              {accessStepMethod?.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
+            </ul>
+          </div>
+        )}
         <AccessStep
           companyId={selectedCompanyId}
           authKind={accessStepAuthKind}
@@ -2347,7 +2392,7 @@ export function ConnectionSetupFlow({
           continuesToProvider={accessContinuesToProvider}
           identityLoading={Boolean(automaticOAuthEntry) && directOAuthLookupPending}
           preserveAgentAccess={Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection))}
-          pending={connectMutation.isPending || oauthStartMutation.isPending}
+          pending={connectMutation.isPending || oauthStartMutation.isPending || Boolean(requestedAppKey && !entry)}
           onBack={backToGallery}
           onContinue={() => {
             if (directOAuthEntry) {
@@ -2363,6 +2408,7 @@ export function ConnectionSetupFlow({
             else setStep("key");
           }}
         />
+        </>
       )}
 
       {step === "success" && (
@@ -2426,17 +2472,25 @@ function StepHeader({
         </Button>
       </div>
       {step !== "gallery" && (
-        <div className="mt-4">
-          <div className="flex gap-2">
+        // A landmark with stable hooks, so the step model can be read without
+        // guessing at Tailwind classes. The dots are decoration — the label
+        // line below already says the same thing, so announcing both would
+        // read every step name twice.
+        <nav className="mt-4" aria-label="Setup progress" data-testid="wizard-stepper">
+          <ol className="flex gap-2" aria-hidden="true">
             {labels.map((label, i) => (
-              <div
+              <li
                 key={label}
+                data-testid="wizard-step-dot"
+                data-step-active={i === activeIndex ? "true" : undefined}
                 className={cn("h-1 w-20 rounded-full", i <= activeIndex ? "bg-foreground" : "bg-border")}
               />
             ))}
+          </ol>
+          <div className="mt-2 text-xs text-muted-foreground" data-testid="wizard-step-labels">
+            {labels.join("   ·   ")}
           </div>
-          <div className="mt-2 text-xs text-muted-foreground">{labels.join("   ·   ")}</div>
-        </div>
+        </nav>
       )}
     </div>
   );
@@ -2451,6 +2505,7 @@ export function OAuthConnectStateScreen({
   recoveryActions,
   authorizationHost,
   authorizationUrl,
+  steps = { labels: OAUTH_SIGN_IN_STEP_LABELS, activeIndex: 1 },
   onRetry,
   onOpenAuthorization,
   onBack,
@@ -2473,6 +2528,12 @@ export function OAuthConnectStateScreen({
   authorizationHost?: string | null;
   /** Already validated by prepareOAuthNavigation; used for a native browser link. */
   authorizationUrl?: string | null;
+  /**
+   * Step model of the flow that opened this screen, so the stepper keeps the
+   * shape it had on the previous screen. Defaults to the two-step curated
+   * sign-in model for hosts that have no wizard of their own.
+   */
+  steps?: { labels: string[]; activeIndex: number };
   onOpenAuthorization?: () => void;
   onRetry: () => void;
   onBack: () => void;
@@ -2511,8 +2572,8 @@ export function OAuthConnectStateScreen({
       <StepHeader
         subtitle="Secure MCP sign-in"
         step="key"
-        activeIndex={1}
-        labels={["Access", "Sign in", "Ready"]}
+        activeIndex={steps.activeIndex}
+        labels={steps.labels}
         appIdentity={entry ? { name: entry.name, logoUrl: entry.branding.logoUrl, darkLogoUrl: entry.branding.darkLogoUrl } : undefined}
         unverifiedHost={unverifiedHost}
         onCancel={onCancel}
@@ -3448,15 +3509,7 @@ function KeyStep({
                 >
                   {robotEmail}
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={() => void copyTextToClipboard(robotEmail).catch(() => {})}
-                >
-                  <Copy className="mr-2 h-4 w-4" />
-                  Copy
-                </Button>
+                <CopyValueButton value={robotEmail} ariaLabel="Copy sharing email" />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 In Google Sheets, click Share and add this email as an Editor. Then paste the sheet links below.
@@ -3666,6 +3719,27 @@ function KeyStep({
   );
 }
 
+/**
+ * The Copy button beside a value the operator has to paste into another
+ * product's console. Both of those values are long and opaque, so the button
+ * has to say whether the clipboard actually took it.
+ */
+function CopyValueButton({ value, ariaLabel }: { value: string; ariaLabel: string }) {
+  const { copied, failed, copy } = useCopyAction();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="shrink-0"
+      aria-label={ariaLabel}
+      onClick={() => void copy(value)}
+    >
+      {copied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+      {copied ? "Copied" : failed ? "Copy failed" : "Copy"}
+    </Button>
+  );
+}
+
 function OAuthClientFields({
   entry,
   method,
@@ -3716,15 +3790,7 @@ function OAuthClientFields({
             >
               {callbackUrl}
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="shrink-0"
-              onClick={() => void copyTextToClipboard(callbackUrl).catch(() => {})}
-            >
-              <Copy className="mr-2 h-4 w-4" />
-              Copy
-            </Button>
+            <CopyValueButton value={callbackUrl} ariaLabel="Copy callback URL" />
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
             Add this exact URL to {entry.name} before continuing. It must match the authorization request.
@@ -3944,7 +4010,7 @@ export function AccessStep({
                       ? githubIdentity ? "My GitHub account" : "Just me"
                       : allowedGrantKinds[0] === "agent"
                         ? "A dedicated account for an agent"
-                        : githubIdentity ? "Shared company GitHub account (advanced)" : "Any human in the company"}
+                        : githubIdentity ? "Shared organization GitHub account (advanced)" : "Any human in the organization"}
                   </div>
                   {githubIdentity ? (
                     <p className="mt-1 text-xs text-muted-foreground">
@@ -3989,14 +4055,14 @@ export function AccessStep({
                   },
                   {
                     value: "organization",
-                    title: githubIdentity ? "Shared company GitHub account (advanced)" : "Any human in the company",
+                    title: githubIdentity ? "Shared organization GitHub account (advanced)" : "Any human in the organization",
                     description: githubIdentity
                       ? "Eligible agents use one shared credential, regardless of who starts the run."
                       : undefined,
                     icon: <UsersRound className="h-4 w-4" aria-hidden="true" />,
                     accessibleLabel: canCreateOrganizationGrant
-                      ? githubIdentity ? "Shared company GitHub account (advanced)" : "Any human in the company"
-                      : `${githubIdentity ? "Shared company GitHub account (advanced)" : "Any human in the company"}. Unavailable: ${capabilities?.organizationGrantReason ??
+                      ? githubIdentity ? "Shared organization GitHub account (advanced)" : "Any human in the organization"
+                      : `${githubIdentity ? "Shared organization GitHub account (advanced)" : "Any human in the organization"}. Unavailable: ${capabilities?.organizationGrantReason ??
                         "Only a connection manager can share this credential with the organization."}`,
                     tooltip: canCreateOrganizationGrant
                       ? undefined

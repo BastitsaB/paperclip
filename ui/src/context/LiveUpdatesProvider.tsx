@@ -527,6 +527,8 @@ function invalidateVisibleIssueRunQueries(
       // A final comment can race the last in-flight history fetch. Reconcile
       // persisted messages after the turn settles.
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueRef) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.attachments(issueRef) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(issueRef) });
       queryClient.invalidateQueries({ queryKey: ["issues", "tree-control-state", issueRef] });
     }
   }
@@ -1072,6 +1074,11 @@ function buildRunStatusToast(
 
   const error = readString(payload.error);
   const errorCode = readString(payload.errorCode);
+  // Interrupt is an intentional conversation control. Its caller gives
+  // feedback; the terminal event must not announce a cancelled/failed run.
+  if (errorCode === "operator_interrupted") return null;
+  // Workspace contention is ordinary scheduling, not a failed user action.
+  if (errorCode === "workspace_busy") return null;
   const contextSource = readString(payload.contextSource);
   const triggerDetail = readString(payload.triggerDetail);
   const name = nameOf(agentId) ?? "Agent";
@@ -1264,6 +1271,10 @@ function invalidateActivityQueries(
       !!currentActor.agentId &&
       actorId === currentActor.agentId);
 
+  if (action?.startsWith("ai_connection.") || action?.startsWith("connection_grant.")) {
+    queryClient.invalidateQueries({ queryKey: ["ai-connections", companyId] });
+  }
+
   if (action?.startsWith("resource_membership.")) {
     const targetUserId = readString(details?.userId);
     if (!targetUserId || targetUserId === currentActor.userId) {
@@ -1334,6 +1345,12 @@ function invalidateActivityQueries(
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(ref), ...invalidationOptions });
         if (action === "issue.comment_added" || action === "issue.conversation_session_started") {
           queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(ref), ...invalidationOptions });
+        }
+        if (action?.startsWith("issue.attachment_") || action?.startsWith("issue.work_product_")) {
+          // These cards are durable API objects, not streamed text. Refresh the
+          // visible task too, including attachments bound to an existing comment.
+          queryClient.invalidateQueries({ queryKey: queryKeys.issues.attachments(ref) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(ref) });
         }
         if (action === "issue.conversation_session_started") {
           queryClient.invalidateQueries({ queryKey: ["issues", "tree-control-state", ref] });
@@ -1428,6 +1445,14 @@ function invalidateActivityQueries(
     if (sourceIssueId) queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(sourceIssueId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.projects.all(companyId) });
     if (entityId) queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(entityId) });
+    return;
+  }
+
+  if (entityType === "company_skill") {
+    const sourceIssueId = readString((payload.details as Record<string, unknown> | undefined)?.sourceIssueId);
+    if (sourceIssueId) queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(sourceIssueId) });
+    if (entityId) queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.detail(companyId, entityId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(companyId) });
     return;
   }
 

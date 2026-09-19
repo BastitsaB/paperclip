@@ -23,6 +23,24 @@ GitHub Actions owns `pnpm-lock.yaml`.
 - Pull request CI validates dependency resolution when manifests change.
 - Pushes to `master` regenerate `pnpm-lock.yaml` with `pnpm install --lockfile-only --no-frozen-lockfile`, commit it back if needed, and then run verification with `--frozen-lockfile`.
 
+## Trusted PR Workflow
+
+The PR caller uses `paperclipai/paperclip/.github/workflows/pr-trusted.yml@master`.
+The AWS runner group `paperclip-public-pr` must allow
+`paperclipai/paperclip/.github/workflows/pr-trusted.yml@refs/heads/master`.
+New workflow versions merged into master then receive runner access without a
+separate SHA allowlist update. Dependabot leaves this first-party reference on
+master.
+
+Keep the `.github/**` rule in `.github/CODEOWNERS` and the active master ruleset's
+code-owner review requirement enabled. This covers the caller, the trusted
+workflow, and CODEOWNERS itself. Existing administrator pull-request bypasses
+remain governed by the repository ruleset.
+
+When changing the workflow path or branch, authorize the new reference before
+updating the caller. Retain older authorized SHA references while queued runs or
+supported reruns still use them.
+
 ## Start Dev
 
 From repo root:
@@ -352,6 +370,19 @@ These browser suites are intended for targeted local verification and CI, not th
 
 For normal issue work, start with the smallest targeted check that proves the change. Reserve repo-wide typecheck/build/test runs for PR-ready handoff or changes broad enough that narrow checks do not cover the risk.
 
+### Task search evaluation
+
+The task search relevance rubric and regression corpus are documented in
+[SEARCH.md](SEARCH.md). Run the real PostgreSQL relevance suite with:
+
+```sh
+pnpm exec vitest run server/src/__tests__/task-search-quality.test.ts
+```
+
+Set `SEARCH_EVAL_SCALE=1` to additionally measure a disposable 10,000-task,
+30,000-comment dataset. `SEARCH_EVAL_REPORT=/tmp/search-quality.json` saves
+per-query results and latency measurements; scale measurements are opt-in.
+
 ### Recent task ordering
 
 The streamlined sidebar keeps five recent tasks per company and account in browser
@@ -447,6 +478,68 @@ If the selected data directory already contains any company, `test-drive`
 preserves all companies, agents, and secrets and ignores the bootstrap flags.
 The worktree execution setting is the only value it may reconcile in that
 case.
+
+### Slack chat setup in a test drive
+
+Enable **Chat connectors** in Instance Settings, then open **Connectors → Slack →
+Chat with an agent**. Before connecting, configure a public HTTPS URL that Slack
+can reach. The setup page shows this requirement above the app details.
+Slack app name, bot display name, and slash command are editable while the
+connection is a draft; valid edits save when a field loses focus. **Create Slack
+app** opens Slack with the generated manifest prefilled. **View Slack App Manifest**
+opens the read-only manifest in a modal to inspect or copy it. Once connected,
+the app details are locked so reconnecting cannot silently change the registered
+command. Slack still requires workspace selection, installation approval, and
+copying the bot token and signing secret back into Paperclip.
+
+After Slack verifies its Events Request URL, the wizard asks you to send
+`/<your-command> connect`. This command works before a sender or channel is
+allowed to start work. It records the Slack identity and sends a private,
+one-time confirmation link that expires after 15 minutes; it creates no task
+and grants no access. You can confirm **This is my Slack account** in the wizard,
+or follow the private link and sign into Paperclip. Both paths check company
+membership before linking, and future messages use the linked user's current
+permissions. The wizard only lists identities that sent the connect command to
+this endpoint during the current test.
+
+New Slack connections disable **Allow unlinked people** by default. The Access
+page includes the shareable connect command and instructions for other users.
+Other Slack users join through the same connect command after setup. A signed-in
+nonmember can **Request access** from the confirmation page. This creates a
+pending human join request in the company's existing admin approval queue; it
+does not grant membership or link the identity. After approval, confirm the
+identity, or send the connect command again if the link has expired. Successful
+confirmation also queues a private Slack acknowledgement.
+
+Slack identity invitation pages retain the cloud authentication and bootstrap
+checks. Signed-in nonmembers may open a valid private invitation to request
+membership, but confirmation still requires membership in the invitation's
+company. Preview, access-request, and confirmation APIs also enforce the chat
+connector rollout flag on the server; invitees cannot read board experimental
+settings before they join. Expired or consumed tokens grant no access.
+
+The final wizard step suggests `@<your-bot> you there?`, then continuing in
+the agent's thread. Select the bot from Slack's @mention suggestions so the
+message includes a real mention. It detects a message or task command from the current user's
+linked Slack identity during this setup session and shows a checkmark. This
+conversation test is optional: **I've sent the test message** and **Skip test and
+finish** both finish setup once webhook verification and account linking are
+complete. The separate strict connection-test API retains its conversation and
+delivery checks.
+
+### Chat activity pagination and callback diagnostics
+
+The connection Activity tab loads 25 records per page. `GET /api/chat-endpoints/:id/activity?limit=25`
+returns `{ items, nextCursor }`; pass `cursor` to read older records. The limit must be 1–100.
+A timestamp and ID cursor preserves records with equal timestamps and avoids shifts from new arrivals.
+The first page refreshes automatically; older pages do not poll. Mutable action status can move an
+entry forward in time, so this is a live ledger, not a historical snapshot. Requests without pagination
+parameters retain the recent-100 array response for existing clients.
+
+Slack callback diagnostics tolerate HTTP between a TLS proxy and Paperclip when the public host,
+port, and path still match. A changed authority or path remains stale. This comparison only affects
+health display; it does not trust forwarded headers or alter Slack signature verification.
+
 
 ## Docker Quickstart (No local Node install)
 
@@ -581,6 +674,16 @@ If the `codex` CLI is not installed or not on `PATH`, `codex_local` agent runs f
 
 Local adapters require their corresponding CLI/session setup on the machine running Paperclip. External adapters are installed through the adapter/plugin flow and should not require hardcoded imports in `server/` or `ui/`.
 
+## Project Repository Checkouts
+
+Tasks use every distinct repository attached to their project, including repository-only sources with no local folder. Paperclip creates a managed checkout when no local folder is configured. The selected repository remains at the task workspace root. Other project repositories have editable, independent Git checkouts under `.paperclip-repositories/<name>-<key>`. Workspace hints expose each checkout path to the agent.
+
+When an additional repository has a configured local checkout, Paperclip seeds the task copy from its current commit and uncommitted files. Git-ignored files stay out of that copy. Subsequent task edits stay in the task copy. They do not overwrite the configured source folder. Existing task copies retain their work across runs.
+
+Sandbox staging, including Daytona, transfers each repository's Git history and working files. Restore merges files and commits back into each local task checkout independently. Durable sandbox recovery keeps the same repository snapshots. Normal ignore and workspace exclusion rules still apply. A clone failure stops task preparation with an error so the agent does not start with only part of the project.
+
+If a repository is detached or its source configuration changes, its previous task copy is retained under `.paperclip-runtime/detached-repositories/` and excluded from future sandbox transfers. Referenced projects continue to use the separate read-only multi-project workspace behavior.
+
 ## Config Freshness
 
 Agent, project, environment, secret, skill, and workspace config edits are sampled at the next run boundary. A heartbeat that is already running finishes with the config it started with.
@@ -591,7 +694,11 @@ When effective run config changes, Paperclip may intentionally skip a saved adap
 
 Paperclip applies one process-wide scheduler to expensive host-side workspace Git enumeration, including changed-file browsing, runtime/finalization cleanliness guards, and adapter sandbox-sync snapshots. The scheduler defaults to two active scans and a bounded queue of 32. Identical scans of the same canonical worktree share one subprocess, while successful changed-file listings are cached for 10 seconds. Correctness-sensitive runtime guards bypass the result cache.
 
+Workspace snapshots list ignored paths with `git ls-files --others --ignored --exclude-standard --directory -z` so ignored directory contents do not require a full status walk. Snapshot failures retain their typed cause instead of becoming a non-Git-folder result. During pre-provider setup, scan timeouts and queue saturation use the existing two automatic failure retries with a 30-second delay. Cancellation, output limits, and other Git errors stop with specific recovery guidance. See `doc/execution-semantics.md` for the ownership and retry-budget contract.
+
 The cache intentionally trades up to a few seconds of changed-file freshness for stable server latency. The file browser retains an explicit refresh action, does not start its query while the panel or browser tab is hidden, and presents overloads as retryable failures rather than an empty workspace. A full queue returns `503` with code `workspace_git_scan_saturated`; a scan exceeding its wall-clock limit returns `504` with code `workspace_git_scan_timeout`. Both responses include `Retry-After: 1`.
+
+Sandbox Git sync treats only the selected repository root as a clone source. A selected subfolder uses directory sync within that folder, applies the enclosing repository's ignore rules, and does not transfer parent files or Git history.
 
 Environment overrides:
 
@@ -976,6 +1083,8 @@ that classification finishes.
   group. It seals the old authority for normal epoch rotation and preserves the
   Codex thread and goal state. Empty retry directories do not prevent recovery;
   conflicting histories, changed profiles, and live or unverifiable owners do.
+
+A resumed sandbox lease can contain a workspace whose provider never started. A new attempt may create its exact session directory only when durable control-plane evidence proves zero connections, zero events, and untouched bootstrap commands, and no backup or remote session directory exists. Directory creation is atomic; partial state or uncertain ownership remains blocked.
 
 Run the credential-free real-process restart suite with:
 

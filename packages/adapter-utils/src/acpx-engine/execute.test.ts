@@ -1747,6 +1747,35 @@ describe("shared ACPX engine runtime behavior", () => {
     },
   );
 
+  it.each(["OPENAI_API_KEY", "CODEX_API_KEY"] as const)(
+    "selects Codex ACP API-key authentication when only the host process provides %s",
+    async (apiKeyName) => {
+      const root = await makeTempRoot();
+      const codexHome = path.join(root, "codex-home");
+      await fs.mkdir(codexHome, { recursive: true });
+
+      // Simulate a local launch that inherits a provider key from the host
+      // process environment. No adapter config sets the key directly, so the
+      // launched env only receives it through host projection.
+      vi.stubEnv(apiKeyName, "sk-host-inherited-key");
+      try {
+        const { sessionInputs } = await runExecutor({
+          agent: "codex",
+          stateDir: path.join(root, "state"),
+          env: { CODEX_HOME: codexHome },
+          paperclipRuntimeSkills: [],
+          paperclipSkillSync: { desiredSkills: [] },
+        });
+
+        const env = (sessionInputs[0]!.sessionOptions as { env: Record<string, string> }).env;
+        expect(env[apiKeyName]).toBe("sk-host-inherited-key");
+        expect(env.DEFAULT_AUTH_REQUEST).toBe(JSON.stringify({ methodId: "api-key" }));
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("busts the session fingerprint when resolved adapter env changes but not across wakes", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");
@@ -3920,6 +3949,63 @@ describe("ACPX engine remote session-lifecycle re-staging (PR 3: stage once / re
       onMeta: async () => {},
     };
   }
+
+  it("cancels a stalled remote startup without waiting for the command or launching the provider", async () => {
+    const { stateDir, localCwd, executionTarget } = await setupRemoteSandbox();
+    const controller = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const stopRemoteStartup = vi.fn(async () => {});
+    const createRuntime = vi.fn(() => recordingRuntime({ ensureInputs: [] }) as never);
+    const originalExecute = executionTarget.runner.execute;
+    executionTarget.runner.execute = async input => {
+      if (input.command === "stalled-auth-setup") {
+        entered();
+        await blocked;
+        return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: null, startedAt: new Date().toISOString() };
+      }
+      return originalExecute(input);
+    };
+    const execute = createAcpxEngineExecutor({
+      createRuntime,
+      prepareRemoteManagedHome: async input => {
+        const target = input.executionTarget;
+        if (target?.kind !== "remote" || target.transport !== "sandbox" || !target.runner) {
+          throw new Error("Expected sandbox target");
+        }
+        await target.runner.execute({ command: "stalled-auth-setup" });
+        return { stagedRuntime: await input.stage([]) };
+      },
+    });
+    let settled = false;
+    const run = execute({
+      runId: "cancel-startup", runtime: {},
+      ...baseExecuteArgs({ stateDir, localCwd, executionTarget }),
+      signal: controller.signal, stopRemoteStartup,
+    } as never).catch(error => error).finally(() => { settled = true; });
+    await started;
+    controller.abort(new Error("Stopped by user"));
+    try {
+      await vi.waitFor(() => expect(stopRemoteStartup).toHaveBeenCalledTimes(1), { timeout: 500 });
+      await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
+      expect(createRuntime).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await run;
+    }
+    // A provider RPC completing late must not resume the cancelled startup.
+    expect(createRuntime).not.toHaveBeenCalled();
+    // A subsequent run can acquire the same local staging/auth preparation
+    // resources; cancellation must not leave the staging lease held.
+    const retry = await execute({
+      runId: "retry-after-cancel", runtime: {},
+      ...baseExecuteArgs({ stateDir, localCwd, executionTarget }),
+    } as never);
+    expect(retry.exitCode).toBe(0);
+    expect(createRuntime).toHaveBeenCalledOnce();
+  });
 
   it("test_acp_resume_compatible_session_does_not_restage", async () => {
     const { stateDir, localCwd, remoteCwd, executionTarget } = await setupRemoteSandbox();
