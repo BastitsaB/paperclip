@@ -222,6 +222,10 @@ import {
 import { waitForStoppedRuns } from "../lib/wait-for-stopped-runs";
 import { useIssueExternalObjects } from "../hooks/useIssueExternalObjects";
 import { IssueGalleryContext } from "../context/IssueGalleryContext";
+import {
+  buildMarkdownIssueSummaries,
+  MarkdownIssueSummariesContext,
+} from "../context/MarkdownIssueSummariesContext";
 import { useIssuePlanDocument } from "../hooks/useIssuePlanDocument";
 import { useTaskArtifactArrival } from "../hooks/useTaskArtifactArrival";
 import { IssueRunLedger } from "../components/IssueRunLedger";
@@ -337,6 +341,7 @@ import {
   type AskUserQuestionsInteraction,
   type ActivityEvent,
   type Agent,
+  type CompactIssue,
   type FeedbackVote,
   type Issue,
   type IssueRecoveryAction,
@@ -3316,20 +3321,21 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     enabled: !!selectedCompanyId,
   });
   // Bounded pool of recently-updated issues to back the `@task` reference picker.
-  // The picker filters this list client-side by identifier/title.
+  // The picker filters this list client-side by identifier/title, so the
+  // compact view is enough and skips the full per-issue enrichment.
   const { data: mentionIssues = [] } = useQuery({
     queryKey: resolvedCompanyId
       ? queryKeys.issues.mentionPool(resolvedCompanyId)
       : ["issues", "mention-pool", "pending"],
     queryFn: () =>
-      issuesApi.list(resolvedCompanyId!, {
+      issuesApi.listCompact(resolvedCompanyId!, {
         limit: 100,
         sortField: "updated",
         sortDir: "desc",
       }),
     enabled: !!resolvedCompanyId,
     staleTime: 60_000,
-    placeholderData: keepPreviousDataForSameQueryTail<Issue[]>(
+    placeholderData: keepPreviousDataForSameQueryTail<CompactIssue[]>(
       resolvedCompanyId ?? "pending",
     ),
   });
@@ -6667,6 +6673,10 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
       ) ?? null
     );
   }, [activePauseHold, issue]);
+  const markdownIssueSummaries = useMemo(
+    () => buildMarkdownIssueSummaries(issue?.relatedWork),
+    [issue?.relatedWork],
+  );
 
   if (isLoading)
     return <IssueDetailLoadingState headerSeed={issueHeaderSeed} />;
@@ -7356,6 +7366,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
   return (
     <FileViewerProvider issueId={conversation && !conversation.issue ? "" : issue.id} enabled={fileViewerEnabled}>
+      <MarkdownIssueSummariesContext.Provider value={markdownIssueSummaries}>
       <IssueGalleryContext.Provider value={openIssueGallery}>
         <div
           data-task-chat-shell={taskChatShellEnabled ? "" : undefined}
@@ -8201,6 +8212,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           <ScrollToBottom />
         </div>
       </IssueGalleryContext.Provider>
+      </MarkdownIssueSummariesContext.Provider>
     </FileViewerProvider>
   );
 }

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { conversationRecoveryActionPredicate, getConversationOwnershipBlocker } from "./conversation-continuation.js";
+import {
+  conversationRecoveryActionPredicate,
+  getConversationOwnershipBlocker,
+  heartbeatRunIdMatchesText,
+  heartbeatRunIssueMatchesUuid,
+} from "./conversation-continuation.js";
 import { persistActivity } from "./activity-log.js";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 import { logger } from "../middleware/logger.js";
@@ -355,8 +360,8 @@ export async function settleUnrecoverableExecutions(
       heartbeatRuns,
       and(
         eq(heartbeatRuns.companyId, issueRecoveryActions.companyId),
-        sql`${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'`,
-        sql`coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text`,
+        heartbeatRunIdMatchesText(sql`${issueRecoveryActions.evidence}->>'runId'`),
+        heartbeatRunIssueMatchesUuid(sql`${issueRecoveryActions.sourceIssueId}`),
       ),
     )
     .leftJoin(

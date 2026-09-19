@@ -59,6 +59,15 @@ export function runtimeConnectionIntentRoutes(db: Db) {
 
   router.get("/mcp/runtime-tools", async (req, res) => {
     await service.validate(runtimeClaims(req));
+    // Streamable HTTP clients open an optional server-to-client SSE stream
+    // with GET + Accept: text/event-stream. This endpoint offers none; the spec
+    // answer is 405. A 200 JSON body ends the "stream" at once, which the MCP
+    // SDK treats as a resumable disconnect and reconnects for the whole run.
+    if (/text\/event-stream/i.test(req.header("accept") ?? "")) {
+      res.setHeader("Allow", "POST");
+      res.status(405).end();
+      return;
+    }
     res.json({ name: "paperclip-runtime-tools", protocolVersion: "2025-03-26" });
   });
 

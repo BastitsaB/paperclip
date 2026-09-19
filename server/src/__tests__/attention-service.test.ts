@@ -1027,6 +1027,129 @@ describeEmbeddedPostgres("attention service", () => {
     expect(feed.items.filter((item) => item.sourceKind === "failed_run")).toEqual([]);
   });
 
+  it("suppresses a context-less failed run only after a newer context-less run of the same agent", async () => {
+    const { companyId, workerId, reviewerId } = await seedCompany("ATN");
+    const issueId = await insertIssue({
+      companyId,
+      identifier: "ATN-1",
+      title: "Unrelated issue",
+      status: "in_progress",
+    });
+    const exhaustedAt = new Date("2026-07-09T12:00:00.000Z");
+    const exhaustedRun = (id: string, agentId: string) => ({
+      id,
+      companyId,
+      agentId,
+      invocationSource: "automation" as const,
+      status: "failed" as const,
+      error: "adapter failed",
+      contextSnapshot: null,
+      createdAt: exhaustedAt,
+      updatedAt: exhaustedAt,
+      finishedAt: exhaustedAt,
+    });
+    const workerRunId = randomUUID();
+    const reviewerRunId = randomUUID();
+    await db.insert(heartbeatRuns).values([
+      exhaustedRun(workerRunId, workerId),
+      exhaustedRun(reviewerRunId, reviewerId),
+      {
+        // Newer run, but on an issue: does not clear the worker's context-less failure.
+        id: randomUUID(),
+        companyId,
+        agentId: workerId,
+        invocationSource: "automation",
+        status: "succeeded",
+        contextSnapshot: { issueId },
+        createdAt: new Date("2026-07-09T12:01:00.000Z"),
+        updatedAt: new Date("2026-07-09T12:01:00.000Z"),
+        finishedAt: new Date("2026-07-09T12:01:00.000Z"),
+      },
+      {
+        // Newer context-less run: clears the reviewer's failure.
+        id: randomUUID(),
+        companyId,
+        agentId: reviewerId,
+        invocationSource: "timer",
+        status: "succeeded",
+        contextSnapshot: {},
+        createdAt: new Date("2026-07-09T12:01:00.000Z"),
+        updatedAt: new Date("2026-07-09T12:01:00.000Z"),
+        finishedAt: new Date("2026-07-09T12:01:00.000Z"),
+      },
+    ]);
+    await db.insert(heartbeatRunEvents).values([workerRunId, reviewerRunId].map((runId, index) => ({
+      companyId,
+      runId,
+      agentId: index === 0 ? workerId : reviewerId,
+      seq: 1,
+      eventType: "lifecycle",
+      message: "Bounded retry exhausted after 4 scheduled attempts; no further automatic retry will be queued",
+      createdAt: new Date("2026-07-09T12:00:01.000Z"),
+    })));
+
+    const feed = await attentionService(db).list(companyId, { userId: "board-user" });
+
+    expect(feed.items.filter((item) => item.sourceKind === "failed_run").map((item) => item.subject.id)).toEqual([
+      workerRunId,
+    ]);
+  });
+
+  it("matches newer runs per key like readRunIssueId (taskId fallback, empty issueId, superseded exhaustion)", async () => {
+    // Equivalence guard for the per-key EXISTS probes: every case below was
+    // decided the same way by the previous in-memory scan over all newer runs.
+    const { companyId, workerId, reviewerId } = await seedCompany("ATK");
+    const taskIssueId = await insertIssue({ companyId, identifier: "ATK-1", title: "Task-keyed", status: "in_progress" });
+    const repeatIssueId = await insertIssue({ companyId, identifier: "ATK-2", title: "Repeated", status: "in_progress" });
+    const at = (minute: number) => new Date(`2026-07-09T12:${String(minute).padStart(2, "0")}:00.000Z`);
+    const run = (agentId: string, status: "failed" | "succeeded", contextSnapshot: Record<string, unknown>, minute: number) => ({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      invocationSource: "automation" as const,
+      status,
+      error: status === "failed" ? "adapter failed" : null,
+      contextSnapshot,
+      createdAt: at(minute),
+      updatedAt: at(minute),
+      finishedAt: at(minute),
+    });
+    // Worker: failure keyed through taskId, cleared by a newer taskId-only run.
+    const workerTaskFailure = run(workerId, "failed", { taskId: taskIssueId }, 0);
+    // Worker: context-less failure, cleared by a newer run whose empty issueId
+    // makes it context-less even though it carries a taskId.
+    const workerContextless = run(workerId, "failed", {}, 1);
+    // Reviewer: two exhausted runs on the same issue; the later one supersedes
+    // the earlier one and stays visible.
+    const reviewerFirst = run(reviewerId, "failed", { issueId: repeatIssueId }, 0);
+    const reviewerLatest = run(reviewerId, "failed", { issueId: repeatIssueId }, 5);
+    await db.insert(heartbeatRuns).values([
+      workerTaskFailure,
+      workerContextless,
+      reviewerFirst,
+      reviewerLatest,
+      run(workerId, "succeeded", { taskId: taskIssueId }, 2),
+      run(workerId, "succeeded", { issueId: "", taskId: taskIssueId }, 3),
+    ]);
+    await db.insert(heartbeatRunEvents).values(
+      [workerTaskFailure, workerContextless, reviewerFirst, reviewerLatest].map((failed) => ({
+        companyId,
+        runId: failed.id,
+        agentId: failed.agentId,
+        seq: 1,
+        eventType: "lifecycle",
+        message: "Bounded retry exhausted after 4 scheduled attempts; no further automatic retry will be queued",
+        createdAt: new Date(failed.createdAt.getTime() + 1000),
+      })),
+    );
+
+    const feed = await attentionService(db).list(companyId, { userId: "board-user" });
+
+    expect(feed.items.filter((item) => item.sourceKind === "failed_run").map((item) => item.subject.id)).toEqual([
+      reviewerLatest.id,
+    ]);
+  });
+
   it("enriches interaction details with project, workspace, plan metadata, and images", async () => {
     const { companyId, workerId } = await seedCompany("ATE");
     const projectId = randomUUID();

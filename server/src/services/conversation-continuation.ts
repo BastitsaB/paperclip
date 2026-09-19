@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { readProcessStartedAt } from "./hot-restart.js";
 
@@ -14,6 +14,42 @@ export function isConversationAdapter(adapterType: string): boolean {
 }
 
 export const CONVERSATION_CONTINUATION_POLICY = "continue_conversation_v1";
+
+// The only spelling uuid::text produces: lowercase, hyphenated 8-4-4-4-12.
+// A text id outside this form never equalled heartbeat_runs.id::text, so it
+// must not match (or raise a cast error) in the indexable comparisons below.
+const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const CANONICAL_UUID_SQL_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+
+export function isCanonicalUuidText(value: string): boolean {
+  return CANONICAL_UUID_PATTERN.test(value);
+}
+
+/**
+ * Same result as `heartbeat_runs.id::text = <runIdText>`, but compares on the
+ * uuid column so the planner can use the primary key instead of casting every
+ * row. Malformed evidence yields NULL (no match) rather than a cast error.
+ */
+export function heartbeatRunIdMatchesText(runIdText: SQL) {
+  return sql`${heartbeatRuns.id} = (case when ${runIdText} ~ ${CANONICAL_UUID_SQL_PATTERN} then (${runIdText})::uuid end)`;
+}
+
+/**
+ * Same result as `coalesce(native_issue_id::text, context_snapshot->>'issueId')
+ * = <issueId>::text` for a uuid-typed issue id, split so the native branch can
+ * use the (company_id, native_issue_id, id) index.
+ */
+export function heartbeatRunIssueMatchesUuid(issueId: SQL) {
+  return sql`(${heartbeatRuns.nativeIssueId} = ${issueId}
+    or (${heartbeatRuns.nativeIssueId} is null and ${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}::text))`;
+}
+
+/** Text-parameter variant; a non-canonical id can only ever match the snapshot. */
+export function heartbeatRunIssueMatchesText(issueId: string) {
+  return isCanonicalUuidText(issueId)
+    ? heartbeatRunIssueMatchesUuid(sql`${issueId}::uuid`)
+    : sql`(${heartbeatRuns.nativeIssueId} is null and ${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId})`;
+}
 
 export function hasConversationContinuationPolicy(result: Record<string, unknown> | null | undefined): boolean {
   return result?.conversationContinuation === CONVERSATION_CONTINUATION_POLICY;
@@ -67,8 +103,8 @@ export function conversationRecoveryActionPredicate() {
     sql`exists (
       select 1 from ${heartbeatRuns}
       where ${heartbeatRuns.companyId} = ${issueRecoveryActions.companyId}
-        and ${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'
-        and coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text
+        and ${heartbeatRunIdMatchesText(sql`${issueRecoveryActions.evidence}->>'runId'`)}
+        and ${heartbeatRunIssueMatchesUuid(sql`${issueRecoveryActions.sourceIssueId}`)}
         and ${heartbeatRuns.runtimeMode} = 'legacy'
         and ${inArray(heartbeatRuns.status, ['failed', 'timed_out', 'interrupted', 'cancelled'])}
         and ${conversationRunPredicate()}
@@ -106,7 +142,7 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
     .where(and(
       eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.runtimeMode, "legacy"),
       conversationRunPredicate(),
-      sql`coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueId}`,
+      heartbeatRunIssueMatchesText(issueId),
       inArray(heartbeatRuns.status, ["failed", "timed_out", "interrupted", "cancelled"]),
       or(isNotNull(heartbeatRuns.processPid), isNotNull(heartbeatRuns.processGroupId), activeLease),
     )).orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id));

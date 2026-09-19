@@ -6,6 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
+import { issuesApi } from "../api/issues";
+import {
+  MarkdownIssueSummariesContext,
+  type MarkdownIssueSummary,
+} from "../context/MarkdownIssueSummariesContext";
 
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -91,5 +96,40 @@ describe("MarkdownBody code block interactions", () => {
     expect(pre?.style.whiteSpace).toBe("");
     expect(wrapButton?.getAttribute("aria-pressed")).toBe("false");
     expect(wrapButton?.getAttribute("aria-label")).toBe("Wrap lines");
+  });
+});
+
+describe("MarkdownBody issue links", () => {
+  function renderWithSummaries(children: string, summaries: ReadonlyMap<string, MarkdownIssueSummary> | null) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    flushSync(() => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider>
+            <MarkdownIssueSummariesContext.Provider value={summaries}>
+              <MarkdownBody>{children}</MarkdownBody>
+            </MarkdownIssueSummariesContext.Provider>
+          </ThemeProvider>
+        </QueryClientProvider>,
+      );
+    });
+    return container;
+  }
+
+  it("uses a page-provided summary instead of fetching the referenced issue", async () => {
+    const get = vi.mocked(issuesApi.get);
+    get.mockReset();
+    get.mockReturnValue(new Promise(() => undefined));
+    const summary: MarkdownIssueSummary = { id: "issue-7", identifier: "PAP-7", title: "Known task", status: "in_progress" };
+
+    const node = renderWithSummaries("See [PAP-7](/issues/PAP-7) and [PAP-8](/issues/PAP-8).", new Map([["PAP-7", summary]]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(node.querySelector('a[aria-label="Issue PAP-7: Known task"]')).not.toBeNull();
+    // Only the reference without a summary falls back to the per-link GET.
+    expect(get.mock.calls.map(([id]) => id)).toEqual(["PAP-8"]);
   });
 });
