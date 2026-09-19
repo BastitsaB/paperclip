@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   agentWakeupRequests,
   heartbeatRuns,
@@ -11,6 +12,8 @@ import {
 import type { ExecutionContinuationEnvelope } from "@paperclipai/shared";
 import { sanitizeQuarantinedCommentForHigherTrust } from "./source-trust.js";
 import { hasConversationContinuationPolicy } from "./conversation-continuation.js";
+import { queuedCommentIdsFromWakePayload } from "./issue-queued-comment-queue.js";
+import { childReviewOutcomes } from "./native-runtime/child-review-outcomes.js";
 
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v)
@@ -34,6 +37,29 @@ export function continuationOriginCommentIds(context: unknown): string[] {
       ].filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
+}
+
+/** Keep service/tool results and generated summaries out of human authority. */
+export function projectHumanInteractionResponse(row: {
+  id: string; kind: string; status: string; result: unknown;
+  resolvedByUserId: string | null; resolvedByAgentId: string | null;
+  resolvedByRunId: string | null; resolvedAt: Date | null;
+}): NonNullable<ExecutionContinuationEnvelope["humanResponses"]>[number] | null {
+  if (!row.resolvedByUserId || row.resolvedByAgentId || row.resolvedByRunId || !row.resolvedAt) return null;
+  const result = object(row.result);
+  let response: Record<string, unknown>;
+  if (row.kind === "ask_user_questions" && row.status === "answered" && Array.isArray(result.answers)) {
+    response = { answers: result.answers.map(value => {
+      const answer = object(value);
+      return { questionId: answer.questionId, optionIds: answer.optionIds, otherText: answer.otherText };
+    }) };
+  } else if (["request_confirmation", "request_checkbox_confirmation"].includes(row.kind)
+    && ["accepted", "rejected"].includes(row.status) && result.outcome === row.status) {
+    response = { outcome: result.outcome, reason: result.reason,
+      ...(Array.isArray(result.selectedOptionIds) ? { selectedOptionIds: result.selectedOptionIds } : {}) };
+  } else return null;
+  return { id: row.id, kind: row.kind, status: row.status, resolvedByUserId: row.resolvedByUserId,
+    resolvedAt: row.resolvedAt.toISOString(), result: response };
 }
 
 /** Also retain user direction delivered after the source run's initial wake. */
@@ -116,14 +142,18 @@ export async function buildExecutionContinuation(input: {
   const triggerInteraction = interactions.find(
     (row) => row.id === input.context.interactionId,
   );
+  const explicitContinuation = object(input.context.explicitUserContinuation);
+  const explicitUserSource = string(explicitContinuation.previousRunId);
   const sourceRunId =
+    explicitUserSource ??
     triggerInteraction?.sourceRunId ??
     string(input.context.retryOfRunId) ??
-    string(input.context.previousRunId);
+    string(input.context.previousRunId) ??
+    string(input.context.interruptedRunId);
   const sourceRun = sourceRunId
     ? (
         await db
-          .select({ context: heartbeatRuns.contextSnapshot })
+          .select({ context: heartbeatRuns.contextSnapshot, result: heartbeatRuns.resultJson })
           .from(heartbeatRuns)
           .where(
             and(
@@ -135,7 +165,7 @@ export async function buildExecutionContinuation(input: {
       )[0]
     : null;
   if (sourceRunId && !sourceRun)
-    throw new Error("continuation_source_context_missing");
+    throw new Error(explicitUserSource ? "continuation_user_authorization_missing" : "continuation_source_context_missing");
   const originCommentIds = [
     ...new Set([
       ...continuationOriginCommentIds(input.context),
@@ -217,7 +247,8 @@ export async function buildExecutionContinuation(input: {
     .where(
       and(
         eq(heartbeatRuns.companyId, companyId),
-        eq(heartbeatRuns.agentId, input.agentId),
+        or(eq(heartbeatRuns.agentId, input.agentId),
+          sourceRunId ? eq(heartbeatRuns.id, sourceRunId) : undefined),
         sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
       ),
     )
@@ -257,8 +288,6 @@ export async function buildExecutionContinuation(input: {
     ["succeeded", "failed", "timed_out", "interrupted", "cancelled"].includes(run.status) &&
     !(run.status === "cancelled" && run.errorCode === "execution_reconciliation_required"),
   );
-  const explicitContinuation = object(input.context.explicitUserContinuation);
-  const explicitUserSource = string(explicitContinuation.previousRunId);
   if (explicitUserSource) {
     const predecessor = priorRuns.find(run => run.id === explicitUserSource &&
       ["failed", "timed_out", "interrupted", "cancelled"].includes(run.status));
@@ -268,22 +297,44 @@ export async function buildExecutionContinuation(input: {
       eq(agentWakeupRequests.reason, "retry_failed_run"), eq(agentWakeupRequests.requestedByActorType, "user"),
       sql`${agentWakeupRequests.payload}->>'issueId' = ${issueId}`,
     )) : [];
-    const authorization = reconciliations.map(row => object(row.evidence.explicitUserContinuation))
-      .find(value => value.previousRunId === explicitUserSource &&
+    // Admission records the board operator's authority separately from the
+    // message author. At dispatch, prove that exact queue was adopted by this
+    // run; caller-supplied continuation context cannot grant this authority.
+    const continuationAuthorizations = reconciliations.map(row => object(row.evidence.explicitUserContinuation))
+      .filter(value => value.previousRunId === explicitUserSource &&
         (!input.runId || value.runId === input.runId) &&
         value.commentId === explicitContinuation.commentId &&
-        priorRuns.some(run => run.id === value.runId) &&
-        (failedRunId
+        priorRuns.some(run => run.id === value.runId));
+    const interruptQueueIds = [...new Set(continuationAuthorizations.flatMap(value => {
+      const parsed = z.string().guid().safeParse(value.queuedCommentInterruptId);
+      return parsed.success ? [parsed.data] : [];
+    }))];
+    const interruptQueues = interruptQueueIds.length
+      ? await db.select().from(agentWakeupRequests).where(and(
+        inArray(agentWakeupRequests.id, interruptQueueIds),
+        eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, input.agentId),
+        eq(agentWakeupRequests.status, "coalesced"),
+        sql`${agentWakeupRequests.payload}->>'issueId' = ${issueId}`,
+        sql`${agentWakeupRequests.payload}->'queuedCommentInterrupt' is not null`,
+        input.runId ? eq(agentWakeupRequests.runId, input.runId) : undefined,
+      )) : [];
+    const authorization = continuationAuthorizations.find(value => failedRunId
           ? value.failedRunId === failedRunId && retryWakes.some(wake =>
               wake.runId === value.runId && wake.requestedByActorId === value.actorId &&
               priorRuns.some(run => run.id === wake.runId && run.retryOfRunId === failedRunId))
           : rows.some(comment => comment.id === value.commentId &&
-              comment.authorType === "user" && comment.authorUserId === value.actorId &&
-              !comment.createdByRunId && !comment.deletedAt)));
+              comment.authorType === "user" &&
+              (value.queuedCommentInterruptId
+                ? interruptQueues.some(queue => queue.id === value.queuedCommentInterruptId &&
+                    queue.runId === value.runId &&
+                    object(object(queue.payload).queuedCommentInterrupt).actorId === value.actorId &&
+                    queuedCommentIdsFromWakePayload(queue.payload).includes(comment.id))
+                : comment.authorUserId === value.actorId) &&
+              !comment.createdByRunId && !comment.deletedAt));
     if (!predecessor || !authorization || explicitUserSource !== sourceRunId)
       throw new Error("continuation_user_authorization_missing");
   }
-  const interruptedRunId = explicitUserSource ?? (lastTerminal && lastTerminal.status !== "succeeded" &&
+  const interruptedRunId = explicitUserSource ?? string(input.context.interruptedRunId) ?? (lastTerminal && lastTerminal.status !== "succeeded" &&
     (hasConversationContinuationPolicy(lastTerminal.result) ||
       lastTerminal.status === "interrupted" || lastTerminal.errorCode === "process_lost")
     ? lastTerminal.id : undefined);
@@ -307,15 +358,24 @@ export async function buildExecutionContinuation(input: {
     originCommentIds,
     objective: latestRequest?.body ?? issue.description ?? issue.title,
     messages,
-    interactionOutcomes: interactions
+    humanResponses: interactions.flatMap(row => {
+      const response = projectHumanInteractionResponse(row);
+      return response ? [response] : [];
+    }),
+    interactionOutcomes: [...interactions
       .filter((row) => row.status !== "pending")
       .map((row) => ({
         id: row.id,
         kind: row.kind,
         status: row.status,
         result: row.result,
-      })),
-    completedWork: input.summary,
+      })), ...await childReviewOutcomes(db, companyId, issueId)],
+    // Low-trust evidence only: renderPaperclipWakePrompt removes completedWork
+    // from requestContext and encodes it in the fenced, non-authoritative
+    // continuation-evidence section. It cannot supply objective or authority.
+    completedWork: input.summary ??
+      string(object(object(sourceRun?.result).nativeResult).summary)?.slice(0, 32_000) ??
+      string(object(sourceRun?.result).summary)?.slice(0, 32_000) ?? null,
     completedActions,
     unresolvedInteractionIds: interactions
       .filter((row) => row.status === "pending")

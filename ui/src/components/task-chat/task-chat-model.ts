@@ -109,6 +109,8 @@ export interface TaskChatMessageItem {
   text: string;
   /** Runner-authored output channel. Legacy adapters leave this unset. */
   channel?: "progress" | "final" | "unknown";
+  /** Transport attribution for an inbound human comment. */
+  sourceChannel?: IssueCommentMetadata["sourceChannel"];
   timestamp?: string;
   /** Show a streaming cursor and suppress collapse while true. */
   streaming?: boolean;
@@ -540,8 +542,20 @@ export interface TaskChatProjectCreatedItem {
   timestamp: string;
 }
 
+export interface TaskChatSkillCreatedItem {
+  id: string;
+  kind: "skill_created";
+  skillId: string;
+  name: string;
+  description?: string | null;
+  slug?: string | null;
+  versionId?: string | null;
+  timestamp: string;
+}
+
 export type TaskChatItem =
   | TaskChatProjectCreatedItem
+  | TaskChatSkillCreatedItem
   | TaskChatMessageItem
   | TaskChatThinkingItem
   | TaskChatToolItem

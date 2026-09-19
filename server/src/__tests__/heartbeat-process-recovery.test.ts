@@ -112,6 +112,8 @@ const mockTelemetryClient = vi.hoisted(() => ({
 }));
 const mockTrackAgentFirstHeartbeat = vi.hoisted(() => vi.fn());
 const mockTerminateLocalService = vi.hoisted(() => vi.fn());
+const mockDetachNativeSessionsForRestart = vi.hoisted(() => vi.fn());
+const mockCloseIdleWarmNativeSessionsForRestart = vi.hoisted(() => vi.fn());
 const mockRetainedNativeCleanup = vi.hoisted(() =>
   vi.fn<
     typeof import("../services/native-runtime/native-session-executor.js").reconcileRetainedNativeSessionCleanup
@@ -138,6 +140,15 @@ vi.mock("../telemetry.ts", () => ({
   getTelemetryClient: () => mockTelemetryClient,
 }));
 
+const mockCaptureRunFailure = vi.hoisted(() => vi.fn());
+vi.mock("../sentry.ts", async () => {
+  const actual = await vi.importActual<typeof import("../sentry.ts")>("../sentry.ts");
+  return {
+    ...actual,
+    captureRunFailure: mockCaptureRunFailure,
+  };
+});
+
 vi.mock("../services/native-runtime/native-session-executor.js", async () => {
   const actual = await vi.importActual<
     typeof import("../services/native-runtime/native-session-executor.js")
@@ -148,10 +159,14 @@ vi.mock("../services/native-runtime/native-session-executor.js", async () => {
   mockExecutePaperclipNativeSession.mockImplementation(
     actual.executePaperclipNativeSession,
   );
+  mockDetachNativeSessionsForRestart.mockImplementation(actual.detachNativeSessionsForRestart);
+  mockCloseIdleWarmNativeSessionsForRestart.mockImplementation(actual.closeIdleWarmNativeSessionsForRestart);
   return {
     ...actual,
     reconcileRetainedNativeSessionCleanup: mockRetainedNativeCleanup,
     executePaperclipNativeSession: mockExecutePaperclipNativeSession,
+    detachNativeSessionsForRestart: mockDetachNativeSessionsForRestart,
+    closeIdleWarmNativeSessionsForRestart: mockCloseIdleWarmNativeSessionsForRestart,
   };
 });
 
@@ -1729,11 +1744,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
           revision: 1,
           schemaVersion: "paperclip.completion-contract.v1",
           policyVersion: "phase6-v1",
-          risk: "standard",
-          completionAuthority: "server_arbiter",
+          risk: "low",
+          completionAuthority: "agent_claim_policy",
           incompleteCriteriaPolicy: "preserve_non_terminal",
           contractJson: {
-            revision: "phase6-v1",
+            revision: CONTROL_PLANE_CONFORMANCE_RESULT.completionClaim.contractRevision,
             objective: "Retained cleanup lifecycle",
             criteria: [{ id: "objective", requirement: "Keep cleanup joined" }],
           },
@@ -1789,6 +1804,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
             projectRunStatus: true,
           }),
         ).resolves.toMatchObject({ phase: "committed" });
+        expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0]!.status).toBe("done");
         // The visible successful result was already repaired. This private
         // diagnostic is what permits the separate control-only maintenance lane.
         await db
@@ -2398,6 +2414,16 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       timeoutConfigured: false,
       timeoutFired: false,
     });
+    // The legacy engine writes this terminal status through the same
+    // guarded emitter that reports a genuine failed transition to Sentry.
+    expect(mockCaptureRunFailure).toHaveBeenCalledTimes(1);
+    expect(mockCaptureRunFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId,
+        errorCode: "process_lost",
+        runStatus: "failed",
+      }),
+    );
     const [action] = await db
       .select()
       .from(issueRecoveryActions)
@@ -2411,6 +2437,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         .from(heartbeatRuns)
         .where(eq(heartbeatRuns.agentId, agentId)),
     ).toHaveLength(2);
+    // A replay over the same already-failed run must not report a second
+    // Sentry event for one terminal failure.
+    expect(mockCaptureRunFailure).toHaveBeenCalledTimes(1);
 
     const issue = await waitForValue(async () =>
       db
@@ -2536,6 +2565,69 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       await fs.rm(home, { recursive: true, force: true });
     }
   }
+
+  it("fences native selection when cancellation wins during preparation", async () => {
+    await withTempPaperclipHome(async () => {
+      const { agentId, issueId, runId } = await seedQueuedIssueRunFixture();
+      await db.update(agents).set({ adapterType: "paperclip_runner",
+        adapterConfig: { provider: "codex", model: "gpt-5.6-luna" },
+      }).where(eq(agents.id, agentId));
+      const factory = vi.fn(() => { throw new Error("provider must not start"); });
+      let reachedSelection = false;
+      const heartbeat = heartbeatService(db, {
+        nativeSessionBackendFactory: factory,
+        beforeNativeRuntimeSelection: async id => {
+          reachedSelection = true;
+          await heartbeat.cancelRun(id);
+        },
+      });
+      await heartbeat.resumeQueuedRuns();
+      await heartbeat.drainActiveRunExecutions();
+      expect(reachedSelection).toBe(true);
+      expect(await heartbeat.getRun(runId)).toMatchObject({ status: "cancelled", runtimeMode: "legacy",
+        runtimeModeResolvedAt: null, nativeSessionId: null,
+        resultJson: { startupCancellation: { beforeNativeSelection: true },
+          startupPreparationSettledAt: expect.any(String) },
+      });
+      expect(await db.select().from(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, runId))).toHaveLength(0);
+      expect(factory).not.toHaveBeenCalled();
+      expect(mockAdapterExecute).not.toHaveBeenCalled();
+      const [task] = await db.select().from(issues).where(eq(issues.id, issueId));
+      expect(task.executionRunId).toBeNull();
+    });
+  });
+
+  it("does not dispatch when cancellation wins after native selection", async () => {
+    await withTempPaperclipHome(async () => {
+      const { agentId, issueId, runId } = await seedQueuedIssueRunFixture();
+      await db.update(agents).set({ adapterType: "paperclip_runner",
+        adapterConfig: { provider: "codex", model: "gpt-5.6-luna" },
+      }).where(eq(agents.id, agentId));
+      await db.update(heartbeatRuns).set({ invocationSource: "automation" }).where(eq(heartbeatRuns.id, runId));
+      const factory = vi.fn(() => { throw new Error("provider must not start"); });
+      let reachedDispatch = false;
+      const heartbeat = heartbeatService(db, {
+        nativeSessionBackendFactory: factory,
+        beforeChatControlRecoveryCheck: async ({ stage, runId: id }) => {
+          if (stage !== "dispatch") return;
+          reachedDispatch = true;
+          expect((await heartbeat.getRun(id))?.runtimeMode).toBe("native");
+          await heartbeat.cancelRun(id);
+        },
+      });
+      await heartbeat.resumeQueuedRuns();
+      await heartbeat.drainActiveRunExecutions();
+      expect(reachedDispatch).toBe(true);
+      expect(await heartbeat.getRun(runId)).toMatchObject({ status: "cancelled", runtimeMode: "native",
+        resultJson: { startupPreparationSettledAt: expect.any(String) },
+      });
+      expect(factory).not.toHaveBeenCalled();
+      const [coordinator] = await db.select().from(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, runId));
+      expect(coordinator).toMatchObject({ attempt: 0, leaseOwner: null });
+      const [task] = await db.select().from(issues).where(eq(issues.id, issueId));
+      expect(task.executionRunId).toBeNull();
+    });
+  });
 
   it("dispatches local native external chat inside the server-selected task root", async () => {
     await withTempPaperclipHome(async () => {
@@ -2715,6 +2807,15 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     });
   });
 
+  it("checkpoints idle warm sessions even when no hot restart was requested", async () => {
+    await withTempPaperclipHome(async () => {
+      mockCloseIdleWarmNativeSessionsForRestart.mockClear();
+      const heartbeat = heartbeatService(db);
+      await expect(heartbeat.prepareHotRestartShutdown("SIGTERM")).resolves.toMatchObject({ mode: "not_requested" });
+      expect(mockCloseIdleWarmNativeSessionsForRestart).toHaveBeenCalledOnce();
+    });
+  });
+
   it("captures a hot-restart shutdown snapshot without interrupting running runs", async () => {
     const child = spawnAliveProcess();
     childProcesses.add(child);
@@ -2737,6 +2838,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       });
       const heartbeat = heartbeatService(db);
 
+      mockCloseIdleWarmNativeSessionsForRestart.mockClear();
       const result = await heartbeat.prepareHotRestartShutdown(
         "SIGTERM",
         new Date("2026-03-19T00:06:00.000Z"),
@@ -2747,6 +2849,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         skipDrain: true,
         activeRunIds: [runId],
       });
+      expect(mockCloseIdleWarmNativeSessionsForRestart).toHaveBeenCalledOnce();
       expect(isPidAlive(child.pid)).toBe(true);
       const run = await db
         .select()
@@ -3531,6 +3634,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       retryRunIds: [],
       restartSuspendedRunIds: [runId],
     });
+    expect(mockDetachNativeSessionsForRestart).toHaveBeenCalledWith([runId]);
     await expect(
       db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId)),
     ).resolves.toEqual([
@@ -12503,6 +12607,44 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     if (retryRun) await waitForRunToSettle(heartbeat, retryRun.id);
   });
 
+  it("lets a child waiting for the shared workspace run before recovering its lead", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({ status: "in_progress", runStatus: "succeeded", livenessState: "advanced" });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId, paperclipWorkspace: { mode: "shared_workspace" } } }).where(eq(heartbeatRuns.id, runId));
+    const projectId = randomUUID(), workspaceId = randomUUID(), childId = randomUUID(), workerId = randomUUID();
+    await db.insert(projects).values({ id: projectId, companyId, name: "Shared project" });
+    await db.insert(projectWorkspaces).values({ id: workspaceId, companyId, projectId, name: "Primary", sourceType: "local_path", cwd: "/tmp/recovery-shared", isPrimary: true });
+    await db.update(issues).set({ projectId, projectWorkspaceId: workspaceId }).where(eq(issues.id, issueId));
+    await db.insert(agents).values({ id: workerId, companyId, name: "Worker", role: "engineer", status: "idle", adapterType: "codex_local", adapterConfig: {} });
+    await db.insert(issues).values({ id: childId, companyId, parentId: issueId, title: "Build the project", status: "in_progress", assigneeAgentId: workerId, projectId, projectWorkspaceId: workspaceId });
+    await db.insert(heartbeatRuns).values({ companyId, agentId: workerId, status: "scheduled_retry", scheduledRetryAt: new Date(Date.now() + 60_000), scheduledRetryReason: "workspace_busy", contextSnapshot: { issueId: childId } });
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.continuationRequeued).toBe(0);
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId))).toHaveLength(1);
+    // Once the child finishes, normal recovery can continue the lead.
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, childId));
+    expect((await heartbeat.reconcileStrandedAssignedIssues()).continuationRequeued).toBe(1);
+    const next = (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId))).find((r) => r.id !== runId);
+    if (next) await waitForRunToSettle(heartbeat, next.id);
+  });
+
+  it("resumes a shared-workspace lead when its child needs review", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({ status: "in_progress", runStatus: "succeeded", livenessState: "advanced" });
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId, paperclipWorkspace: { mode: "shared_workspace" } } }).where(eq(heartbeatRuns.id, runId));
+    const projectId = randomUUID(), workspaceId = randomUUID(), childId = randomUUID(), workerId = randomUUID();
+    await db.insert(projects).values({ id: projectId, companyId, name: "Shared project" });
+    await db.insert(projectWorkspaces).values({ id: workspaceId, companyId, projectId, name: "Primary", sourceType: "local_path", cwd: "/tmp/recovery-shared", isPrimary: true });
+    await db.update(issues).set({ projectId, projectWorkspaceId: workspaceId }).where(eq(issues.id, issueId));
+    await db.insert(agents).values({ id: workerId, companyId, name: "Worker", role: "engineer", status: "idle", adapterType: "codex_local", adapterConfig: {} });
+    await db.insert(issues).values({ id: childId, companyId, parentId: issueId, title: "Review the project", status: "in_review", assigneeAgentId: workerId, projectId, projectWorkspaceId: workspaceId });
+    await db.insert(issueThreadInteractions).values({ companyId, issueId: childId, kind: "request_confirmation", status: "pending", addresseeAgentId: agentId, payload: { prompt: "Review this delivery" } });
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.continuationRequeued).toBe(1);
+    const next = (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId))).find((r) => r.id !== runId);
+    if (next) await waitForRunToSettle(heartbeat, next.id);
+  });
+
   it("leaves the productive-but-stranded continuation path unchanged under the new classifier", async () => {
     const { agentId, issueId, runId } = await seedStrandedIssueFixture({
       status: "in_progress",
@@ -13258,8 +13400,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     return { ...fixture, commentId, contractId, summary };
   }
 
-  it("commits a native passive Board response without manufacturing immediate work", async () => {
+  it.each(["issue_commented", "issue_reopened_via_comment"])("commits a native passive Board response without manufacturing immediate work (%s)", async (reason) => {
     const fixture = await seedNativePassiveBoardResponse();
+    await db.update(agentWakeupRequests).set({ reason }).where(eq(agentWakeupRequests.id, fixture.wakeupRequestId));
     await finalizeNativeRun({
       db,
       runId: fixture.runId,
@@ -13744,6 +13887,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     "source_delete",
     "different_user",
     "wake_actor",
+    "wake_reason",
     "wake_run",
     "native_issue",
     "new_comment",
@@ -13756,6 +13900,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       expect(
         await readNativeBoardResponseWaitSource(db, fixture),
       ).not.toBeNull();
+      if (change === "wake_reason")
+        await db.update(agentWakeupRequests).set({ reason: "issue_continuation_needed" }).where(eq(agentWakeupRequests.id, fixture.wakeupRequestId));
       if (change === "source_edit")
         await db
           .update(issueComments)

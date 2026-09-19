@@ -66,6 +66,7 @@ import {
 import {
   classifyRisk,
   normalizeConnectionMethodConfig,
+  projectedConnectionHeaders,
   projectConnectionMethodToolInputSchema,
   projectConnectionMethodToolArguments,
   toolAccessService,
@@ -2614,6 +2615,80 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(health.connection.healthStatus).toBe("ok");
   });
 
+  it.each(
+    [
+      { sourceTemplateKey: "anthropic", connectionMethodKey: "api-key" },
+      {
+        sourceTemplateKey: "unsupported-rest-fixture",
+        templateId: "paperclip.echo-calculator-time",
+      },
+    ].flatMap((config) =>
+      (["checkHealth", "refreshCatalog"] as const).map((operation) => ({ config, operation })),
+    ),
+  )("rejects unsupported REST tool connections without stdio validation: %j", async ({ config, operation }) => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const application = await service.createApplication(company.id, {
+      name: "REST regression fixture",
+      type: "rest_api",
+    });
+    const connection = await service.createConnection(company.id, {
+      applicationId: application.id,
+      name: "REST regression fixture",
+      transport: "rest_api",
+      config,
+      enabled: true,
+      status: "active",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const message = "This connection has no supported tool integration. Add a supported account or MCP connection from Connectors.";
+
+    await expect(service[operation](connection.id)).rejects.toMatchObject({
+      status: 422,
+      message,
+      details: { code: "tool_connection_transport_unsupported" },
+    });
+    const [saved] = await db.select().from(toolConnections)
+      .where(eq(toolConnections.id, connection.id));
+    expect(saved).toMatchObject({ healthStatus: "error", healthMessage: message });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await service.listRuntimeSlots(company.id)).toEqual([]);
+    expect(await db.select().from(toolCatalogEntries)
+      .where(eq(toolCatalogEntries.connectionId, connection.id))).toEqual([]);
+    const audit = await db.select().from(toolAccessAuditEvents)
+      .where(eq(toolAccessAuditEvents.connectionId, connection.id));
+    expect(audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: operation === "checkHealth" ? "tool_connection.health_check" : "tool_connection.catalog_refresh",
+        outcome: "failure",
+        reasonCode: "tool_connection_transport_unsupported",
+      }),
+    ]));
+    // Removing a method from the catalog must not strand its saved connections.
+    expect(await service.archiveConnection(connection.id)).toMatchObject({
+      connection: { status: "archived" },
+    });
+  });
+
+  it("rejects the obsolete Anthropic REST setup before storing credentials", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+
+    await expect(service.connectGalleryApp(company.id, {
+      galleryKey: "anthropic",
+      connectionMethodKey: "api-key",
+      credentialValues: { "credentials.apiKey": "rest-regression-secret" },
+    }, { actorType: "user", actorId: "board" })).rejects.toMatchObject({
+      status: 422,
+      message: "This app does not have an available connection method",
+    });
+
+    expect(await db.select().from(toolConnections)
+      .where(eq(toolConnections.companyId, company.id))).toEqual([]);
+    expect(await db.select().from(companySecrets)
+      .where(eq(companySecrets.companyId, company.id))).toEqual([]);
+  });
+
   it("registers an approved local stdio template and exposes its runtime slot", async () => {
     const company = await createCompany(db);
     const service = createTestToolAccessService(db);
@@ -3166,6 +3241,36 @@ describeEmbeddedPostgres("tool access service", () => {
       askFirstCount: 0,
       offCount: 0,
     });
+  });
+
+  it.each(["local_implicit", "session"] as const)("excludes unassignable agents from tests even for a %s instance admin", async (source) => {
+    const company = await createCompany(db);
+    const userId = `admin-tool-tester-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, ["tools:use"]);
+    const active = await createAgent(db, company.id);
+    const terminated = await createAgent(db, company.id, "terminated");
+    const pending = await createAgent(db, company.id, "pending_approval");
+    const otherCompany = await createCompany(db);
+    const foreign = await createAgent(db, otherCompany.id);
+    const { connection } = await createRemoteToolFixture(db, company.id);
+    const gateway = createToolGatewayService(db, { toolActionSigningSecret: "test-secret" });
+    const execute = vi.spyOn(gateway, "executeTestCall");
+    const summarize = vi.spyOn(gateway, "summarizeConnectionAccessForAgent");
+    const app = createRouteApp(db, {
+      ...boardSessionActor(company.id, "operator", userId),
+      isInstanceAdmin: true, source,
+    }, gateway);
+
+    const res = await request(app).get(`/api/tool-connections/${connection.id}/test-agents`).expect(200);
+    expect(res.body.agents.map((agent: { id: string }) => agent.id)).toEqual([active.id]);
+    // A stale picker or a direct request must not bypass the same lifecycle guard.
+    for (const agent of [terminated, pending, foreign]) {
+      await request(app).get(`/api/tool-connections/${connection.id}/test-agents/${agent.id}/access`).expect(403);
+      await request(app).post(`/api/tool-connections/${connection.id}/test-calls`)
+        .send({ agentId: agent.id, toolName: "send_email", parameters: { to: "fixture@example.com" } }).expect(403);
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(summarize).not.toHaveBeenCalled();
   });
 
   it("lists only writable agents and ranks the highest accessible agent first", async () => {
@@ -4974,6 +5079,7 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(res.body.apps.map((app: { slug: string }) => app.slug)).toEqual(
       expect.arrayContaining([
         "agentmail",
+        "imessage-photon",
         "jira",
         "airtable",
         "asana",
@@ -4992,9 +5098,10 @@ describeEmbeddedPostgres("tool access service", () => {
         "google-people",
         "google-workspace-search",
         "github",
+        "youcom",
       ]),
     );
-    expect(res.body.apps).toHaveLength(41);
+    expect(res.body.apps).toHaveLength(48);
     expect(
       res.body.apps.find((app: { slug: string }) => app.slug === "gmail")
         .ownershipAvailability,
@@ -13301,6 +13408,39 @@ describeEmbeddedPostgres("tool access service", () => {
     await expect(db.select().from(toolCatalogEntries)).resolves.toHaveLength(0);
   });
 
+  it("keeps missing personal authorization as a client-actionable health failure", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const { connection } = await createRemoteToolFixture(db, company.id);
+    await db
+      .delete(connectionGrants)
+      .where(eq(connectionGrants.connectionId, connection.id));
+    await db
+      .update(toolConnections)
+      .set({
+        credentialPolicy: "per_user",
+        createdByUserId: "board",
+      })
+      .where(eq(toolConnections.id, connection.id));
+
+    await expect(
+      service.checkHealth(connection.id, {
+        actorType: "user",
+        actorId: "board",
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      details: expect.objectContaining({
+        code: "user_authorization_required",
+      }),
+    });
+
+    await expect(service.getConnection(connection.id)).resolves.toMatchObject({
+      healthStatus: "error",
+      healthMessage: "This connection needs the current user's authorization",
+    });
+  });
+
   it("reuses and revives an existing application when connecting with applicationId", async () => {
     const company = await createCompany(db);
     const service = createTestToolAccessService(db);
@@ -14369,6 +14509,42 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(updatedConnection!.config).toMatchObject({
       oauth: expect.objectContaining({ connectedAt: expect.any(String) }),
     });
+  });
+
+  it("discovers GitHub Actions tools during PAT setup and legacy catalog refresh", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const fetchMock = mockToolsList([
+      { name: "actions_list", annotations: { readOnlyHint: true } },
+      {
+        name: "actions_run_trigger",
+        annotations: { readOnlyHint: false, destructiveHint: true },
+      },
+    ]);
+    const actor = { actorType: "user" as const, actorId: "board" };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "github",
+      connectionMethodKey: "mcp-key",
+      credentialValues: { "credentials.authorization": "github-actions-test-token" },
+    }, actor);
+    expect(connected.catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: "actions_list", riskLevel: "read" }),
+      expect.objectContaining({ toolName: "actions_run_trigger", riskLevel: "destructive" }),
+    ]));
+
+    const setupRequestCount = fetchMock.mock.calls.length;
+    expect(setupRequestCount).toBeGreaterThan(0);
+    await db.update(toolConnections).set({
+      config: sql`${toolConnections.config} - 'sourceTemplateKey'`,
+    }).where(eq(toolConnections.id, connected.connectionId));
+    await service.refreshCatalog(connected.connectionId, actor);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(setupRequestCount);
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(url).toBe("https://api.githubcopilot.com/mcp/");
+      expect(new Headers(init?.headers).get("X-MCP-Toolsets")).toBe("default,actions");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer github-actions-test-token");
+    }
+    expect(JSON.stringify(connected)).not.toContain("github-actions-test-token");
   });
 
   it("connects gallery apps and finishes access profiles, bindings, and ask-first policies", async () => {
@@ -17917,6 +18093,42 @@ describe("classifyRisk", () => {
       "destructive",
     );
     expect(classifyRisk({ name: "create_cart" }, "shopify")).toBe("write");
+  });
+});
+
+describe("projectedConnectionHeaders", () => {
+  it.each([undefined, "managed", "mcp-key"])(
+    "adds Actions to the default GitHub toolsets for method %s without saved configuration",
+    (connectionMethodKey) => {
+      const connection = {
+        transport: "mcp_remote",
+        config: { sourceTemplateKey: "github", connectionMethodKey },
+      } as typeof toolConnections.$inferSelect;
+      expect(projectedConnectionHeaders(connection)).toEqual({
+        "X-MCP-Toolsets": "default,actions",
+      });
+      expect(connection.config).not.toHaveProperty("headers");
+    },
+  );
+
+  it("recognizes GitHub in legacy transport configuration", () => {
+    const connection = {
+      transport: "mcp_remote",
+      config: {},
+      transportConfig: { sourceTemplateKey: "github" },
+    } as typeof toolConnections.$inferSelect;
+    expect(projectedConnectionHeaders(connection)).toEqual({
+      "X-MCP-Toolsets": "default,actions",
+    });
+  });
+
+  it("keeps unrelated MCP connections unchanged", () => {
+    for (const connection of [
+      { transport: "mcp_remote", config: { url: "https://fixture.example/mcp" } },
+      { transport: "mcp_remote", config: { sourceTemplateKey: "notion" } },
+    ]) {
+      expect(projectedConnectionHeaders(connection as typeof toolConnections.$inferSelect)).toEqual({});
+    }
   });
 });
 

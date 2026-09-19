@@ -1,5 +1,5 @@
 {
-  "id": "f60d7003-c0bb-43dd-ab15-466d50782318",
+  "id": "d1a3e2cb-5f5f-4bb2-98ec-8475b445d6e6",
   "prevId": "02bc1b0f-2d2b-4c3e-9320-b085bade9f09",
   "version": "7",
   "dialect": "postgresql",
@@ -6505,6 +6505,22 @@
           "method": "btree",
           "with": {}
         },
+        "chat_endpoints_photon_number_uq": {
+          "name": "chat_endpoints_photon_number_uq",
+          "columns": [
+            {
+              "expression": "bot_external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"chat_endpoints\".\"provider\" = 'imessage-photon' and \"chat_endpoints\".\"status\" <> 'archived' and \"chat_endpoints\".\"bot_external_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "chat_endpoints_live_discord_bot_external_uq": {
           "name": "chat_endpoints_live_discord_bot_external_uq",
           "columns": [
@@ -6663,7 +6679,7 @@
         },
         "chat_endpoints_provider_check": {
           "name": "chat_endpoints_provider_check",
-          "value": "\"chat_endpoints\".\"provider\" in ('slack', 'github', 'discord', 'microsoft-teams', 'telegram', 'agentmail')"
+          "value": "\"chat_endpoints\".\"provider\" in ('slack', 'github', 'discord', 'microsoft-teams', 'telegram', 'agentmail', 'imessage-photon')"
         },
         "chat_endpoints_status_check": {
           "name": "chat_endpoints_status_check",
@@ -6848,7 +6864,7 @@
       "checkConstraints": {
         "chat_external_principals_provider_check": {
           "name": "chat_external_principals_provider_check",
-          "value": "\"chat_external_principals\".\"provider\" in ('slack', 'github', 'discord', 'microsoft-teams', 'telegram', 'agentmail')"
+          "value": "\"chat_external_principals\".\"provider\" in ('slack', 'github', 'discord', 'microsoft-teams', 'telegram', 'agentmail', 'imessage-photon')"
         },
         "chat_external_principals_kind_check": {
           "name": "chat_external_principals_kind_check",
@@ -22429,22 +22445,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "heartbeat_runs_global_running_status_idx": {
-          "name": "heartbeat_runs_global_running_status_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"heartbeat_runs\".\"status\" = 'running'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -47445,108 +47445,6 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.global_run_admission": {
-      "name": "global_run_admission",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "singleton_key": {
-          "name": "singleton_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'default'"
-        },
-        "max_concurrent_runs": {
-          "name": "max_concurrent_runs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 20
-        },
-        "emergency_stop_active": {
-          "name": "emergency_stop_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "emergency_stop_reason": {
-          "name": "emergency_stop_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_actor_type": {
-          "name": "emergency_stop_actor_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_actor_id": {
-          "name": "emergency_stop_actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "emergency_stop_activated_at": {
-          "name": "emergency_stop_activated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "authorized_agent_ids": {
-          "name": "authorized_agent_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "global_run_admission_singleton_key_idx": {
-          "name": "global_run_admission_singleton_key_idx",
-          "columns": [
-            {
-              "expression": "singleton_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
