@@ -18,7 +18,6 @@ import {
   issueComments,
   issueRecoveryActions,
   issueRelations,
-  issueRecoveryActions,
   issueTreeHoldMembers,
   issueTreeHolds,
   issues,
