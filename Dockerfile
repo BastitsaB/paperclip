@@ -163,6 +163,72 @@ RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
 
+# MAI-2368: a codex_local run with no sandbox provider configured executes
+# directly in this image, not in the k8s sandbox-provider's
+# agent-runtime-codex image (docker/agent-runtime/Dockerfile.codex), so
+# gcloud has to be baked in here too. Pinned to one release archive plus its
+# sha256 per architecture -- objects in the cloud-sdk-release bucket are
+# immutable, so these ARGs reproduce the same gcloud on every build; bump all
+# three together on a version bump. Google's 64-bit ARM archive is named
+# "linux-arm", not "linux-arm64" (confirmed against a compiled binary inside
+# it: ELF e_machine EM_AARCH64). Mirrors the RUSTUP_SHA256_AMD64 /
+# RUSTUP_SHA256_ARM64 pair above.
+ARG GCLOUD_VERSION=584.0.0
+ARG GCLOUD_SHA256_AMD64=02f0a54a1c5f9e582c568cd8da8258e22275b8ab033532fa03fd46bd9f7a3398
+ARG GCLOUD_SHA256_ARM64=c89ede7464617f27c37ccb7ec792c6f7cafdbb6d4729ab723c42e1ec66828592
+
+# A symlink in /usr/local/bin, not a PATH or profile edit.
+# SANDBOX-REQUIREMENTS.md's Firm rule ("the Paperclip runtime never modifies
+# the login profile") is not scoped to sandboxed runs only, and a provider
+# that wraps a command in a login shell resets PATH from /etc/profile before
+# this image's ENV ever applies. Verified below against this base's actual
+# /etc/profile, which does exactly that.
+#
+# Only the amd64 archive bundles its own Python interpreter
+# (platform/bundledpythonunix); the arm64 ("linux-arm") archive ships none and
+# falls back to searching PATH for python3, which the base stage above already
+# installs on every architecture -- so both archs end up with a working
+# gcloud, just not the same interpreter pin.
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) gcloud_arch=x86_64; gcloud_sha256="$GCLOUD_SHA256_AMD64" ;; \
+      arm64) gcloud_arch=arm; gcloud_sha256="$GCLOUD_SHA256_ARM64" ;; \
+      *) echo "gcloud install supports amd64/arm64 only, got $arch"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/gcloud.tar.gz \
+      "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-${GCLOUD_VERSION}-linux-${gcloud_arch}.tar.gz"; \
+    echo "${gcloud_sha256}  /tmp/gcloud.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gcloud.tar.gz -C /opt; \
+    rm -f /tmp/gcloud.tar.gz; \
+    CLOUDSDK_CONFIG=/tmp/gcloud-build /opt/google-cloud-sdk/install.sh --quiet \
+      --usage-reporting=false --path-update=false --bash-completion=false \
+      --command-completion=false; \
+    rm -rf /tmp/gcloud-build /root/.config/gcloud /opt/google-cloud-sdk/.install/.backup; \
+    ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+
+# gcloud's default config directory is $HOME/.config/gcloud. /paperclip
+# (chowned above, and re-chowned by docker-entrypoint.sh on every start to
+# match the runtime UID/GID) is writable by the runtime user, so this image
+# needs no CLOUDSDK_CONFIG override -- the whole point of /paperclip is that
+# it is always writable by whoever ends up running the container. Usage
+# reporting and the component-manager update check are disabled: this image
+# never updates gcloud after build.
+ENV CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true \
+    CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK=true
+
+# Verify gcloud on the image PATH, on a login-shell PATH (which comes from
+# /etc/profile, not this image's ENV), and as the runtime user via gosu.
+# This stage stays root through the whole build and drops privilege only at
+# docker-entrypoint.sh's `exec gosu node "$@"`, so the third check is the
+# closest available approximation of how a real run invokes gcloud.
+RUN set -eu; \
+    command -v gcloud >/dev/null 2>&1 || { echo "gcloud not on PATH"; exit 1; }; \
+    sh -lc 'command -v gcloud >/dev/null 2>&1' \
+      || { echo "gcloud not on login-shell PATH"; exit 1; }; \
+    HOME=/paperclip gosu node sh -lc 'command -v gcloud >/dev/null 2>&1 && gcloud --version >/dev/null' \
+      || { echo "gcloud not runnable as the node user"; exit 1; }
+
 COPY scripts/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
