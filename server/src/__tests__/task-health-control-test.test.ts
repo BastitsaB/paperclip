@@ -467,6 +467,105 @@ describeEmbeddedPostgres("issueService task-health control test mode", () => {
     expect(await db.select().from(issueRecoveryActions)).toEqual([]);
   });
 
+  it("validates the resulting state when a running marker issue loses its assignee", async () => {
+    const companyId = await seedCompany();
+    const agentId = randomUUID();
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Engineer",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const insertRunning = (values: {
+      description: string;
+      assigneeAgentId?: string;
+      assigneeUserId?: string;
+    }) =>
+      db.insert(issues).values({
+        companyId,
+        title: "Laufender Vorgang",
+        status: "in_progress",
+        priority: "medium",
+        ...values,
+      }).returning().then((rows) => rows[0]!);
+
+    const markedAgent = await insertRunning({ description: MARKER_DESCRIPTION, assigneeAgentId: agentId });
+    const markedUser = await insertRunning({ description: MARKER_DESCRIPTION, assigneeUserId: "board-user" });
+    const watched = await insertRunning({ description: MARKER_DESCRIPTION, assigneeAgentId: agentId });
+    await db.insert(issueWatchdogs).values({ companyId, issueId: watched.id, watchdogAgentId: agentId });
+    const blocker = await svc.create(companyId, { title: "Blocker", status: "todo", priority: "medium" });
+
+    const rejected: Array<[string, Record<string, unknown>]> = [
+      [markedAgent.id, { assigneeAgentId: null, description: "Marker entfernt" }],
+      [markedUser.id, { assigneeUserId: null, description: "Marker entfernt" }],
+      [markedAgent.id, { assigneeAgentId: null, blockedByIssueIds: [blocker.id] }],
+      [markedUser.id, { assigneeUserId: null, executionPolicy: { mode: "normal", commentRequired: true, stages: [] } }],
+      [watched.id, { assigneeAgentId: null }],
+    ];
+    for (const [issueId, patch] of rejected) {
+      await expect(svc.update(issueId, patch), JSON.stringify(patch))
+        .rejects.toMatchObject({ status: 422, message: "in_progress issues require an assignee" });
+    }
+
+    const unchanged = await db
+      .select({
+        id: issues.id,
+        status: issues.status,
+        description: issues.description,
+        assigneeAgentId: issues.assigneeAgentId,
+        assigneeUserId: issues.assigneeUserId,
+      })
+      .from(issues)
+      .where(eq(issues.companyId, companyId));
+    expect(unchanged).toEqual(expect.arrayContaining([
+      { id: markedAgent.id, status: "in_progress", description: MARKER_DESCRIPTION, assigneeAgentId: agentId, assigneeUserId: null },
+      { id: markedUser.id, status: "in_progress", description: MARKER_DESCRIPTION, assigneeAgentId: null, assigneeUserId: "board-user" },
+      { id: watched.id, status: "in_progress", description: MARKER_DESCRIPTION, assigneeAgentId: agentId, assigneeUserId: null },
+    ]));
+    const blockerEdges = await db.select().from(issueRelations).where(eq(issueRelations.companyId, companyId));
+    expect(blockerEdges).toEqual([]);
+
+    // A valid control test may give up either assignee kind; the result is the inert fixture.
+    await svc.update(markedAgent.id, { assigneeAgentId: null });
+    expectInertControlTest(await readBack(markedAgent.id));
+    await svc.update(markedUser.id, { assigneeUserId: null });
+    expectInertControlTest(await readBack(markedUser.id));
+  });
+
+  it("keeps the regular semantics for issues without the marker before and after", async () => {
+    const companyId = await seedCompany();
+    // Pre-existing behaviour, deliberately unchanged: unassigning a running
+    // issue without a marker is not part of the control-test exception.
+    const running = await db.insert(issues).values({
+      companyId,
+      title: "Normaler laufender Vorgang",
+      description: "Ohne Marker",
+      status: "in_progress",
+      priority: "medium",
+      assigneeUserId: "board-user",
+    }).returning().then((rows) => rows[0]!);
+    await svc.update(running.id, { assigneeUserId: null });
+    const [unassigned] = await db.select().from(issues).where(eq(issues.id, running.id));
+    expect(unassigned).toMatchObject({ status: "in_progress", assigneeUserId: null });
+
+    await svc.update(running.id, { title: "Altbestand umbenannt" });
+    const [renamed] = await db.select().from(issues).where(eq(issues.id, running.id));
+    expect(renamed).toMatchObject({ title: "Altbestand umbenannt", status: "in_progress" });
+
+    // Adding the marker to such a row makes it a control test and applies the check.
+    await expect(svc.update(running.id, {
+      description: MARKER_DESCRIPTION,
+      executionPolicy: { mode: "normal", commentRequired: true, stages: [] },
+    })).rejects.toMatchObject({ status: 422, message: "in_progress issues require an assignee" });
+    await svc.update(running.id, { description: MARKER_DESCRIPTION });
+    expectInertControlTest(await readBack(running.id));
+  });
+
   it("moves an unassigned marker issue into progress via update", async () => {
     const companyId = await seedCompany();
     const issue = await svc.create(companyId, {

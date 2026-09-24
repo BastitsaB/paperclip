@@ -10621,23 +10621,26 @@ export function issueService(db: Db) {
       if (nextAssigneeAgentId && nextAssigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
-      // A running control test keeps its invariants on every later edit, not
-      // only on the transition into progress.
-      const keepsRunningControlTest =
-        patch.status === undefined &&
-        existing.status === "in_progress" &&
-        !existing.assigneeAgentId &&
-        !existing.assigneeUserId &&
-        hasTaskHealthControlTestMarker(existing.description);
+      // Validate the resulting state, not only the transition into progress:
+      // a marker issue that ends up unassigned in progress must be a valid
+      // control test, whether it enters progress, loses its assignee while
+      // running, drops or gains the marker, or is edited later. Issues without
+      // the marker before and after keep the regular semantics.
+      const nextStatus = patch.status ?? existing.status;
+      const nextDescription =
+        issueData.description !== undefined
+          ? issueData.description
+          : existing.description;
+      const needsUnassignedInProgressCheck =
+        patch.status === "in_progress" ||
+        hasTaskHealthControlTestMarker(existing.description) ||
+        hasTaskHealthControlTestMarker(nextDescription);
       if (
-        (patch.status === "in_progress" || keepsRunningControlTest) &&
+        nextStatus === "in_progress" &&
+        needsUnassignedInProgressCheck &&
         !nextAssigneeAgentId &&
         !nextAssigneeUserId
       ) {
-        const nextDescription =
-          issueData.description !== undefined
-            ? issueData.description
-            : existing.description;
         const nextBlockerCount =
           blockedByIssueIds !== undefined
             ? blockedByIssueIds.length
