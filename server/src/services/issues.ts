@@ -189,6 +189,10 @@ import {
 import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
+import {
+  allowsUnassignedInProgressControlTest,
+  hasTaskHealthControlTestMarker,
+} from "./task-health-control-test.js";
 
 const ALL_ISSUE_STATUSES = [
   "backlog",
@@ -9674,7 +9678,15 @@ export function issueService(db: Db) {
       if (
         data.status === "in_progress" &&
         !data.assigneeAgentId &&
-        !data.assigneeUserId
+        !data.assigneeUserId &&
+        !(
+          watchdog == null &&
+          allowsUnassignedInProgressControlTest({
+            description: issueData.description,
+            blockerCount: blockedByIssueIds?.length ?? 0,
+            executionPolicy: issueData.executionPolicy,
+          })
+        )
       ) {
         throw unprocessable("in_progress issues require an assignee");
       }
@@ -10609,12 +10621,50 @@ export function issueService(db: Db) {
       if (nextAssigneeAgentId && nextAssigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
+      // A running control test keeps its invariants on every later edit, not
+      // only on the transition into progress.
+      const keepsRunningControlTest =
+        patch.status === undefined &&
+        existing.status === "in_progress" &&
+        !existing.assigneeAgentId &&
+        !existing.assigneeUserId &&
+        hasTaskHealthControlTestMarker(existing.description);
       if (
-        patch.status === "in_progress" &&
+        (patch.status === "in_progress" || keepsRunningControlTest) &&
         !nextAssigneeAgentId &&
         !nextAssigneeUserId
       ) {
-        throw unprocessable("in_progress issues require an assignee");
+        const nextDescription =
+          issueData.description !== undefined
+            ? issueData.description
+            : existing.description;
+        const nextBlockerCount =
+          blockedByIssueIds !== undefined
+            ? blockedByIssueIds.length
+            : await dbOrTx
+                .select({ id: issueRelations.id })
+                .from(issueRelations)
+                .where(
+                  and(
+                    eq(issueRelations.companyId, existing.companyId),
+                    eq(issueRelations.type, "blocks"),
+                    eq(issueRelations.relatedIssueId, existing.id),
+                  ),
+                )
+                .then((rows: Array<{ id: string }>) => rows.length);
+        const nextExecutionPolicy =
+          issueData.executionPolicy !== undefined
+            ? issueData.executionPolicy
+            : existing.executionPolicy;
+        if (
+          !allowsUnassignedInProgressControlTest({
+            description: nextDescription,
+            blockerCount: nextBlockerCount,
+            executionPolicy: nextExecutionPolicy,
+          })
+        ) {
+          throw unprocessable("in_progress issues require an assignee");
+        }
       }
       if (patch.status === "in_progress") {
         const dependencyReadiness =
