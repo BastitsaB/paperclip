@@ -3,11 +3,13 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agents,
   companies,
   createDb,
   heartbeatRuns,
   issueComments,
   issueRelations,
+  issueWatchdogs,
   issues,
 } from "@paperclipai/db";
 import {
@@ -78,9 +80,11 @@ describeEmbeddedPostgres("issueService task-health control test mode", () => {
   afterEach(async () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
+    await db.delete(issueWatchdogs);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(heartbeatRuns);
+    await db.delete(agents);
     await db.delete(companies);
   });
 
@@ -295,6 +299,46 @@ describeEmbeddedPostgres("issueService task-health control test mode", () => {
 
     await expect(svc.update(marked.id, { status: "in_progress" }))
       .rejects.toMatchObject({ status: 422, message: "in_progress issues require an assignee" });
+  });
+
+  it("rejects the marker on update while an active watchdog is attached", async () => {
+    const companyId = await seedCompany();
+    const watchdogAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: watchdogAgentId,
+      companyId,
+      name: "Watchdog Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const pending = await svc.create(companyId, {
+      title: "Kontrolltest",
+      description: MARKER_DESCRIPTION,
+      status: "todo",
+      priority: "medium",
+    });
+    await db.insert(issueWatchdogs).values({ companyId, issueId: pending.id, watchdogAgentId });
+    await expect(svc.update(pending.id, { status: "in_progress" }))
+      .rejects.toMatchObject({ status: 422, message: "in_progress issues require an assignee" });
+
+    const running = await svc.create(companyId, {
+      title: "Laufender Kontrolltest",
+      description: MARKER_DESCRIPTION,
+      status: "in_progress",
+      priority: "medium",
+    });
+    await db.insert(issueWatchdogs).values({ companyId, issueId: running.id, watchdogAgentId });
+    await expect(svc.update(running.id, { title: "Nachträglich überwacht" }))
+      .rejects.toMatchObject({ status: 422, message: "in_progress issues require an assignee" });
+
+    await db.update(issueWatchdogs).set({ status: "disabled" }).where(eq(issueWatchdogs.issueId, running.id));
+    await svc.update(running.id, { title: "Watchdog entfernt" });
+    expectInertControlTest(await readBack(running.id));
   });
 
   it("moves an unassigned marker issue into progress via update", async () => {

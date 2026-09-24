@@ -10656,7 +10656,20 @@ export function issueService(db: Db) {
           issueData.executionPolicy !== undefined
             ? issueData.executionPolicy
             : existing.executionPolicy;
+        // Create rejects a watchdog outright; here it may already exist.
+        const activeWatchdogCount = await dbOrTx
+          .select({ id: issueWatchdogs.id })
+          .from(issueWatchdogs)
+          .where(
+            and(
+              eq(issueWatchdogs.companyId, existing.companyId),
+              eq(issueWatchdogs.issueId, existing.id),
+              eq(issueWatchdogs.status, "active"),
+            ),
+          )
+          .then((rows: Array<{ id: string }>) => rows.length);
         if (
+          activeWatchdogCount > 0 ||
           !allowsUnassignedInProgressControlTest({
             description: nextDescription,
             blockerCount: nextBlockerCount,
