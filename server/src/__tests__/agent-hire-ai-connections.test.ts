@@ -228,5 +228,10 @@ describe("hired agents sharing a subscription", () => {
       await heartbeat.drainActiveRunExecutions();
       unregisterServerAdapter(f.adapterType);
     }
-  });
+    // The file default testTimeout (15s, see server/vitest.config.ts) is
+    // shorter than the expect.poll timeout above (20s), so this test could
+    // never pass once the polled condition genuinely took more than 15s —
+    // independent of whether the run actually succeeded. Give the test its
+    // own budget comfortably past the poll's own limit.
+  }, 25_000);
 });
