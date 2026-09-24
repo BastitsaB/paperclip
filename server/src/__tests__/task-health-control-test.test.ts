@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentWakeupRequests,
   agents,
   companies,
   createDb,
   heartbeatRuns,
   issueComments,
+  issueRecoveryActions,
   issueRelations,
   issueWatchdogs,
   issues,
@@ -16,6 +18,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+import { heartbeatService } from "../services/heartbeat.ts";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.ts";
 import { issueService } from "../services/issues.ts";
 import {
@@ -79,6 +82,8 @@ describeEmbeddedPostgres("issueService task-health control test mode", () => {
 
   afterEach(async () => {
     await db.delete(issueComments);
+    await db.delete(issueRecoveryActions);
+    await db.delete(agentWakeupRequests);
     await db.delete(issueRelations);
     await db.delete(issueWatchdogs);
     await db.delete(activityLog);
@@ -339,6 +344,127 @@ describeEmbeddedPostgres("issueService task-health control test mode", () => {
     await db.update(issueWatchdogs).set({ status: "disabled" }).where(eq(issueWatchdogs.issueId, running.id));
     await svc.update(running.id, { title: "Watchdog entfernt" });
     expectInertControlTest(await readBack(running.id));
+  });
+
+  // MAI-3047 review: the "Täglicher Task-Health-Scan" routine is agent-driven,
+  // so this reproduces its CONTROL_TEST_MODE contract deterministically. It runs
+  // every server sweep that could touch the overdue test before the scan, then
+  // performs the routine's candidate selection, duplicate check and RCA creation
+  // twice through issueService, and reads everything back.
+  it("leaves an overdue control test to the task-health scan, which records exactly one RCA case", async () => {
+    const companyId = await seedCompany();
+    const ownerAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: ownerAgentId,
+      companyId,
+      name: "Chief of Staff",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const testStartUtc = new Date("2026-09-19T18:00:00.000Z");
+    const scanAt = new Date("2026-09-21T00:00:00.000Z");
+    const controlTest = await svc.create(companyId, {
+      title: "Task-Health-E2E-Kontrolltest",
+      description: [
+        TASK_HEALTH_CONTROL_TEST_MARKER,
+        `TEST_START_UTC: ${testStartUtc.toISOString()}`,
+      ].join("\n"),
+      status: "in_progress",
+      priority: "medium",
+    });
+    await db
+      .update(issues)
+      .set({ createdAt: testStartUtc, updatedAt: testStartUtc, startedAt: testStartUtc })
+      .where(eq(issues.id, controlTest.id));
+
+    // Every periodic sweep the server runs on startup and on its timer.
+    const heartbeat = heartbeatService(db, { runtimeEnv: {} });
+    await heartbeat.reconcileStrandedAssignedIssues();
+    await heartbeat.reconcileResolvedDependencyWakes();
+    await heartbeat.reconcileTaskWatchdogs();
+    await heartbeat.scanSilentActiveRuns();
+    await heartbeat.sweepStaleIssueLocks();
+    await heartbeat.tickTimers(scanAt);
+
+    const beforeScan = await readBack(controlTest.id);
+    expectInertControlTest(beforeScan);
+    expect(beforeScan.row.updatedAt.toISOString()).toBe(testStartUtc.toISOString());
+    expect(await db.select().from(agentWakeupRequests)).toEqual([]);
+    expect(await db.select().from(issueRecoveryActions)).toEqual([]);
+    expect(
+      await db.select({ id: issues.id }).from(issues).where(ne(issues.id, controlTest.id)),
+    ).toEqual([]);
+
+    async function runTaskHealthScan() {
+      const candidates = (await db
+        .select()
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.status, "in_progress"))))
+        .filter((row) => hasTaskHealthControlTestMarker(row.description));
+      for (const candidate of candidates) {
+        const startLine = candidate.description!
+          .split(/\r?\n/)
+          .find((line) => line.startsWith("TEST_START_UTC: "));
+        const startedAt = new Date(startLine!.slice("TEST_START_UTC: ".length));
+        const dueAt = new Date(startedAt.getTime() + 24 * 60 * 60 * 1000);
+        if (scanAt <= dueAt) continue;
+        const existing = await db
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(eq(issues.companyId, companyId), eq(issues.parentId, candidate.id)));
+        if (existing.length > 0) continue;
+        const latencyMinutes = Math.round((scanAt.getTime() - dueAt.getTime()) / 60_000);
+        await svc.create(companyId, {
+          title: `Recovery/RCA: Task-Health-Kontrolltest ${candidate.identifier} überfällig`,
+          description: [
+            "Kategorie/Ursache: in_progress ohne Owner, Run-Aktivität und Monitor über 24 h",
+            `Test-ID: ${candidate.identifier}`,
+            `UTC-Start: ${startedAt.toISOString()}`,
+            `Fälligkeit: ${dueAt.toISOString()}`,
+            `Scanzeit: ${scanAt.toISOString()}`,
+            `Latenz: ${latencyMinutes} min`,
+            "Schweregrad: high",
+            `Owner: agent://${ownerAgentId}`,
+            "Korrektur: Kontrolltest auswerten und schließen",
+            `Prüftermin: ${new Date(scanAt.getTime() + 24 * 60 * 60 * 1000).toISOString()}`,
+          ].join("\n"),
+          parentId: candidate.id,
+          status: "todo",
+          priority: "high",
+          assigneeAgentId: ownerAgentId,
+        });
+      }
+    }
+
+    await runTaskHealthScan();
+    await runTaskHealthScan();
+
+    const rcaCases = await db.select().from(issues).where(eq(issues.parentId, controlTest.id));
+    expect(rcaCases).toHaveLength(1);
+    const rcaLines = rcaCases[0]!.description!.split("\n");
+    expect(rcaLines).toEqual([
+      "Kategorie/Ursache: in_progress ohne Owner, Run-Aktivität und Monitor über 24 h",
+      `Test-ID: ${controlTest.identifier}`,
+      "UTC-Start: 2026-09-19T18:00:00.000Z",
+      "Fälligkeit: 2026-09-20T18:00:00.000Z",
+      "Scanzeit: 2026-09-21T00:00:00.000Z",
+      "Latenz: 360 min",
+      "Schweregrad: high",
+      `Owner: agent://${ownerAgentId}`,
+      "Korrektur: Kontrolltest auswerten und schließen",
+      "Prüftermin: 2026-09-22T00:00:00.000Z",
+    ]);
+    expect(rcaCases[0]).toMatchObject({ assigneeAgentId: ownerAgentId, status: "todo" });
+
+    const afterScan = await readBack(controlTest.id);
+    expectInertControlTest(afterScan);
+    expect(await db.select().from(agentWakeupRequests)).toEqual([]);
+    expect(await db.select().from(issueRecoveryActions)).toEqual([]);
   });
 
   it("moves an unassigned marker issue into progress via update", async () => {
