@@ -1,0 +1,73 @@
+name: MAI-2845 Verify Production Image
+
+# Non-deploying proof that the top-level Dockerfile's `production` stage
+# still builds and still carries a runnable gcloud + codex for the
+# codex_local no-sandbox-provider fallback path (see the Dockerfile's
+# MAI-2368 comment). This workflow never logs into a registry and never
+# pushes; it only builds locally with --load and smoke-checks the loaded
+# image. docker.yml (push/tag triggered) is what actually publishes images.
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/mai-2845-verify-production.yml
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - pnpm-workspace.yaml
+      - pnpm-lock.yaml
+      - .npmrc
+      - cli/**
+      - server/**
+      - ui/**
+      - packages/**
+      - patches/**
+      - scripts/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mai-2845-verify-production-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      # Loaded into the runner's local daemon, never pushed. No registry
+      # login step exists in this workflow at all.
+      - name: Production image build
+        run: |
+          set -euo pipefail
+          docker buildx build --target production --load --tag "mai-2845-verify:${GITHUB_SHA}" .
+
+      # --entrypoint sh overrides tini/docker-entrypoint.sh so no product
+      # process (server, gosu re-exec) ever starts. --user node runs the
+      # container directly as the image's non-root runtime user instead of
+      # relying on the entrypoint's root-to-node gosu drop.
+      - name: Non-root gcloud + codex smoke
+        run: |
+          set -euo pipefail
+          docker run --rm --user node --entrypoint sh "mai-2845-verify:${GITHUB_SHA}" -c '
+            set -eu
+            echo "whoami: $(whoami)"
+            command -v gcloud
+            gcloud --version
+            command -v codex
+            codex --version
+          '
