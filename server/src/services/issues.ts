@@ -189,6 +189,10 @@ import {
 import { buildIssueChanges } from "./issue-change-receipt.js";
 import { projectSafeChatPublication } from "./chat-publication-projection.js";
 import { issueThreadInteractionAttentionAgentAllowed } from "./issue-thread-interaction-resolution.js";
+import {
+  allowsUnassignedInProgressControlTest,
+  hasTaskHealthControlTestMarker,
+} from "./task-health-control-test.js";
 
 const ALL_ISSUE_STATUSES = [
   "backlog",
@@ -9674,7 +9678,15 @@ export function issueService(db: Db) {
       if (
         data.status === "in_progress" &&
         !data.assigneeAgentId &&
-        !data.assigneeUserId
+        !data.assigneeUserId &&
+        !(
+          watchdog == null &&
+          allowsUnassignedInProgressControlTest({
+            description: issueData.description,
+            blockerCount: blockedByIssueIds?.length ?? 0,
+            executionPolicy: issueData.executionPolicy,
+          })
+        )
       ) {
         throw unprocessable("in_progress issues require an assignee");
       }
@@ -10609,12 +10621,66 @@ export function issueService(db: Db) {
       if (nextAssigneeAgentId && nextAssigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
+      // Validate the resulting state, not only the transition into progress:
+      // a marker issue that ends up unassigned in progress must be a valid
+      // control test, whether it enters progress, loses its assignee while
+      // running, drops or gains the marker, or is edited later. Issues without
+      // the marker before and after keep the regular semantics.
+      const nextStatus = patch.status ?? existing.status;
+      const nextDescription =
+        issueData.description !== undefined
+          ? issueData.description
+          : existing.description;
+      const needsUnassignedInProgressCheck =
+        patch.status === "in_progress" ||
+        hasTaskHealthControlTestMarker(existing.description) ||
+        hasTaskHealthControlTestMarker(nextDescription);
       if (
-        patch.status === "in_progress" &&
+        nextStatus === "in_progress" &&
+        needsUnassignedInProgressCheck &&
         !nextAssigneeAgentId &&
         !nextAssigneeUserId
       ) {
-        throw unprocessable("in_progress issues require an assignee");
+        const nextBlockerCount =
+          blockedByIssueIds !== undefined
+            ? blockedByIssueIds.length
+            : await dbOrTx
+                .select({ id: issueRelations.id })
+                .from(issueRelations)
+                .where(
+                  and(
+                    eq(issueRelations.companyId, existing.companyId),
+                    eq(issueRelations.type, "blocks"),
+                    eq(issueRelations.relatedIssueId, existing.id),
+                  ),
+                )
+                .then((rows: Array<{ id: string }>) => rows.length);
+        const nextExecutionPolicy =
+          issueData.executionPolicy !== undefined
+            ? issueData.executionPolicy
+            : existing.executionPolicy;
+        // Create rejects a watchdog outright; here it may already exist.
+        const activeWatchdogCount = await dbOrTx
+          .select({ id: issueWatchdogs.id })
+          .from(issueWatchdogs)
+          .where(
+            and(
+              eq(issueWatchdogs.companyId, existing.companyId),
+              eq(issueWatchdogs.issueId, existing.id),
+              eq(issueWatchdogs.status, "active"),
+            ),
+          )
+          .then((rows: Array<{ id: string }>) => rows.length);
+        if (
+          activeWatchdogCount > 0 ||
+          !allowsUnassignedInProgressControlTest({
+            description: nextDescription,
+            blockerCount: nextBlockerCount,
+            executionPolicy: nextExecutionPolicy,
+          })
+        ) {
+          throw unprocessable("in_progress issues require an assignee");
+        }
       }
       if (patch.status === "in_progress") {
         const dependencyReadiness =
