@@ -3,12 +3,19 @@ import { ChevronRight } from "lucide-react";
 import type { ActivityEvent } from "@paperclipai/shared";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { formatDayAwareTime } from "@/lib/timeAgo";
 
 export type RoutineActivityEvent = Pick<ActivityEvent, "id" | "action" | "details" | "createdAt">;
 
+/**
+ * "08:16 PM" for an event from today, "Sep 20, 08:16 PM" once it is no
+ * longer from today — the row previously showed a bare clock time with no
+ * date, so a log read after midnight could not tell today's entries from
+ * yesterday's (or older).
+ */
 function formatTime(value: string | Date): string {
   try {
-    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return formatDayAwareTime(value);
   } catch {
     return String(value);
   }
@@ -50,7 +57,7 @@ export function RoutineActivityRow({ event }: { event: RoutineActivityEvent }) {
           hasPayload ? "hover:bg-accent/30" : "cursor-default",
         )}
       >
-        <span className="w-12 shrink-0 font-mono text-muted-foreground/70">
+        <span className="shrink-0 whitespace-nowrap font-mono text-muted-foreground/70">
           {formatTime(event.createdAt)}
         </span>
         <Badge variant="outline" className="shrink-0 font-mono">

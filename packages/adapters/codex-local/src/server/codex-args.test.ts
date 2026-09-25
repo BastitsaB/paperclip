@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { buildCodexExecArgs } from "./codex-args.js";
 
 describe("buildCodexExecArgs", () => {
-  it("forwards GPT-6 Astra, its ultra reasoning effort, and fast mode", () => {
+  it.each([["gpt-6-astra", "ultra"], ["gpt-6-sol", "ultra"], ["gpt-6-luna", "max"], ["gpt-5.6-sol", "ultra"], ["gpt-5.6-terra", "ultra"], ["gpt-5.6-luna", "max"]])("forwards %s, its supported reasoning effort, and fast mode", (model, effort) => {
     const result = buildCodexExecArgs({
-      model: "gpt-6-astra",
-      modelReasoningEffort: "ultra",
+      model,
+      modelReasoningEffort: effort,
       fastMode: true,
     });
 
-    expect(result.model).toBe("gpt-6-astra");
+    expect(result.model).toBe(model);
     expect(result.fastModeApplied).toBe(true);
     expect(result.fastModeIgnoredReason).toBeNull();
     expect(result.args).toEqual([
@@ -20,9 +20,9 @@ describe("buildCodexExecArgs", () => {
       "-c",
       "sandbox_workspace_write.network_access=true",
       "--model",
-      "gpt-6-astra",
+      model,
       "-c",
-      'model_reasoning_effort="ultra"',
+      `model_reasoning_effort="${effort}"`,
       "-c",
       'service_tier="fast"',
       "-c",
@@ -156,7 +156,7 @@ describe("buildCodexExecArgs", () => {
     expect(result.fastModeRequested).toBe(true);
     expect(result.fastModeApplied).toBe(false);
     expect(result.fastModeIgnoredReason).toContain(
-      "currently only supported on gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4 or manually configured model IDs",
+      "currently only supported on gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4 or manually configured model IDs",
     );
     expect(result.args).toEqual([
       "exec",
