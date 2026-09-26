@@ -924,6 +924,19 @@ const APPROVED_STDIO_TEMPLATES: Record<
 
 const GOOGLE_SHEETS_GALLERY_KEY = "google-sheets";
 const COMPOSIO_GALLERY_KEY = "composio";
+/**
+ * Toolkits whose existing Composio account may be re-authorized in place through
+ * Composio's DEPRECATED `connected_accounts/{id}/refresh` (MAI-3412). One-time
+ * operator path for the Meta Ads account Meta invalidated (OAuth 190/460): the
+ * supported `connected_accounts/link` always mints a new account id, which the
+ * owner ruled out. Remove the entry once the reauth is done.
+ */
+const COMPOSIO_REFRESH_REAUTH_TOOLKITS: ReadonlySet<string> = new Set(["metaads"]);
+/** Statuses Composio documents for an account waiting on the consent screen. */
+const COMPOSIO_REFRESH_PENDING_STATUSES: ReadonlySet<string> = new Set([
+  "INITIALIZING",
+  "INITIATED",
+]);
 const GOOGLE_SHEETS_TEMPLATE_ID = "paperclip.google-sheets";
 const GOOGLE_SHEETS_ALLOWED_SPREADSHEET_IDS_ENV =
   "GOOGLE_SHEETS_ALLOWED_SPREADSHEET_IDS";
@@ -7534,6 +7547,10 @@ export function toolAccessService(
         connectedAccountId: account?.id ?? null,
         connectedAccountStatus: account?.status ?? null,
         childConnectionId: child?.id ?? null,
+        sameAccountReauthAvailable:
+          COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkit.slug) &&
+          !!child &&
+          !!composioChildConfig(child)?.connectedAccountId,
       });
     }
     return { parentConnectionId: parent.id, userId, services };
@@ -7570,6 +7587,159 @@ export function toolAccessService(
       ...(input.callbackUrl ? { callbackUrl: input.callbackUrl } : {}),
     });
     return { toolkitSlug, authConfigId, ...link };
+  }
+
+  /**
+   * Resolves the one child a same-account reauth may touch: the only live child
+   * of this parent for an allowlisted toolkit, and the account id stored on it.
+   * No caller-supplied account id is accepted anywhere on this path.
+   */
+  async function composioReauthTarget(
+    parentConnectionId: string,
+    toolkitSlug: string,
+  ) {
+    const parent = await getConnectionRow(parentConnectionId);
+    const invalid = (message: string) =>
+      unprocessable(message, { code: "composio_reauth_target_invalid" });
+    if (!COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkitSlug)) {
+      throw invalid(`Same-account reauth is not enabled for ${toolkitSlug}.`);
+    }
+    const client = await composioClientForParent(parent);
+    const children = (await existingComposioChildren(parent)).filter(
+      (candidate) =>
+        candidate.status !== "archived" &&
+        composioChildConfig(candidate)?.toolkitSlug === toolkitSlug,
+    );
+    if (children.length !== 1) {
+      throw invalid(
+        `Expected exactly one ${toolkitSlug} connection under this Composio connection, found ${children.length}.`,
+      );
+    }
+    const child = children[0]!;
+    const connectedAccountId = composioChildConfig(child)?.connectedAccountId?.trim();
+    if (!connectedAccountId) {
+      throw invalid(`The ${toolkitSlug} connection has no stored Composio account.`);
+    }
+    return { parent, child, client, connectedAccountId, userId: `paperclip:${parent.companyId}` };
+  }
+
+  function composioReauthProviderError(error: unknown): never {
+    if (!(error instanceof ComposioApiError)) throw error;
+    if (error.status === 401 || error.status === 403) {
+      throw new HttpError(502, "Composio rejected the API key.", {
+        code: "composio_reauth_auth_failed",
+        providerStatus: error.status,
+      });
+    }
+    if (error.status === 404 || error.status === 405 || error.status === 410) {
+      throw new HttpError(502, "Composio no longer offers the in-place reauth for this account.", {
+        code: "composio_reauth_refresh_unavailable",
+        providerStatus: error.status,
+      });
+    }
+    throw new HttpError(502, error.message, {
+      code: "composio_reauth_failed",
+      providerStatus: error.status,
+    });
+  }
+
+  /**
+   * Starts a consent for the child's EXISTING Composio account through the
+   * deprecated refresh endpoint, so the account id and the Paperclip child stay
+   * the same. Fails closed on any answer other than "same id, waiting for
+   * consent, https consent address"; there is deliberately no fallback to
+   * `connected_accounts/link` or to another account.
+   *
+   * The returned `redirect_url` is the consent address for the browser only; it
+   * is not written to the audit log or any other record.
+   */
+  async function startComposioChildReauth(
+    parentConnectionId: string,
+    toolkitSlug: string,
+    actor?: ActorInfo,
+  ) {
+    const { parent, child, client, connectedAccountId } =
+      await composioReauthTarget(parentConnectionId, toolkitSlug);
+    const refreshed = await client
+      .refreshConnectedAccount(connectedAccountId)
+      .catch(composioReauthProviderError);
+    const status = typeof refreshed?.status === "string" ? refreshed.status.toUpperCase() : "";
+    const redirectUrl = typeof refreshed?.redirect_url === "string" ? refreshed.redirect_url : "";
+    let consentUrlIsHttps = false;
+    try {
+      consentUrlIsHttps = new URL(redirectUrl).protocol === "https:";
+    } catch {
+      consentUrlIsHttps = false;
+    }
+    const sameAccount = refreshed?.id === connectedAccountId;
+    if (!sameAccount || !COMPOSIO_REFRESH_PENDING_STATUSES.has(status) || !consentUrlIsHttps) {
+      await audit({
+        companyId: parent.companyId,
+        connectionId: child.id,
+        action: "composio.child_reauth_rejected",
+        outcome: "failure",
+        actor,
+        details: { toolkitSlug, connectedAccountId, sameAccount, status: status || null },
+      });
+      throw new HttpError(502, "Composio's reauth answer did not match the stored account; nothing was changed.", {
+        code: "composio_reauth_response_mismatch",
+        sameAccount,
+        status: status || null,
+      });
+    }
+    await audit({
+      companyId: parent.companyId,
+      connectionId: child.id,
+      action: "composio.child_reauth_started",
+      outcome: "success",
+      actor,
+      details: {
+        toolkitSlug,
+        connectedAccountId,
+        status,
+        providerEndpoint: "connected_accounts/{id}/refresh (deprecated)",
+      },
+    });
+    return {
+      toolkitSlug,
+      childConnectionId: child.id,
+      connectedAccountId,
+      status,
+      redirect_url: redirectUrl,
+    };
+  }
+
+  /**
+   * Reads back only the child's stored account after the consent. Never lists
+   * accounts and never writes, so another ACTIVE account cannot be bound and the
+   * Paperclip child keeps its id and pin.
+   */
+  async function getComposioChildReauthStatus(
+    parentConnectionId: string,
+    toolkitSlug: string,
+  ) {
+    const { child, client, connectedAccountId, userId } =
+      await composioReauthTarget(parentConnectionId, toolkitSlug);
+    const account = await client
+      .getConnectedAccount(connectedAccountId)
+      .catch(composioReauthProviderError);
+    if (
+      account?.id !== connectedAccountId ||
+      account.toolkit?.slug !== toolkitSlug ||
+      account.user_id !== userId
+    ) {
+      throw new HttpError(502, "Composio returned a different account than the stored one.", {
+        code: "composio_reauth_response_mismatch",
+      });
+    }
+    // Projected on purpose: the raw account carries its credentials.
+    return {
+      toolkitSlug,
+      childConnectionId: child.id,
+      connectedAccountId,
+      status: typeof account.status === "string" ? account.status.toUpperCase() : "UNKNOWN",
+      isDisabled: account.is_disabled === true,
+    };
   }
 
   async function disconnectComposioService(
@@ -17812,6 +17982,10 @@ export function toolAccessService(
     listComposioServices,
 
     startComposioServiceConnect,
+
+    startComposioChildReauth,
+
+    getComposioChildReauthStatus,
 
     pollComposioService: async (
       parentConnectionId: string,

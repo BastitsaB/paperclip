@@ -65,6 +65,17 @@ export type ComposioConnectedAccount = {
   [key: string]: unknown;
 };
 
+/**
+ * Answer of the deprecated `POST connected_accounts/{id}/refresh`. `redirect_url`
+ * is a live OAuth consent address: hand it to the browser, never log or store it.
+ */
+export type ComposioRefreshedAccount = {
+  id: string;
+  status: string;
+  redirect_url: string | null;
+  [key: string]: unknown;
+};
+
 export type ComposioSession = {
   session_id: string;
   mcp: { type?: string; url: string; headers?: Record<string, string> };
@@ -89,6 +100,20 @@ export interface ComposioClient {
   listAuthConfigs(options?: ComposioListOptions & { toolkitSlugs?: string[]; showDisabled?: boolean }): Promise<ComposioPage<ComposioAuthConfig>>;
   createConnectLink(input: { authConfigId: string; userId: string; alias?: string; callbackUrl?: string }): Promise<ComposioConnectLink>;
   listConnectedAccounts(options?: ComposioListOptions & { toolkitSlugs?: string[]; statuses?: string[]; userIds?: string[]; authConfigIds?: string[] }): Promise<ComposioPage<ComposioConnectedAccount>>;
+  /**
+   * `GET connected_accounts/{id}`. Composio returns the account's credentials
+   * (`state`, `data`, `params`) in this response; callers must project the
+   * fields they need and never persist or return the raw object.
+   */
+  getConnectedAccount(connectedAccountId: string): Promise<ComposioConnectedAccount>;
+  /**
+   * DEPRECATED Composio endpoint `POST connected_accounts/{id}/refresh`: restarts
+   * the OAuth consent for an existing account and keeps its id. Composio marks it
+   * deprecated ("may be removed in a future release") and points to
+   * `connected_accounts/link`, which always creates a new account id. Only the
+   * one-time same-account reauth (MAI-3412) uses it.
+   */
+  refreshConnectedAccount(connectedAccountId: string): Promise<ComposioRefreshedAccount>;
   deleteConnectedAccount(connectedAccountId: string): Promise<void>;
   createSession(userId: string, options: ComposioSessionOptions): Promise<ComposioSession>;
   resumeSession(sessionId: string, options: { mcp: true }): Promise<ComposioSession>;
@@ -178,6 +203,15 @@ export function createComposioClient(options: ComposioClientOptions): ComposioCl
         appendQueryList(url, "statuses", options.statuses);
         appendQueryList(url, "user_ids", options.userIds);
         appendQueryList(url, "auth_config_ids", options.authConfigIds);
+      });
+    },
+    getConnectedAccount(connectedAccountId) {
+      return request<ComposioConnectedAccount>(`connected_accounts/${encodeURIComponent(connectedAccountId)}`);
+    },
+    refreshConnectedAccount(connectedAccountId) {
+      return request<ComposioRefreshedAccount>(`connected_accounts/${encodeURIComponent(connectedAccountId)}/refresh`, {
+        method: "POST",
+        body: JSON.stringify({}),
       });
     },
     async deleteConnectedAccount(connectedAccountId) {

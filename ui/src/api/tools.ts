@@ -1,5 +1,7 @@
 import type {
   ComposioConnectLinkResponse,
+  ComposioReauthStartResponse,
+  ComposioReauthStatusResponse,
   ComposioDisconnectResponse,
   ComposioServiceStatusResponse,
   ComposioServicesResponse,
@@ -462,6 +464,15 @@ export const toolsApi = {
   getComposioServiceStatus: (connectionId: string, toolkitSlug: string) =>
     api.get<ComposioServiceStatusResponse>(
       `/tool-connections/${connectionId}/services/${encodeURIComponent(toolkitSlug)}/status`,
+    ),
+  startComposioServiceReauth: (connectionId: string, toolkitSlug: string) =>
+    api.post<ComposioReauthStartResponse>(
+      `/tool-connections/${connectionId}/services/${encodeURIComponent(toolkitSlug)}/reauth`,
+      {},
+    ),
+  getComposioServiceReauthStatus: (connectionId: string, toolkitSlug: string) =>
+    api.get<ComposioReauthStatusResponse>(
+      `/tool-connections/${connectionId}/services/${encodeURIComponent(toolkitSlug)}/reauth/status`,
     ),
   disconnectComposioService: (connectionId: string, toolkitSlug: string) =>
     api.delete<ComposioDisconnectResponse>(
