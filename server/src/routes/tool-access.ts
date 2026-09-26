@@ -1715,6 +1715,40 @@ function connectorEnrollmentPrincipal(req: Request): string {
     res.status(201).json(result);
   });
 
+  // One-time same-account reauth over Composio's DEPRECATED refresh endpoint
+  // (MAI-3412). Board only; the account id comes from the stored child, never
+  // from the request. The consent address in the response is not logged.
+  router.post("/tool-connections/:connectionId/services/:toolkitSlug/reauth", async (req, res) => {
+    assertBoard(req);
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    const result = await svc.startComposioChildReauth(connection.id, req.params.toolkitSlug as string, getActorInfo(req));
+    await logActivity(db, {
+      companyId: connection.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "composio.service_reauth_started",
+      entityType: "tool_connection",
+      entityId: connection.id,
+      details: {
+        toolkitSlug: result.toolkitSlug,
+        childConnectionId: result.childConnectionId,
+        connectedAccountId: result.connectedAccountId,
+      },
+    });
+    res.set("Cache-Control", "no-store");
+    res.status(201).json(result);
+  });
+
+  router.get("/tool-connections/:connectionId/services/:toolkitSlug/reauth/status", async (req, res) => {
+    assertBoard(req);
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    res.json(await svc.getComposioChildReauthStatus(connection.id, req.params.toolkitSlug as string));
+  });
+
   router.get("/tool-connections/:connectionId/services/:toolkitSlug/status", async (req, res) => {
     const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
     if (!connection) return;

@@ -54,6 +54,7 @@ export function ServicesPanel({
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const [confirmDisconnect, setConfirmDisconnect] = useState<ComposioServiceRow | null>(null);
+  const [confirmReauth, setConfirmReauth] = useState<ComposioServiceRow | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
 
   const servicesQuery = useQuery({
@@ -110,11 +111,57 @@ export function ServicesPanel({
     onSettled: () => setBusySlug(null),
   });
 
-  const recheck = useMutation({
+  // Same-account reauth (MAI-3412): Composio's deprecated refresh endpoint keeps
+  // the stored account id, unlike the Connect Link above which mints a new one.
+  const startReauth = useMutation({
     mutationFn: (row: ComposioServiceRow) =>
-      toolsApi.getComposioServiceStatus(connectionId, row.toolkitSlug),
+      toolsApi.startComposioServiceReauth(connectionId, row.toolkitSlug),
     onMutate: (row) => setBusySlug(row.toolkitSlug),
-    onSuccess: () => invalidateConnectionLists(),
+    onSuccess: (link, row) => {
+      setConfirmReauth(null);
+      const target = resolveAuthorizationTarget(link.redirect_url);
+      if (!target.ok) {
+        pushToast({ title: `Couldn't re-authorize ${row.name}`, body: target.message, tone: "error" });
+        return;
+      }
+      window.open(target.url, "_blank", "noopener,noreferrer");
+      pushToast({
+        title: `Finish re-authorizing ${row.name} in Composio`,
+        body: "We opened the consent screen in a new tab. The existing connection is kept.",
+        tone: "info",
+      });
+      void servicesQuery.refetch();
+    },
+    onError: (error, row) =>
+      pushToast({
+        title: `Couldn't re-authorize ${row.name}`,
+        body: error instanceof Error ? error.message : "Please try again.",
+        tone: "error",
+      }),
+    onSettled: () => setBusySlug(null),
+  });
+
+  const recheck = useMutation({
+    // A same-account row only ever reads its stored account back; the generic
+    // status poll would re-sync onto whichever account Composio lists first.
+    mutationFn: async (row: ComposioServiceRow) => {
+      if (!row.sameAccountReauth) {
+        await toolsApi.getComposioServiceStatus(connectionId, row.toolkitSlug);
+        return null;
+      }
+      return toolsApi.getComposioServiceReauthStatus(connectionId, row.toolkitSlug);
+    },
+    onMutate: (row) => setBusySlug(row.toolkitSlug),
+    onSuccess: (reauth, row) => {
+      invalidateConnectionLists();
+      if (reauth) {
+        pushToast({
+          title: `${row.name}: Composio reports ${reauth.status.toLowerCase()}`,
+          body: "Checked the stored connection only.",
+          tone: reauth.status === "ACTIVE" && !reauth.isDisabled ? "success" : "info",
+        });
+      }
+    },
     onError: (error, row) =>
       pushToast({
         title: `Couldn't check ${row.name}`,
@@ -176,6 +223,15 @@ export function ServicesPanel({
           onConnect={(row) => startConnect.mutate(row)}
           onRecheck={(row) => recheck.mutate(row)}
           onDisconnect={(row) => setConfirmDisconnect(row)}
+          onReauth={(row) => setConfirmReauth(row)}
+        />
+      )}
+      {confirmReauth && (
+        <ReauthDialog
+          row={confirmReauth}
+          pending={startReauth.isPending}
+          onCancel={() => setConfirmReauth(null)}
+          onConfirm={() => startReauth.mutate(confirmReauth)}
         />
       )}
       {confirmDisconnect && (
@@ -243,12 +299,14 @@ export function ServicesList({
   onConnect,
   onRecheck,
   onDisconnect,
+  onReauth,
 }: {
   rows: ComposioServiceRow[];
   busySlug: string | null;
   onConnect: (row: ComposioServiceRow) => void;
   onRecheck: (row: ComposioServiceRow) => void;
   onDisconnect: (row: ComposioServiceRow) => void;
+  onReauth?: (row: ComposioServiceRow) => void;
 }) {
   return (
     <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
@@ -260,6 +318,7 @@ export function ServicesList({
           onConnect={onConnect}
           onRecheck={onRecheck}
           onDisconnect={onDisconnect}
+          onReauth={onReauth}
         />
       ))}
     </ul>
@@ -272,13 +331,19 @@ export function ServiceRow({
   onConnect,
   onRecheck,
   onDisconnect,
+  onReauth,
 }: {
   row: ComposioServiceRow;
   busy: boolean;
   onConnect: (row: ComposioServiceRow) => void;
   onRecheck: (row: ComposioServiceRow) => void;
   onDisconnect: (row: ComposioServiceRow) => void;
+  onReauth?: (row: ComposioServiceRow) => void;
 }) {
+  // Rows with a same-account reauth never offer the Connect Link ("Connect" or
+  // "Reconnect"), which would create a second Composio account, nor Disconnect,
+  // which would delete the account the reauth keeps.
+  const reauth = row.sameAccountReauth === true && !!onReauth;
   return (
     <li className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
       <AppLogo name={row.name} logoUrl={row.logoUrl} size={32} />
@@ -308,8 +373,13 @@ export function ServiceRow({
               : <RefreshCw className="h-3.5 w-3.5" />}
           </Button>
         )}
+        {reauth && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => onReauth?.(row)}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Re-authorize"}
+          </Button>
+        )}
         {row.state === "not_connected" ? (
-          <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
+          !reauth && <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : (
               <>
                 Connect
@@ -319,14 +389,18 @@ export function ServiceRow({
           </Button>
         ) : row.state === "attention" ? (
           <>
-            <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Reconnect"}
-            </Button>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
-              Disconnect
-            </Button>
+            {!reauth && (
+              <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Reconnect"}
+              </Button>
+            )}
+            {!reauth && (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
+                Disconnect
+              </Button>
+            )}
           </>
-        ) : row.state === "connected" ? (
+        ) : row.state === "connected" && !reauth ? (
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
             Disconnect
           </Button>
@@ -427,6 +501,50 @@ function DisconnectDialog({
             }}
           >
             {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : `Disconnect ${row.name}`}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Confirms the one-time same-account reauth and says plainly that it rides on a
+ * Composio endpoint Composio has deprecated.
+ */
+function ReauthDialog({
+  row,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  row: ComposioServiceRow;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Re-authorize {row.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This opens the {row.name} consent screen for the existing connection. The Composio
+            account and the Paperclip app stay the same. It uses a Composio endpoint that
+            Composio has deprecated and may remove; if it is gone, nothing changes and you see
+            an error.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending} autoFocus>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={pending}
+            onClick={(event) => {
+              event.preventDefault();
+              onConfirm();
+            }}
+          >
+            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : `Re-authorize ${row.name}`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

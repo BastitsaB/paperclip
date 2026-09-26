@@ -35,7 +35,8 @@ export type ComposioAccountUnavailableReason =
   | "auth_config_mismatch"
   | "auth_config_unknown"
   | "incomplete_listing"
-  | "pinned_disabled";
+  | "pinned_disabled"
+  | "rebind_blocked";
 
 export type ComposioAccountSelection =
   | { kind: "pinned_active"; account: ComposioConnectedAccount }
@@ -76,6 +77,11 @@ export function selectComposioAccountForChild(input: {
   pinnedAccountId: string | null | undefined;
   /** Auth config Paperclip recorded on the child when it bound the account. */
   recordedAuthConfigId?: string | null;
+  /**
+   * False for toolkits that must stay on their stored account (same-account
+   * reauth, MAI-3412): a would-be rebind is reported as `rebind_blocked`.
+   */
+  allowRebind?: boolean;
 }): ComposioAccountSelection {
   const toolkitAccounts = input.accounts.filter(
     (account) => account.toolkit.slug === input.toolkitSlug,
@@ -124,6 +130,9 @@ export function selectComposioAccountForChild(input: {
   }
   if (eligible.length > 1) {
     return { kind: "unavailable", pinnedStatus, reason: "ambiguous" };
+  }
+  if (input.allowRebind === false) {
+    return { kind: "unavailable", pinnedStatus, reason: "rebind_blocked" };
   }
   return {
     kind: "rebind",

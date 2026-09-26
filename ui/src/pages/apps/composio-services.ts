@@ -43,6 +43,8 @@ export interface ComposioServicesResponse {
     connectedAccountId: string | null;
     connectedAccountStatus: string | null;
     childConnectionId: string | null;
+    /** The server allows the one-time same-account reauth for this toolkit (MAI-3412). */
+    sameAccountReauthAvailable?: boolean;
   }>;
 }
 
@@ -60,6 +62,28 @@ export interface ComposioConnectLinkResponse {
   redirect_url: string;
   expires_at?: string | null;
   connected_account_id?: string | null;
+}
+
+/**
+ * `POST /tool-connections/:id/services/:toolkitSlug/reauth` — consent for the
+ * EXISTING account via Composio's deprecated refresh endpoint. `redirect_url` is
+ * only handed to the browser; never render or log it.
+ */
+export interface ComposioReauthStartResponse {
+  toolkitSlug: string;
+  childConnectionId: string;
+  connectedAccountId: string;
+  status: string;
+  redirect_url: string;
+}
+
+/** `GET /tool-connections/:id/services/:toolkitSlug/reauth/status` — the stored account only. */
+export interface ComposioReauthStatusResponse {
+  toolkitSlug: string;
+  childConnectionId: string;
+  connectedAccountId: string;
+  status: string;
+  isDisabled: boolean;
 }
 
 /** `DELETE /tool-connections/:id/services/:toolkitSlug` */
@@ -93,6 +117,11 @@ export interface ComposioServiceRow {
   toolCount: number | null;
   /** True when Composio needs no credential for this toolkit. */
   noAuth: boolean;
+  /**
+   * Re-authorize keeps the stored Composio account (deprecated refresh endpoint)
+   * instead of minting a new one through a Connect Link.
+   */
+  sameAccountReauth?: boolean;
 }
 
 /** Composio account statuses that mean "there is a credential and it works". */
@@ -134,6 +163,7 @@ export function composioServiceRows(response: ComposioServicesResponse | undefin
       state: composioServiceStateFor(service.connectedAccountStatus),
       connectedAccountStatus: service.connectedAccountStatus,
       childConnectionId: service.childConnectionId,
+      sameAccountReauth: service.sameAccountReauthAvailable === true,
     }))
     .sort(compareServiceRows);
 }

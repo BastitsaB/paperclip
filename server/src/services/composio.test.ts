@@ -137,6 +137,38 @@ describe("Composio REST client", () => {
     ]);
   });
 
+  it("reads one connected account and refreshes it in place by id", async () => {
+    const fixture = await startFixture((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "ca_meta", status: "INITIALIZING", redirect_url: "https://consent.test" }));
+    });
+    fixtures.push(fixture);
+
+    const client = createComposioClient({ apiKey: "ak_fixture", baseUrl: fixture.baseUrl });
+    await client.getConnectedAccount("ca/meta");
+    await expect(client.refreshConnectedAccount("ca/meta")).resolves.toMatchObject({ id: "ca_meta" });
+
+    expect(fixture.requests).toEqual([
+      { method: "GET", url: "/api/v3.1/connected_accounts/ca%2Fmeta", apiKey: "ak_fixture" },
+      { method: "POST", url: "/api/v3.1/connected_accounts/ca%2Fmeta/refresh", apiKey: "ak_fixture" },
+    ]);
+  });
+
+  it("surfaces a removed refresh route as a plain HTTP status", async () => {
+    const fixture = await startFixture((_request, response) => {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ message: "provider-controlled detail" }));
+    });
+    fixtures.push(fixture);
+
+    const client = createComposioClient({ apiKey: "ak_fixture", baseUrl: fixture.baseUrl });
+    const error = await client.refreshConnectedAccount("ca_meta").catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ComposioApiError);
+    expect(error).toMatchObject({ status: 404 });
+    expect(String(error)).not.toContain("provider-controlled");
+  });
+
   it("validates an API key with the cheap toolkit-list call", async () => {
     const fixture = await startFixture((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });

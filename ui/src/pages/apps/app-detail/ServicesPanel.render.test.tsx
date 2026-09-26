@@ -51,6 +51,7 @@ function renderList(rows: ComposioServiceRow[], handlers: {
   onConnect?: (row: ComposioServiceRow) => void;
   onRecheck?: (row: ComposioServiceRow) => void;
   onDisconnect?: (row: ComposioServiceRow) => void;
+  onReauth?: (row: ComposioServiceRow) => void;
 } = {}) {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -63,6 +64,7 @@ function renderList(rows: ComposioServiceRow[], handlers: {
       onConnect={handlers.onConnect ?? vi.fn()}
       onRecheck={handlers.onRecheck ?? vi.fn()}
       onDisconnect={handlers.onDisconnect ?? vi.fn()}
+      onReauth={handlers.onReauth}
     />,
   ));
   return container;
@@ -240,5 +242,50 @@ describe("ServicesList credential hygiene", () => {
     expect(text).not.toMatch(/x-api-key/i);
     // The Composio account id is an opaque handle, but it has no reason to be on screen.
     expect(text).not.toContain("ca-");
+  });
+});
+
+// MAI-3412: a same-account row re-authorizes the stored Composio account and must
+// never offer the Connect Link "Reconnect", which would mint a second account.
+describe("ServicesList same-account reauth", () => {
+  it("offers Re-authorize instead of Reconnect", () => {
+    const onReauth = vi.fn();
+    const onConnect = vi.fn();
+    const node = renderList([
+      row({ toolkitSlug: "metaads", name: "Meta Ads", state: "attention", connectedAccountStatus: "EXPIRED", childConnectionId: "child-meta", sameAccountReauth: true }),
+    ], { onReauth, onConnect });
+
+    expect(buttonLabelled(node, "Reconnect")).toBeUndefined();
+    expect(buttonLabelled(node, "Disconnect")).toBeUndefined();
+    act(() => buttonLabelled(node, "Re-authorize")!.click());
+    expect(onReauth).toHaveBeenCalledWith(expect.objectContaining({ toolkitSlug: "metaads" }));
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it("offers Re-authorize on a connected row Composio still reports as active", () => {
+    const node = renderList([
+      row({ toolkitSlug: "metaads", name: "Meta Ads", state: "connected", connectedAccountStatus: "ACTIVE", childConnectionId: "child-meta", sameAccountReauth: true }),
+    ], { onReauth: vi.fn() });
+
+    expect(buttonLabelled(node, "Re-authorize")).toBeDefined();
+  });
+
+  it("never offers Connect when the stored account is missing from Composio's list", () => {
+    const onConnect = vi.fn();
+    const node = renderList([
+      row({ toolkitSlug: "metaads", name: "Meta Ads", state: "not_connected", childConnectionId: "child-meta", sameAccountReauth: true }),
+    ], { onReauth: vi.fn(), onConnect });
+
+    expect(buttonLabelled(node, "Re-authorize")).toBeDefined();
+    expect(Array.from(node.querySelectorAll("button")).map((button) => button.textContent?.trim())).toEqual(["Re-authorize"]);
+  });
+
+  it("keeps other rows unchanged", () => {
+    const node = renderList([
+      row({ toolkitSlug: "github", name: "GitHub", state: "attention", connectedAccountStatus: "EXPIRED", childConnectionId: "child-github" }),
+    ], { onReauth: vi.fn() });
+
+    expect(buttonLabelled(node, "Re-authorize")).toBeUndefined();
+    expect(buttonLabelled(node, "Reconnect")).toBeDefined();
   });
 });

@@ -29,6 +29,16 @@ function account(
 const base = { toolkitSlug: "google_analytics", listingComplete: true } as const;
 
 describe("selectComposioAccountForChild", () => {
+  it("reports a would-be rebind as blocked when the child must keep its account", () => {
+    const selection = selectComposioAccountForChild({
+      ...base,
+      accounts: [account("ca_old", "INITIATED", "ac_custom"), account("ca_new", "ACTIVE", "ac_custom")],
+      pinnedAccountId: "ca_old",
+      allowRebind: false,
+    });
+    expect(selection).toEqual({ kind: "unavailable", pinnedStatus: "INITIATED", reason: "rebind_blocked" });
+  });
+
   it("keeps an active pinned account without rebinding", () => {
     const pinned = account("ca_old", "ACTIVE", "ac_custom");
     const selection = selectComposioAccountForChild({
