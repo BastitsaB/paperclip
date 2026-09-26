@@ -5735,6 +5735,25 @@ describeEmbeddedPostgres("tool access service", () => {
       await expectChildUntouched(child);
     });
 
+    it("reports a stored account Composio no longer knows", async () => {
+      const company = await createCompany(db);
+      const { parent, child } = await metaAdsChild(company.id);
+      const client = reauthClient(company.id, async () => {
+        throw new Error("not used");
+      });
+      client.getConnectedAccount.mockImplementationOnce(async () => {
+        throw new ComposioApiError("Composio request failed with HTTP 404.", 404);
+      });
+      const service = createTestToolAccessService(db, { composioClientFactory: () => client });
+
+      await expect(service.startComposioChildReauth(parent.id, "metaads")).rejects.toMatchObject({
+        status: 502,
+        details: { code: "composio_reauth_account_not_found" },
+      });
+      expect(client.refreshConnectedAccount).not.toHaveBeenCalled();
+      await expectChildUntouched(child);
+    });
+
     it("refuses toolkits outside the allowlist and ambiguous children", async () => {
       const company = await createCompany(db);
       const { parent: githubParent } = await createComposioParentAndChild(db, company.id);
@@ -5892,7 +5911,25 @@ describeEmbeddedPostgres("tool access service", () => {
         status: 422,
         details: { code: "composio_reauth_required" },
       });
+      await expect(service.startComposioServiceConnect(parent.id, " MetaAds ", {})).rejects.toMatchObject({
+        details: { code: "composio_reauth_required" },
+      });
+      client.listAuthConfigs.mockImplementation(async () => ({
+        items: [{
+          id: "auth-meta",
+          auth_scheme: "OAUTH2",
+          is_composio_managed: false,
+          toolkit: { slug: "metaads" },
+        }],
+      }));
+      await expect(
+        service.startComposioServiceConnect(parent.id, "gmail", { authConfigId: "auth-meta" }),
+      ).rejects.toMatchObject({ details: { code: "composio_reauth_required" } });
+      await expect(service.disconnectComposioService(parent.id, "metaads")).rejects.toMatchObject({
+        details: { code: "composio_reauth_required" },
+      });
       expect(client.createConnectLink).not.toHaveBeenCalled();
+      expect(client.deleteConnectedAccount).not.toHaveBeenCalled();
       expect(client.listConnectedAccounts).not.toHaveBeenCalled();
       await expectChildUntouched(child);
     });

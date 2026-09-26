@@ -256,6 +256,7 @@ describe("ServicesList same-account reauth", () => {
     ], { onReauth, onConnect });
 
     expect(buttonLabelled(node, "Reconnect")).toBeUndefined();
+    expect(buttonLabelled(node, "Disconnect")).toBeUndefined();
     act(() => buttonLabelled(node, "Re-authorize")!.click());
     expect(onReauth).toHaveBeenCalledWith(expect.objectContaining({ toolkitSlug: "metaads" }));
     expect(onConnect).not.toHaveBeenCalled();

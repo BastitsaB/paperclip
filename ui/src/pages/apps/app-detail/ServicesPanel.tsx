@@ -341,7 +341,8 @@ export function ServiceRow({
   onReauth?: (row: ComposioServiceRow) => void;
 }) {
   // Rows with a same-account reauth never offer the Connect Link ("Connect" or
-  // "Reconnect"), which would create a second Composio account.
+  // "Reconnect"), which would create a second Composio account, nor Disconnect,
+  // which would delete the account the reauth keeps.
   const reauth = row.sameAccountReauth === true && !!onReauth;
   return (
     <li className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
@@ -393,11 +394,13 @@ export function ServiceRow({
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Reconnect"}
               </Button>
             )}
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
-              Disconnect
-            </Button>
+            {!reauth && (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
+                Disconnect
+              </Button>
+            )}
           </>
-        ) : row.state === "connected" ? (
+        ) : row.state === "connected" && !reauth ? (
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnect(row)}>
             Disconnect
           </Button>

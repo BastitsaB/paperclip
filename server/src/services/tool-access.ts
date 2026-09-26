@@ -7571,7 +7571,9 @@ export function toolAccessService(
     await assertNoSameAccountReauthChild(parent, toolkitSlug);
     const client = await composioClientForParent(parent);
     let authConfigId = input.authConfigId?.trim();
-    if (!authConfigId) {
+    if (authConfigId) {
+      await assertAuthConfigNotSameAccountGuarded(parent, client, authConfigId);
+    } else {
       const configs = await client.listAuthConfigs({
         toolkitSlugs: [toolkitSlug],
         showDisabled: false,
@@ -7630,8 +7632,14 @@ export function toolAccessService(
     return { parent, child, client, connectedAccountId, userId: `paperclip:${parent.companyId}` };
   }
 
-  function composioReauthProviderError(error: unknown): never {
+  function composioReauthProviderError(error: unknown, step: "lookup" | "refresh"): never {
     if (!(error instanceof ComposioApiError)) throw error;
+    if (step === "lookup" && error.status === 404) {
+      throw new HttpError(502, "Composio does not know the stored account.", {
+        code: "composio_reauth_account_not_found",
+        providerStatus: error.status,
+      });
+    }
     if (error.status === 401 || error.status === 403) {
       throw new HttpError(502, "Composio rejected the API key.", {
         code: "composio_reauth_auth_failed",
@@ -7663,7 +7671,7 @@ export function toolAccessService(
   ) {
     const account = await client
       .getConnectedAccount(connectedAccountId)
-      .catch(composioReauthProviderError);
+      .catch((error: unknown) => composioReauthProviderError(error, "lookup"));
     if (
       account?.id !== connectedAccountId ||
       account.toolkit?.slug !== toolkitSlug ||
@@ -7680,23 +7688,54 @@ export function toolAccessService(
    * Refuses the Connect Link and the first-ACTIVE sync for a toolkit that must
    * keep its stored account: both can mint or bind a different account id.
    */
+  async function guardedSameAccountToolkits(
+    parent: typeof toolConnections.$inferSelect,
+  ): Promise<Set<string>> {
+    const guarded = new Set<string>();
+    for (const child of await existingComposioChildren(parent)) {
+      const slug = composioChildConfig(child)?.toolkitSlug;
+      if (child.status !== "archived" && slug && COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(slug)) {
+        guarded.add(slug);
+      }
+    }
+    return guarded;
+  }
+
+  function composioReauthRequired(toolkitSlug: string) {
+    return unprocessable(
+      `The ${toolkitSlug} connection keeps its Composio account; use Re-authorize instead.`,
+      { code: "composio_reauth_required" },
+    );
+  }
+
   async function assertNoSameAccountReauthChild(
     parent: typeof toolConnections.$inferSelect,
     toolkitSlug: string,
   ) {
-    if (!COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkitSlug)) return;
-    const children = await existingComposioChildren(parent);
-    if (
-      children.some(
-        (child) =>
-          child.status !== "archived" &&
-          composioChildConfig(child)?.toolkitSlug === toolkitSlug,
-      )
-    ) {
-      throw unprocessable(
-        `The ${toolkitSlug} connection keeps its Composio account; use Re-authorize instead.`,
-        { code: "composio_reauth_required" },
-      );
+    const slug = toolkitSlug.trim().toLowerCase();
+    if ((await guardedSameAccountToolkits(parent)).has(slug)) {
+      throw composioReauthRequired(slug);
+    }
+  }
+
+  /**
+   * A caller-chosen auth config must not belong to a guarded toolkit either,
+   * whatever toolkit slug the URL names.
+   */
+  async function assertAuthConfigNotSameAccountGuarded(
+    parent: typeof toolConnections.$inferSelect,
+    client: ComposioClient,
+    authConfigId: string,
+  ) {
+    for (const slug of await guardedSameAccountToolkits(parent)) {
+      const configs = await client.listAuthConfigs({
+        toolkitSlugs: [slug],
+        showDisabled: true,
+        limit: 100,
+      });
+      if (configs.items.some((config) => config.id === authConfigId)) {
+        throw composioReauthRequired(slug);
+      }
     }
   }
 
@@ -7720,7 +7759,7 @@ export function toolAccessService(
     await assertComposioReauthAccount(client, connectedAccountId, toolkitSlug, userId);
     const refreshed = await client
       .refreshConnectedAccount(connectedAccountId)
-      .catch(composioReauthProviderError);
+      .catch((error: unknown) => composioReauthProviderError(error, "refresh"));
     const status = typeof refreshed?.status === "string" ? refreshed.status.toUpperCase() : "";
     const redirectUrl = typeof refreshed?.redirect_url === "string" ? refreshed.redirect_url : "";
     let consentUrlIsHttps = false;
@@ -7795,6 +7834,8 @@ export function toolAccessService(
     actor?: ActorInfo,
   ) {
     const parent = await getConnectionRow(parentConnectionId);
+    // Disconnect deletes the account the same-account reauth exists to keep.
+    await assertNoSameAccountReauthChild(parent, toolkitSlug);
     const client = await composioClientForParent(parent);
     const accounts = await client.listConnectedAccounts({
       toolkitSlugs: [toolkitSlug],
