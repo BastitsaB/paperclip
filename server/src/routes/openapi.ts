@@ -1414,6 +1414,8 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "POST /api/tool-connections/{connectionId}/health-check",
   "POST /api/tool-connections/{connectionId}/reconnect",
   "POST /api/tool-connections/{connectionId}/railway/ssh",
+  "POST /api/tool-connections/{connectionId}/services/{toolkitSlug}/reauth",
+  "GET /api/tool-connections/{connectionId}/services/{toolkitSlug}/reauth/status",
   "POST /api/tool-connections/{connectionId}/catalog/refresh",
   "GET /api/tool-connections/{connectionId}/catalog",
   "GET /api/tool-connections/{connectionId}/activity",
@@ -10405,6 +10407,29 @@ registerCurrentRoute({
   path: "/api/tool-connections/{connectionId}/services/{toolkitSlug}/status",
   tags: ["tool-access"],
   summary: "Poll the connection status of a broker service",
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/tool-connections/{connectionId}/services/{toolkitSlug}/reauth",
+  tags: ["tool-access"],
+  summary:
+    "Re-authorize a broker service on its stored connected account (deprecated provider refresh)",
+  responses: {
+    201: r.ok(),
+    400: r.badRequest,
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    422: r.unprocessable,
+  },
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/tool-connections/{connectionId}/services/{toolkitSlug}/reauth/status",
+  tags: ["tool-access"],
+  summary: "Poll the stored connected account after a broker service re-authorization",
 });
 
 registerCurrentRoute({
