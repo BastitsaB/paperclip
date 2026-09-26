@@ -7195,6 +7195,8 @@ export function toolAccessService(
         return `${base} Composio did not return the full account list; try the health check again or reconnect it through Paperclip.`;
       case "pinned_disabled":
         return `${base} The account is disabled in Composio; enable it there or reconnect it through Paperclip.`;
+      case "rebind_blocked":
+        return `${base} This connection keeps its Composio account; re-authorize it from the Composio Services tab.`;
       default:
         return `${base} Reconnect it in Composio.`;
     }
@@ -7227,6 +7229,7 @@ export function toolAccessService(
       toolkitSlug: childConfig.toolkitSlug,
       pinnedAccountId: childConfig.connectedAccountId,
       recordedAuthConfigId: recordedComposioAuthConfigId(child),
+      allowRebind: !COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(childConfig.toolkitSlug),
     });
     if (selection.kind === "pinned_active") {
       return childConfig.connectedAccountId
@@ -7305,6 +7308,7 @@ export function toolAccessService(
         toolkitSlug: childConfig.toolkitSlug,
         pinnedAccountId: childConfig.connectedAccountId,
         recordedAuthConfigId: recordedComposioAuthConfigId(child),
+        allowRebind: !COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(childConfig.toolkitSlug),
       });
       const config = { ...asRecord(child.config) };
       delete config.disabledByComposioParent;
@@ -7524,13 +7528,18 @@ export function toolAccessService(
       const toolkitAccounts = accounts.items.filter(
         (account) => account.toolkit.slug === toolkit.slug,
       );
-      const account =
-        toolkitAccounts.find(
-          (candidate) => candidate.status.toUpperCase() === "ACTIVE",
-        ) ??
-        toolkitAccounts[0] ??
-        null;
       let child = childByToolkit.get(toolkit.slug) ?? null;
+      const pinnedAccountId = child ? composioChildConfig(child)?.connectedAccountId : undefined;
+      const sameAccountReauthAvailable =
+        COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkit.slug) && !!pinnedAccountId;
+      // A same-account row reports its stored account, never another one.
+      const account = sameAccountReauthAvailable
+        ? toolkitAccounts.find((candidate) => candidate.id === pinnedAccountId) ?? null
+        : toolkitAccounts.find(
+            (candidate) => candidate.status.toUpperCase() === "ACTIVE",
+          ) ??
+          toolkitAccounts[0] ??
+          null;
       if (account?.status.toUpperCase() === "ACTIVE" && !child) {
         child = await syncComposioChild(parent, account, toolkit.name, actor);
         if (child)
@@ -7547,10 +7556,7 @@ export function toolAccessService(
         connectedAccountId: account?.id ?? null,
         connectedAccountStatus: account?.status ?? null,
         childConnectionId: child?.id ?? null,
-        sameAccountReauthAvailable:
-          COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkit.slug) &&
-          !!child &&
-          !!composioChildConfig(child)?.connectedAccountId,
+        sameAccountReauthAvailable,
       });
     }
     return { parentConnectionId: parent.id, userId, services };
@@ -7562,6 +7568,7 @@ export function toolAccessService(
     input: { authConfigId?: string; callbackUrl?: string },
   ) {
     const parent = await getConnectionRow(parentConnectionId);
+    await assertNoSameAccountReauthChild(parent, toolkitSlug);
     const client = await composioClientForParent(parent);
     let authConfigId = input.authConfigId?.trim();
     if (!authConfigId) {
@@ -7644,6 +7651,56 @@ export function toolAccessService(
   }
 
   /**
+   * Reads the stored account by id and confirms Composio agrees it is this
+   * company's account for this toolkit. The raw answer carries credentials, so
+   * callers must only read fields from it, never pass it on.
+   */
+  async function assertComposioReauthAccount(
+    client: ComposioClient,
+    connectedAccountId: string,
+    toolkitSlug: string,
+    userId: string,
+  ) {
+    const account = await client
+      .getConnectedAccount(connectedAccountId)
+      .catch(composioReauthProviderError);
+    if (
+      account?.id !== connectedAccountId ||
+      account.toolkit?.slug !== toolkitSlug ||
+      account.user_id !== userId
+    ) {
+      throw new HttpError(502, "Composio returned a different account than the stored one.", {
+        code: "composio_reauth_response_mismatch",
+      });
+    }
+    return account;
+  }
+
+  /**
+   * Refuses the Connect Link and the first-ACTIVE sync for a toolkit that must
+   * keep its stored account: both can mint or bind a different account id.
+   */
+  async function assertNoSameAccountReauthChild(
+    parent: typeof toolConnections.$inferSelect,
+    toolkitSlug: string,
+  ) {
+    if (!COMPOSIO_REFRESH_REAUTH_TOOLKITS.has(toolkitSlug)) return;
+    const children = await existingComposioChildren(parent);
+    if (
+      children.some(
+        (child) =>
+          child.status !== "archived" &&
+          composioChildConfig(child)?.toolkitSlug === toolkitSlug,
+      )
+    ) {
+      throw unprocessable(
+        `The ${toolkitSlug} connection keeps its Composio account; use Re-authorize instead.`,
+        { code: "composio_reauth_required" },
+      );
+    }
+  }
+
+  /**
    * Starts a consent for the child's EXISTING Composio account through the
    * deprecated refresh endpoint, so the account id and the Paperclip child stay
    * the same. Fails closed on any answer other than "same id, waiting for
@@ -7658,8 +7715,9 @@ export function toolAccessService(
     toolkitSlug: string,
     actor?: ActorInfo,
   ) {
-    const { parent, child, client, connectedAccountId } =
+    const { parent, child, client, connectedAccountId, userId } =
       await composioReauthTarget(parentConnectionId, toolkitSlug);
+    await assertComposioReauthAccount(client, connectedAccountId, toolkitSlug, userId);
     const refreshed = await client
       .refreshConnectedAccount(connectedAccountId)
       .catch(composioReauthProviderError);
@@ -7720,18 +7778,7 @@ export function toolAccessService(
   ) {
     const { child, client, connectedAccountId, userId } =
       await composioReauthTarget(parentConnectionId, toolkitSlug);
-    const account = await client
-      .getConnectedAccount(connectedAccountId)
-      .catch(composioReauthProviderError);
-    if (
-      account?.id !== connectedAccountId ||
-      account.toolkit?.slug !== toolkitSlug ||
-      account.user_id !== userId
-    ) {
-      throw new HttpError(502, "Composio returned a different account than the stored one.", {
-        code: "composio_reauth_response_mismatch",
-      });
-    }
+    const account = await assertComposioReauthAccount(client, connectedAccountId, toolkitSlug, userId);
     // Projected on purpose: the raw account carries its credentials.
     return {
       toolkitSlug,
@@ -17993,6 +18040,7 @@ export function toolAccessService(
       actor?: ActorInfo,
     ) => {
       const parent = await getConnectionRow(parentConnectionId);
+      await assertNoSameAccountReauthChild(parent, toolkitSlug);
       return syncComposioToolkit(parent, toolkitSlug, actor);
     },
 

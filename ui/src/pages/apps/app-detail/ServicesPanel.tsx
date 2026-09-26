@@ -340,9 +340,9 @@ export function ServiceRow({
   onDisconnect: (row: ComposioServiceRow) => void;
   onReauth?: (row: ComposioServiceRow) => void;
 }) {
-  // Rows with a same-account reauth never offer the Connect Link "Reconnect",
-  // which would create a second Composio account.
-  const reauth = row.sameAccountReauth && onReauth && row.state !== "not_connected";
+  // Rows with a same-account reauth never offer the Connect Link ("Connect" or
+  // "Reconnect"), which would create a second Composio account.
+  const reauth = row.sameAccountReauth === true && !!onReauth;
   return (
     <li className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
       <AppLogo name={row.name} logoUrl={row.logoUrl} size={32} />
@@ -373,12 +373,12 @@ export function ServiceRow({
           </Button>
         )}
         {reauth && (
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => onReauth(row)}>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => onReauth?.(row)}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Re-authorize"}
           </Button>
         )}
         {row.state === "not_connected" ? (
-          <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
+          !reauth && <Button size="sm" disabled={busy} onClick={() => onConnect(row)}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : (
               <>
                 Connect

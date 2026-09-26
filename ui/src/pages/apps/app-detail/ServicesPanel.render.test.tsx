@@ -269,6 +269,16 @@ describe("ServicesList same-account reauth", () => {
     expect(buttonLabelled(node, "Re-authorize")).toBeDefined();
   });
 
+  it("never offers Connect when the stored account is missing from Composio's list", () => {
+    const onConnect = vi.fn();
+    const node = renderList([
+      row({ toolkitSlug: "metaads", name: "Meta Ads", state: "not_connected", childConnectionId: "child-meta", sameAccountReauth: true }),
+    ], { onReauth: vi.fn(), onConnect });
+
+    expect(buttonLabelled(node, "Re-authorize")).toBeDefined();
+    expect(Array.from(node.querySelectorAll("button")).map((button) => button.textContent?.trim())).toEqual(["Re-authorize"]);
+  });
+
   it("keeps other rows unchanged", () => {
     const node = renderList([
       row({ toolkitSlug: "github", name: "GitHub", state: "attention", connectedAccountStatus: "EXPIRED", childConnectionId: "child-github" }),

@@ -5827,6 +5827,122 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(flags).toEqual({ metaads: true, github: false });
     });
 
+    it("pre-checks the stored account at Composio before refreshing it", async () => {
+      const company = await createCompany(db);
+      const { parent, child } = await metaAdsChild(company.id);
+      const client = reauthClient(company.id, async (id) => ({ id, status: "INITIALIZING", redirect_url: CONSENT_URL }));
+      client.getConnectedAccount.mockImplementationOnce(async (id: string) => ({
+        id,
+        user_id: `paperclip:${company.id}`,
+        status: "ACTIVE",
+        toolkit: { slug: "github" },
+        auth_config: { id: "auth-github", auth_scheme: "OAUTH2", is_composio_managed: true },
+      }));
+      const service = createTestToolAccessService(db, { composioClientFactory: () => client });
+
+      await expect(service.startComposioChildReauth(parent.id, "metaads")).rejects.toMatchObject({
+        status: 502,
+        details: { code: "composio_reauth_response_mismatch" },
+      });
+      expect(client.refreshConnectedAccount).not.toHaveBeenCalled();
+      await expectChildUntouched(child);
+    });
+
+    it("never rebinds the Meta Ads child onto another active account while consent is pending", async () => {
+      const company = await createCompany(db);
+      const { parent, child } = await metaAdsChild(company.id);
+      const pending = {
+        id: "account-meta",
+        user_id: `paperclip:${company.id}`,
+        status: "INITIATED",
+        toolkit: { slug: "metaads" },
+        auth_config: { id: "auth-meta", auth_scheme: "OAUTH2", is_composio_managed: false },
+      };
+      const other = { ...pending, id: "account-meta-other", status: "ACTIVE" };
+      const client = {
+        ...reauthClient(company.id, async () => {
+          throw new Error("not used");
+        }),
+        listConnectedAccounts: vi.fn(async () => ({ items: [pending, other], next_cursor: null })),
+      };
+      const service = createTestToolAccessService(db, { composioClientFactory: () => client });
+
+      const code = await healthCheckOutcomeCode(service, child.id);
+      expect(code).toBe("composio_connected_account_inactive");
+      expect((await childRow(child.id)).config).toMatchObject({ connectedAccountId: "account-meta" });
+
+      await service.updateConnection(parent.id, { enabled: false });
+      await service.updateConnection(parent.id, { enabled: true });
+      expect((await childRow(child.id)).config).toMatchObject({ connectedAccountId: "account-meta" });
+    });
+
+    it("refuses the Connect Link and the first-active sync for the Meta Ads child", async () => {
+      const company = await createCompany(db);
+      const { parent, child } = await metaAdsChild(company.id);
+      const client = reauthClient(company.id, async () => {
+        throw new Error("not used");
+      });
+      const service = createTestToolAccessService(db, { composioClientFactory: () => client });
+
+      await expect(service.startComposioServiceConnect(parent.id, "metaads", {})).rejects.toMatchObject({
+        status: 422,
+        details: { code: "composio_reauth_required" },
+      });
+      await expect(service.pollComposioService(parent.id, "metaads")).rejects.toMatchObject({
+        status: 422,
+        details: { code: "composio_reauth_required" },
+      });
+      expect(client.createConnectLink).not.toHaveBeenCalled();
+      expect(client.listConnectedAccounts).not.toHaveBeenCalled();
+      await expectChildUntouched(child);
+    });
+
+    it("serves the consent address uncached and keeps it out of the activity log", async () => {
+      const company = await createCompany(db);
+      const { parent, child } = await metaAdsChild(company.id);
+      const client = reauthClient(company.id, async (id) => ({ id, status: "INITIALIZING", redirect_url: CONSENT_URL }));
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.actor = {
+          type: "board",
+          userId: "board-user",
+          userName: "Board User",
+          userEmail: null,
+          isInstanceAdmin: true,
+          source: "local_implicit",
+        };
+        next();
+      });
+      app.use("/api", toolAccessRoutes(db, { composioClientFactory: () => client }));
+      app.use(errorHandler);
+
+      const started = await request(app)
+        .post(`/api/tool-connections/${parent.id}/services/metaads/reauth`)
+        .send({ connectedAccountId: "account-meta-other" })
+        .expect(201);
+      expect(started.headers["cache-control"]).toBe("no-store");
+      expect(started.body).toMatchObject({ childConnectionId: child.id, connectedAccountId: "account-meta" });
+      expect(client.refreshConnectedAccount).toHaveBeenCalledWith("account-meta");
+      const activity = await db.select().from(activityLog).where(eq(activityLog.entityId, parent.id));
+      expect(activity.map((entry) => entry.action)).toContain("composio.service_reauth_started");
+      expect(JSON.stringify(activity)).not.toContain("consent.composio.test");
+
+      const status = await request(app)
+        .get(`/api/tool-connections/${parent.id}/services/metaads/reauth/status`)
+        .expect(200);
+      expect(status.body).toEqual({
+        toolkitSlug: "metaads",
+        childConnectionId: child.id,
+        connectedAccountId: "account-meta",
+        status: "ACTIVE",
+        isDisabled: false,
+      });
+      await request(app)
+        .get(`/api/tool-connections/${parent.id}/services/github/reauth/status`)
+        .expect(422);
+    });
+
     it("keeps the reauth routes board-only", async () => {
       const company = await createCompany(db);
       const { parent } = await metaAdsChild(company.id);
