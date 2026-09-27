@@ -54,7 +54,18 @@ jobs:
       - name: Production image build
         run: |
           set -euo pipefail
-          docker buildx build --target production --load --tag "mai-2845-verify:${GITHUB_SHA}" .
+          docker buildx build --target production --load \
+            --build-arg "PAPERCLIP_BUILD_COMMIT=${GITHUB_SHA}" \
+            --tag "mai-2845-verify:${GITHUB_SHA}" .
+
+      # MAI-3579: read-only provenance check on the real image. The label and
+      # ENV must both carry the commit passed above; the script only runs
+      # `docker image inspect`.
+      - name: Image commit provenance
+        run: |
+          set -euo pipefail
+          node --test ./scripts/__tests__/image-provenance.test.mjs
+          ./scripts/verify-image-provenance.sh "mai-2845-verify:${GITHUB_SHA}" "${GITHUB_SHA}"
 
       # --entrypoint sh overrides tini/docker-entrypoint.sh so no product
       # process (server, gosu re-exec) ever starts. --user node runs the

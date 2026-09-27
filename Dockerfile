@@ -264,6 +264,12 @@ ENV NODE_ENV=production \
   PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
   OPENCODE_ALLOW_ALL_MODELS=true \
   GEMINI_SANDBOX=false
+# MAI-3579: the commit also lands in the image config as the OCI revision
+# label. The label is part of the image config, so the image ID and any
+# registry digest are content digests that cover it: `docker image inspect` on
+# an immutable image ID reads the commit without starting a container.
+# scripts/verify-image-provenance.sh checks label and ENV against each other.
+LABEL org.opencontainers.image.revision=${PAPERCLIP_BUILD_COMMIT}
 
 EXPOSE 3100
 

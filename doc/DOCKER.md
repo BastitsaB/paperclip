@@ -20,7 +20,7 @@ Build arguments:
 | `USER_GID` | `1000` | GID for the container `node` group |
 | `CLI_TOOLS_CACHE_EPOCH` | empty | Refresh the CLI-install layer; CI supplies the current ISO week |
 | `PAPERCLIP_BUILD_VERSION` | empty | Runtime version when Git metadata is unavailable |
-| `PAPERCLIP_BUILD_COMMIT` | empty | Source commit written into the server build stamp and runtime environment |
+| `PAPERCLIP_BUILD_COMMIT` | empty | Source commit written into the server build stamp, runtime environment, and `org.opencontainers.image.revision` label |
 
 Changing the build version or commit preserves the CLI-install cache. The
 tool layer refreshes when its weekly epoch, base image, installation command,
@@ -31,6 +31,55 @@ to refresh tools without clearing the entire build cache.
 docker build -t paperclip-local \
   --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) .
 ```
+
+### Commit provenance for local builds
+
+A plain `docker build` records no commit: the image has no
+`org.opencontainers.image.revision` label and `/api/health` reports
+`commit: null`. To build an image whose ID is bound to its source commit, use
+the wrapper:
+
+```sh
+git fetch
+scripts/docker-build-local-image.sh paperclip-local:dev
+```
+
+The build context is `git archive HEAD` extracted to a temporary directory, so
+local edits and gitignored files (a root `.env`, stale build output) never
+enter the image, while `.dockerignore` applies as in CI. The wrapper refuses to
+build from a dirty worktree or from a commit that is on no remote-tracking
+branch (`PAPERCLIP_ALLOW_UNPUBLISHED_COMMIT=1` skips only the second check). It passes
+the full `HEAD` SHA as `PAPERCLIP_BUILD_COMMIT`, which the Dockerfile writes
+into the server build stamp, the image ENV, and the OCI revision label. It ends
+with one line to keep as the build record:
+
+```
+provenance commit=<40-hex sha> image=sha256:<image id> tag=paperclip-local:dev
+```
+
+The image ID is a content digest that covers the image config, and the config
+contains the label, so ID and commit cannot be separated. Extra arguments go to
+`docker build`, for example `--no-cache-filter production`.
+
+With Compose, tag the image with the service's `image:` name and start it
+without a rebuild (`docker compose up -d --no-build <service>`).
+`docker compose up --build` rebuilds without the commit, and the check below
+then fails.
+
+To check an image or a running container later, read-only (only
+`docker container inspect` / `docker image inspect`; no container start, no
+runtime environment printed):
+
+```sh
+scripts/verify-image-provenance.sh <container-or-image> [expected-commit]
+```
+
+It prints `image=`, `repo_digests=`, and `revision=`, and exits non-zero when
+the label is missing, differs from the image ENV, or differs from the expected
+commit. A server built this way also reports the same SHA as `commit` in
+`GET /api/health`. Images built before this change fail the check; the check
+proves provenance only for images built with the wrapper or with
+`--build-arg PAPERCLIP_BUILD_COMMIT=<full sha>`.
 
 ## Cloud image addresses
 
