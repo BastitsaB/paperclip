@@ -856,6 +856,21 @@ export function createPostgresRunDispatchAdapter(
             ...(decision.errorCode === "execution_reconciliation_required"
               ? { executionWait: decision.details }
               : {}),
+            // A run cancelled here never left "queued"/"running" through this
+            // gate's own doing before starting: mirrors the identical bootstrap
+            // marker heartbeat.ts's setRunStatusFromLive already writes for a
+            // queued-run cancellation, so legacyExecutionNeedsReconciliation's
+            // existing bootstrap escape hatch applies uniformly instead of only
+            // on that one path. Without this, every stale-queued-run-gate
+            // cancellation (issue_continuation_waiting_on_review,
+            // issue_dependencies_blocked, etc.) falls through to the general
+            // "unknown outcome" branch and wedges the issue in
+            // legacy_execution_requires_reconciliation with no self-heal path,
+            // even though no provider work ever began. See
+            // paperclipai/paperclip#13640.
+            ...(!run.startedAt
+              ? { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } }
+              : {}),
             effectiveTimeoutSec: 0,
             timeoutConfigured: false,
             timeoutSource: "stale_queued_run_gate",
