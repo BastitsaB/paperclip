@@ -306,6 +306,27 @@ function exhaustedMonitorClearReason(input: {
   return null;
 }
 
+// MAI-3862: monitorAttemptCount is cumulative across every monitor ever armed on
+// the issue, so a fresh bounded wait needs maxAttempts above that count. Say so
+// in the 422 instead of leaving callers to guess a larger limit.
+function monitorBoundsExhaustedError(input: {
+  clearReason: IssueExecutionMonitorClearReason;
+  monitor: IssueExecutionMonitorPolicy;
+  attemptCount: number;
+}) {
+  const maxAttempts = input.monitor.maxAttempts ?? null;
+  return unprocessable(MONITOR_BOUNDS_EXHAUSTED_MESSAGE, {
+    clearReason: input.clearReason,
+    attemptCount: input.attemptCount,
+    maxAttempts,
+    timeoutAt: input.monitor.timeoutAt ?? null,
+    // Also set when the timeout is reported first, so one retry fixes both.
+    ...(maxAttempts !== null && input.attemptCount >= maxAttempts
+      ? { minimumMaxAttempts: input.attemptCount + 1 }
+      : {}),
+  });
+}
+
 function nextAssigneeIds(input: {
   issue: IssueLike;
   requestedAssigneePatch: RequestedAssigneePatch;
@@ -1090,14 +1111,19 @@ function applyMonitorTransition(input: TransitionInput, stagePatch: Record<strin
         clearedAt: new Date(),
       });
     } else {
+      const attemptCount = currentMonitorState?.attemptCount ?? 0;
       const exhaustedReason = exhaustedMonitorClearReason({
         monitor: input.policy.monitor,
-        attemptCount: currentMonitorState?.attemptCount ?? 0,
+        attemptCount,
         now: new Date(),
       });
       if (exhaustedReason) {
         if (input.monitorExplicitlyUpdated) {
-          throw unprocessable(MONITOR_BOUNDS_EXHAUSTED_MESSAGE, { clearReason: exhaustedReason });
+          throw monitorBoundsExhaustedError({
+            clearReason: exhaustedReason,
+            monitor: input.policy.monitor,
+            attemptCount,
+          });
         }
         patch.executionPolicy = stripMonitorFromExecutionPolicy(input.policy);
         patch.monitorNextCheckAt = null;
@@ -1151,7 +1177,11 @@ export function buildInitialIssueMonitorFields(input: {
     now: new Date(),
   });
   if (exhaustedReason) {
-    throw unprocessable(MONITOR_BOUNDS_EXHAUSTED_MESSAGE, { clearReason: exhaustedReason });
+    throw monitorBoundsExhaustedError({
+      clearReason: exhaustedReason,
+      monitor: input.policy.monitor,
+      attemptCount: 0,
+    });
   }
 
   const monitorState = buildScheduledMonitorState(null, input.policy.monitor);
