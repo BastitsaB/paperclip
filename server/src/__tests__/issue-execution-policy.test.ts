@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../services/issue-execution-policy.ts";
+import {
+  applyIssueExecutionPolicyTransition,
+  buildIssueMonitorTriggeredPatch,
+  normalizeIssueExecutionPolicy,
+  parseIssueExecutionState,
+} from "../services/issue-execution-policy.ts";
+import { HttpError } from "../errors.ts";
 import type { IssueExecutionPolicy, IssueExecutionState } from "@paperclipai/shared";
 
 const coderAgentId = "11111111-1111-4111-8111-111111111111";
@@ -1821,6 +1827,180 @@ describe("issue execution policy transitions", () => {
           monitorExplicitlyUpdated: true,
         }),
       ).toThrow("Monitor bounds are already exhausted");
+    });
+
+    describe("new bounded monitor after an expired one (MAI-3862)", () => {
+      // Shape of an issue whose last monitor fired five times and whose
+      // timeout has passed: the scheduler stripped the policy monitor and
+      // left a triggered state behind.
+      function expiredMonitorIssue() {
+        return {
+          status: "in_progress",
+          assigneeAgentId: coderAgentId,
+          assigneeUserId: null,
+          executionPolicy: null,
+          executionState: {
+            status: "idle",
+            currentStageId: null,
+            currentStageIndex: null,
+            currentStageType: null,
+            currentParticipant: null,
+            returnAssignee: null,
+            reviewRequest: null,
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+            monitor: {
+              status: "triggered",
+              nextCheckAt: null,
+              lastTriggeredAt: "2026-09-28T14:50:01.000Z",
+              attemptCount: 5,
+              notes: "Check the paid slot",
+              scheduledBy: "assignee",
+              timeoutAt: "2026-09-28T15:20:00.000Z",
+              maxAttempts: 6,
+              clearedAt: null,
+              clearReason: null,
+            },
+          },
+          monitorAttemptCount: 5,
+          monitorNextCheckAt: null,
+          monitorLastTriggeredAt: new Date("2026-09-28T14:50:01.000Z"),
+          monitorNotes: "Check the paid slot",
+          monitorScheduledBy: "assignee",
+        };
+      }
+
+      function newMonitor(maxAttempts: number) {
+        return normalizeIssueExecutionPolicy({
+          stages: [],
+          monitor: {
+            nextCheckAt: "2099-09-30T07:55:00.000Z",
+            timeoutAt: "2099-09-30T09:00:00.000Z",
+            maxAttempts,
+            scheduledBy: "assignee",
+          },
+        })!;
+      }
+
+      function arm(issue: ReturnType<typeof expiredMonitorIssue>, policy: IssueExecutionPolicy) {
+        return applyIssueExecutionPolicyTransition({
+          issue,
+          policy,
+          previousPolicy: null,
+          requestedAssigneePatch: {},
+          actor: { agentId: coderAgentId },
+          monitorExplicitlyUpdated: true,
+        });
+      }
+
+      function armError(issue: ReturnType<typeof expiredMonitorIssue>, policy: IssueExecutionPolicy) {
+        try {
+          arm(issue, policy);
+        } catch (error) {
+          expect(error).toBeInstanceOf(HttpError);
+          return error as HttpError;
+        }
+        throw new Error("expected the monitor to be rejected");
+      }
+
+      it("stores a future check, the new timeout and a higher limit", () => {
+        const result = arm(expiredMonitorIssue(), newMonitor(8));
+
+        expect(result.patch.monitorNextCheckAt).toEqual(new Date("2099-09-30T07:55:00.000Z"));
+        expect(result.patch.executionState).toMatchObject({
+          monitor: {
+            status: "scheduled",
+            nextCheckAt: "2099-09-30T07:55:00.000Z",
+            timeoutAt: "2099-09-30T09:00:00.000Z",
+            maxAttempts: 8,
+            attemptCount: 5,
+            clearReason: null,
+          },
+        });
+      });
+
+      it("rejects a limit at or below the cumulative attempt count and names the minimum", () => {
+        const error = armError(expiredMonitorIssue(), newMonitor(5));
+
+        expect(error.status).toBe(422);
+        expect(error.message).toBe("Monitor bounds are already exhausted");
+        expect(error.details).toEqual({
+          clearReason: "max_attempts_exhausted",
+          attemptCount: 5,
+          maxAttempts: 5,
+          timeoutAt: "2099-09-30T09:00:00.000Z",
+          minimumMaxAttempts: 6,
+        });
+      });
+
+      it("rejects re-arming once the new monitor has fired up to its limit", () => {
+        const policy = newMonitor(6);
+        const issue = expiredMonitorIssue();
+        const armed = arm(issue, policy);
+        const triggered = buildIssueMonitorTriggeredPatch({
+          issue: {
+            ...issue,
+            executionPolicy: policy as unknown as Record<string, unknown>,
+            executionState: armed.patch.executionState as Record<string, unknown>,
+            monitorNextCheckAt: armed.patch.monitorNextCheckAt as Date,
+          },
+          policy,
+          triggeredAt: new Date("2099-09-30T07:55:00.000Z"),
+        });
+        expect(triggered.monitorAttemptCount).toBe(6);
+
+        const error = armError(
+          {
+            ...issue,
+            executionState: triggered.executionState as never,
+            monitorAttemptCount: triggered.monitorAttemptCount,
+            monitorLastTriggeredAt: triggered.monitorLastTriggeredAt,
+          },
+          newMonitor(6),
+        );
+        expect(error.details).toMatchObject({
+          clearReason: "max_attempts_exhausted",
+          attemptCount: 6,
+          minimumMaxAttempts: 7,
+        });
+      });
+
+      it("names the attempt minimum even when the timeout is reported first", () => {
+        const policy = normalizeIssueExecutionPolicy({
+          stages: [],
+          monitor: {
+            nextCheckAt: "2099-09-30T07:55:00.000Z",
+            timeoutAt: "2020-01-01T00:00:00.000Z",
+            maxAttempts: 5,
+            scheduledBy: "assignee",
+          },
+        })!;
+
+        expect(armError(expiredMonitorIssue(), policy).details).toMatchObject({
+          clearReason: "timeout_exceeded",
+          minimumMaxAttempts: 6,
+        });
+      });
+
+      it("reports an elapsed timeout without a minimum attempt hint", () => {
+        const policy = normalizeIssueExecutionPolicy({
+          stages: [],
+          monitor: {
+            nextCheckAt: "2099-09-30T07:55:00.000Z",
+            timeoutAt: "2020-01-01T00:00:00.000Z",
+            maxAttempts: 8,
+            scheduledBy: "assignee",
+          },
+        })!;
+
+        expect(armError(expiredMonitorIssue(), policy).details).toEqual({
+          clearReason: "timeout_exceeded",
+          attemptCount: 5,
+          maxAttempts: 8,
+          timeoutAt: "2020-01-01T00:00:00.000Z",
+        });
+      });
     });
   });
 });
