@@ -176,6 +176,7 @@ async function runExecutor(
     runtimeMcp?: AdapterRuntimeMcpAccess;
     prepareRemoteManagedHome?: AcpxEngineExecutorOptions["prepareRemoteManagedHome"];
     startupTraceContext?: AdapterExecutionContext["startupTraceContext"];
+    agentId?: string;
   } = {},
 ) {
   const runtimeOptions: Record<string, unknown>[] = [];
@@ -200,7 +201,7 @@ async function runExecutor(
   const result = await execute({
     runId: "run-1",
     agent: {
-      id: "agent-1",
+      id: options.agentId ?? "agent-1",
       companyId: "company-1",
     },
       runtime: options.runtime ?? {},
@@ -1579,6 +1580,9 @@ describe("shared ACPX engine runtime behavior", () => {
       paperclipInstanceId,
       "companies",
       "company-1",
+      "acp-engine",
+      "agents",
+      "agent-1",
       "codex-home",
     );
     await fs.mkdir(sourceCodexHome, { recursive: true });
@@ -1613,6 +1617,64 @@ describe("shared ACPX engine runtime behavior", () => {
     const authStat = await fs.lstat(managedAuth);
     expect(authStat.isSymbolicLink()).toBe(true);
     expect(path.resolve(path.dirname(managedAuth), await fs.readlink(managedAuth))).toBe(sourceAuth);
+  });
+
+  it.skipIf(process.platform === "win32")("keeps an agent's Codex skills when another agent of the same company starts a run", async () => {
+    const root = await makeTempRoot();
+    const skillRoot = path.join(root, "skills");
+    const sourceCodexHome = path.join(root, "source-codex-home");
+    const paperclipHome = path.join(root, "paperclip-home");
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "auth.json"), "{\"source\":true}", "utf8");
+    const alpha = await createSkill(skillRoot, "alpha");
+    const beta = await createSkill(skillRoot, "beta");
+    const agentHome = (agentId: string) =>
+      path.join(paperclipHome, "instances", "default", "companies", "company-1", "acp-engine", "agents", agentId, "codex-home");
+
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousPaperclipHome = process.env.PAPERCLIP_HOME;
+    const previousPaperclipInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
+    try {
+      process.env.CODEX_HOME = sourceCodexHome;
+      process.env.PAPERCLIP_HOME = paperclipHome;
+      process.env.PAPERCLIP_INSTANCE_ID = "default";
+      const first = await runExecutor({
+        agent: "codex",
+        stateDir: path.join(root, "state-a"),
+        paperclipRuntimeSkills: [alpha, beta],
+        paperclipSkillSync: { desiredSkills: [alpha.key] },
+      }, { agentId: "agent-a" });
+      const second = await runExecutor({
+        agent: "codex",
+        stateDir: path.join(root, "state-b"),
+        paperclipRuntimeSkills: [alpha, beta],
+        paperclipSkillSync: { desiredSkills: [beta.key] },
+      }, { agentId: "agent-b" });
+
+      const envOf = (run: Awaited<ReturnType<typeof runExecutor>>) =>
+        (run.sessionInputs[0]?.sessionOptions as { env: Record<string, string> }).env;
+      expect(envOf(first).CODEX_HOME).toBe(agentHome("agent-a"));
+      expect(envOf(second).CODEX_HOME).toBe(agentHome("agent-b"));
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
+      else process.env.PAPERCLIP_HOME = previousPaperclipHome;
+      if (previousPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+      else process.env.PAPERCLIP_INSTANCE_ID = previousPaperclipInstanceId;
+    }
+
+    // Agent B's run must not revoke the skill agent A selected.
+    expect(await pathExists(path.join(agentHome("agent-a"), "skills", alpha.runtimeName, "SKILL.md"))).toBe(true);
+    expect(await pathExists(path.join(agentHome("agent-a"), "skills", beta.runtimeName))).toBe(false);
+    expect(await pathExists(path.join(agentHome("agent-b"), "skills", beta.runtimeName, "SKILL.md"))).toBe(true);
+    expect(await pathExists(path.join(agentHome("agent-b"), "skills", alpha.runtimeName))).toBe(false);
+    // Both homes share the operator's Codex login through a symlink.
+    for (const agentId of ["agent-a", "agent-b"]) {
+      const auth = path.join(agentHome(agentId), "auth.json");
+      expect((await fs.lstat(auth)).isSymbolicLink()).toBe(true);
+      expect(path.resolve(path.dirname(auth), await fs.readlink(auth))).toBe(path.join(sourceCodexHome, "auth.json"));
+    }
   });
 
   it("sets GROK_HOME for a Grok run from the company Grok home, and leaves CODEX_HOME unchanged for a Codex run", async () => {
