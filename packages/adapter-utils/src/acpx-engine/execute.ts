@@ -807,16 +807,20 @@ function defaultStateDir(companyId: string, agentId: string): string {
   return path.join(defaultPaperclipInstanceDir(), "companies", companyId, "acp-engine", "agents", agentId);
 }
 
-function resolveManagedCodexHomeDir(companyId: string): string {
-  return path.join(defaultPaperclipInstanceDir(), "companies", companyId, "codex-home");
+// Each Codex agent gets its own managed CODEX_HOME under its default ACPX
+// state dir (not `config.stateDir`, so the home stays unique per agent), the
+// same path upstream uses for API-key agents. Codex only discovers skills in
+// $CODEX_HOME/skills, and the skill reconcile step removes every managed skill
+// the starting run did not select. With one home per company, a run of agent B
+// therefore revoked the skills agent A was still using mid-run.
+function resolveManagedCodexAgentHomeDir(companyId: string, agentId: string): string {
+  return path.join(defaultStateDir(companyId, agentId), "codex-home");
 }
 
 // Mirrors `resolveManagedGrokHomeDir` in
 // `packages/adapters/grok-local/src/server/grok-home.ts` — this package
 // cannot import that adapter package (it would invert the dependency
-// direction), so the path scheme is duplicated here, the same way
-// `resolveManagedCodexHomeDir` above duplicates the Codex adapter's own
-// helper.
+// direction), so the path scheme is duplicated here.
 function resolveManagedGrokHomeDir(companyId: string): string {
   return path.join(defaultPaperclipInstanceDir(), "companies", companyId, "grok-home");
 }
@@ -962,7 +966,14 @@ async function ensureSymlink(target: string, source: string): Promise<void> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await ensureParentDir(target);
-    await symlinkOrCopyFile(resolvedSource, target);
+    try {
+      await symlinkOrCopyFile(resolvedSource, target);
+    } catch (err) {
+      // Two first runs of a fresh per-agent home can seed it at the same
+      // time; the loser re-checks the link the winner just created.
+      if (!isErrnoException(err, "EEXIST")) throw err;
+      await ensureSymlink(target, source);
+    }
     return;
   }
 
@@ -1258,6 +1269,7 @@ async function reconcileManagedCodexSkills(input: {
 
 async function prepareCodexSkillRuntime(input: {
   companyId: string;
+  agentId: string;
   config: Record<string, unknown>;
   env: Record<string, string>;
   moduleDir: string;
@@ -1285,7 +1297,7 @@ async function prepareCodexSkillRuntime(input: {
     typeof process.env.CODEX_HOME === "string" && process.env.CODEX_HOME.trim().length > 0
       ? path.resolve(process.env.CODEX_HOME.trim())
       : path.join(os.homedir(), ".codex");
-  const managedCodexHome = resolveManagedCodexHomeDir(input.companyId);
+  const managedCodexHome = resolveManagedCodexAgentHomeDir(input.companyId, input.agentId);
   const effectiveCodexHome = configuredCodexHome ??
     await prepareManagedCodexHome({
       companyId: input.companyId,
@@ -2051,6 +2063,7 @@ async function buildRuntime(input: {
     const preparedSkills = await measureStartupStep(input.ctx, nowMs, "codex-home.seed", () =>
       prepareCodexSkillRuntime({
         companyId: agent.companyId,
+        agentId: agent.id,
         config,
         env,
         moduleDir: input.engine.moduleDir,
