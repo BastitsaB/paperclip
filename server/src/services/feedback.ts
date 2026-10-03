@@ -379,6 +379,7 @@ function captureStatusFromFiles(files: FeedbackTraceBundleFile[]): FeedbackTrace
 
 async function buildCodexTraceFiles(input: {
   companyId: string;
+  agentId: string;
   sessionId: string | null;
   state: ReturnType<typeof createFeedbackRedactionState>;
   notes: string[];
@@ -389,15 +390,14 @@ async function buildCodexTraceFiles(input: {
     return { files, raw: null as Record<string, unknown> | null, normalized: null as Record<string, unknown> | null };
   }
 
-  const managedRoot = path.join(
-    resolvePaperclipInstanceRoot(),
-    "companies",
-    input.companyId,
-    "codex-home",
-    "sessions",
-  );
+  const companyRoot = path.join(resolvePaperclipInstanceRoot(), "companies", input.companyId);
+  // ACPX Codex agents keep their sessions in a per-agent home; older sessions
+  // stay in the former company-wide home.
+  const agentRoot = path.join(companyRoot, "acp-engine", "agents", input.agentId, "codex-home", "sessions");
+  const managedRoot = path.join(companyRoot, "codex-home", "sessions");
   const sharedRoot = path.join(codexHomeDir(), "sessions");
   const sessionFile =
+    await findMatchingFile(agentRoot, (_absolutePath, name) => name.includes(input.sessionId!), 6) ??
     await findMatchingFile(managedRoot, (_absolutePath, name) => name.includes(input.sessionId!), 6) ??
     await findMatchingFile(sharedRoot, (_absolutePath, name) => name.includes(input.sessionId!), 6);
 
@@ -1597,6 +1597,7 @@ async function buildFeedbackTraceBundleFromRow(
       if (run.adapterType === "codex_local") {
         const adapter = await buildCodexTraceFiles({
           companyId: row.companyId,
+          agentId: run.agentId,
           sessionId: run.sessionIdAfter ?? run.sessionIdBefore,
           state,
           notes,

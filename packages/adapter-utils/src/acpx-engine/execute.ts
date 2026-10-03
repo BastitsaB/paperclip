@@ -807,8 +807,9 @@ function defaultStateDir(companyId: string, agentId: string): string {
   return path.join(defaultPaperclipInstanceDir(), "companies", companyId, "acp-engine", "agents", agentId);
 }
 
-// Each Codex agent gets its own managed CODEX_HOME under its ACPX state dir,
-// like the per-agent Claude skill bundle. Codex only discovers skills in
+// Each Codex agent gets its own managed CODEX_HOME under its default ACPX
+// state dir (not `config.stateDir`, so the home stays unique per agent), the
+// same path upstream uses for API-key agents. Codex only discovers skills in
 // $CODEX_HOME/skills, and the skill reconcile step removes every managed skill
 // the starting run did not select. With one home per company, a run of agent B
 // therefore revoked the skills agent A was still using mid-run.
@@ -965,7 +966,14 @@ async function ensureSymlink(target: string, source: string): Promise<void> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await ensureParentDir(target);
-    await symlinkOrCopyFile(resolvedSource, target);
+    try {
+      await symlinkOrCopyFile(resolvedSource, target);
+    } catch (err) {
+      // Two first runs of a fresh per-agent home can seed it at the same
+      // time; the loser re-checks the link the winner just created.
+      if (!isErrnoException(err, "EEXIST")) throw err;
+      await ensureSymlink(target, source);
+    }
     return;
   }
 
