@@ -45,13 +45,13 @@ const VERIFIED_PROVIDER_RUNTIME_TARGET_ENV =
 
 const QUALIFIED_CLAUDE_LINUX_X64_RUNTIME = Object.freeze({
   runtimePackageName: "@anthropic-ai/claude-agent-sdk",
-  runtimePackageVersion: "0.3.280",
+  runtimePackageVersion: "0.3.284",
   packageName: "@anthropic-ai/claude-agent-sdk-linux-x64",
-  packageVersion: "0.3.280",
-  dependencyDeclaration: "0.3.280",
+  packageVersion: "0.3.284",
+  dependencyDeclaration: "0.3.284",
   relativeExecutable: "claude",
   executableDigest:
-    "sha256:1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b",
+    "sha256:5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f",
   environmentVariable: "CLAUDE_CODE_EXECUTABLE",
 });
 
@@ -59,12 +59,12 @@ const QUALIFIED_CLAUDE_DARWIN_RUNTIMES = {
   arm64: Object.freeze({
     ...QUALIFIED_CLAUDE_LINUX_X64_RUNTIME,
     packageName: "@anthropic-ai/claude-agent-sdk-darwin-arm64",
-    executableDigest: "sha256:387a5c5dcdbb815085edf0baf79591f9d8894efe922bceaf3d75b1b08055229d",
+    executableDigest: "sha256:50a14c2f50f56668380fdda490167f1d3630d5cc18fb8aed3073c2c7ea7314fe",
   }),
   x64: Object.freeze({
     ...QUALIFIED_CLAUDE_LINUX_X64_RUNTIME,
     packageName: "@anthropic-ai/claude-agent-sdk-darwin-x64",
-    executableDigest: "sha256:c1d32d87630482250633208ab77855429b24010ae3086a7ff7539b57b93168d4",
+    executableDigest: "sha256:79441b868935a11ed0630b2ee59327eda9f6a93bb8d470bd6633c03df76d2135",
   }),
 };
 
@@ -92,8 +92,8 @@ const QUALIFIED_CLAUDE_PROVIDER_DEPENDENCIES = Object.freeze([
   }),
   Object.freeze({
     packageName: "@anthropic-ai/claude-agent-sdk",
-    packageVersion: "0.3.280",
-    // The package's own package.json still declares 0.3.257 — 0.3.280 is
+    packageVersion: "0.3.284",
+    // The package's own package.json still declares 0.3.257 — 0.3.284 is
     // only what pnpm resolves, forced by the
     // "claude-agent-acp@0.73.0>@anthropic-ai/claude-agent-sdk" override in
     // the workspace root. This field binds the declared string, not the
