@@ -588,31 +588,6 @@ describeEmbeddedPostgres("heartbeat sweepOrphanedActiveLeases", () => {
       return runId;
     }
 
-    it("closes the local lease of a terminal legacy run directly", async () => {
-      const { companyId, agentId } = await seedCompanyAgentAndEnvironment();
-      const localEnvironmentId = await seedLocalEnvironment(companyId);
-      const runId = await insertHeartbeatRun({ companyId, agentId, status: "failed" });
-      const leaseId = await insertActiveLease({
-        companyId,
-        environmentId: localEnvironmentId,
-        heartbeatRunId: runId,
-        updatedAt: oldEnough(),
-        provider: "local",
-      });
-
-      const result = await heartbeatService(db).sweepOrphanedActiveLeases({
-        backoffMs: 5 * 60 * 1000,
-      });
-
-      expect(result).toEqual({ recovered: 1 });
-      const row = await leaseRow(leaseId);
-      // Released, not pending_cleanup: the local driver has no teardown the
-      // pending_cleanup sweep could complete.
-      expect(row?.status).toBe("failed");
-      expect(row?.releasedAt).not.toBeNull();
-      expect(row?.failureReason).toBe("orphaned_active_lease_recovered");
-    });
-
     it("leaves the sandbox lease of a run with a finalization coordinator active, also on the startup call", async () => {
       const { companyId, agentId, environmentId } = await seedCompanyAgentAndEnvironment();
       const runId = await seedNativeCoordinator({ companyId, agentId });

@@ -1,5 +1,5 @@
 import { executionProjectionsForRuns } from "./execution-projection.js";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -442,33 +442,21 @@ export function activityService(db: Db) {
             // heartbeat_runs_company_ctx_issue_created_idx (the expression must
             // stay byte-identical to that index), the activity arm through
             // activity_log_entity_type_id_idx.
-            inArray(
-              heartbeatRuns.id,
-              db
-                .select({ runId: heartbeatRuns.id })
-                .from(heartbeatRuns)
-                .where(
-                  and(
-                    eq(heartbeatRuns.companyId, companyId),
-                    sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-                  ),
-                )
-                .union(
-                  db
-                    // `run_id` is nullable in the schema; the isNotNull filter
-                    // below makes the non-null union row type true.
-                    .select({ runId: sql<string>`${activityLog.runId}` })
-                    .from(activityLog)
-                    .where(
-                      and(
-                        eq(activityLog.companyId, companyId),
-                        eq(activityLog.entityType, "issue"),
-                        eq(activityLog.entityId, issueId),
-                        isNotNull(activityLog.runId),
-                      ),
-                    ),
-                ),
-            ),
+            // Raw subquery instead of the query builder's union so callers that pass a
+            // narrowed Db (tests, retry wrappers) keep working with plain select chains.
+            sql`${heartbeatRuns.id} in (
+              select hr.id
+              from ${heartbeatRuns} as hr
+              where hr.company_id = ${companyId}
+                and hr.context_snapshot ->> 'issueId' = ${issueId}
+              union
+              select al.run_id
+              from ${activityLog} as al
+              where al.company_id = ${companyId}
+                and al.entity_type = 'issue'
+                and al.entity_id = ${issueId}
+                and al.run_id is not null
+            )`,
           ),
         )
         .orderBy(desc(heartbeatRuns.createdAt));

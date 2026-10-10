@@ -18783,19 +18783,13 @@ export function heartbeatService(
   //   before it releases the lease, with awaited work in between; a lease
   //   acquired long ago is already "stale" by `updatedAt`, so without this
   //   guard a tick landing in that window would race the owner.
-  // - A `local` lease is closed directly instead of moved to pending_cleanup.
-  //   The local driver implements neither `destroyRunLease` nor
-  //   `retryPendingSandboxTeardown`, so the pending_cleanup sweep can never
-  //   finish such a row: it would stay unreleased forever and keep blocking
-  //   the execution-recovery resolve. A local lease owns nothing outside the
-  //   database, so closing the record is the whole cleanup.
   async function sweepOrphanedActiveLeases(opts: {
     backoffMs: number;
   }): Promise<{ recovered: number }> {
     const cutoff = new Date(Date.now() - opts.backoffMs);
 
     const rows = await db
-      .select({ lease: environmentLeases, runStatus: heartbeatRuns.status })
+      .select({ lease: environmentLeases })
       .from(environmentLeases)
       .leftJoin(
         heartbeatRuns,
@@ -18840,26 +18834,7 @@ export function heartbeatService(
       .limit(ORPHANED_ACTIVE_LEASE_SWEEP_PAGE_SIZE);
 
     let recovered = 0;
-    for (const { lease, runStatus } of rows) {
-      if (lease.provider === "local") {
-        const closed = await db
-          .update(environmentLeases)
-          .set({
-            status: leaseReleaseStatusForRunStatus(runStatus),
-            releasedAt: new Date(),
-            updatedAt: new Date(),
-            failureReason: "orphaned_active_lease_recovered",
-          })
-          .where(
-            and(
-              eq(environmentLeases.id, lease.id),
-              eq(environmentLeases.status, "active"),
-            ),
-          )
-          .returning({ id: environmentLeases.id });
-        if (closed.length > 0) recovered += 1;
-        continue;
-      }
+    for (const { lease } of rows) {
       // A provider resource id names one physical sandbox. A different lease
       // row can still hold that same resource in a live status, so this sweep
       // must not tear down a sandbox that a different lease still owns.
