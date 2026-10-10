@@ -8,6 +8,7 @@ import {
   agentWakeupRequests,
   companies,
   createDb,
+  heartbeatRunEvents,
   heartbeatRuns,
   issues,
   issueThreadInteractions,
@@ -52,6 +53,7 @@ describeEmbeddedPostgres("atomic assignee/review transition on PATCH /api/issues
     await db.delete(issueThreadInteractions);
     await db.delete(issues);
     await db.delete(activityLog);
+    await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(agents);

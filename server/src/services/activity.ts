@@ -1,10 +1,11 @@
 import { executionProjectionsForRuns } from "./execution-projection.js";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   agents,
   documentRevisions,
+  documents,
   environmentLeases,
   environments,
   heartbeatRunEvents,
@@ -15,7 +16,7 @@ import {
   issueWorkProducts,
   workspaceOperations,
 } from "@paperclipai/db";
-import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
+import { hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { visibleIssueCondition } from "./issue-visibility.js";
 import { classifyRunLiveness } from "./run-liveness.js";
@@ -87,6 +88,13 @@ export function activityService(db: Db) {
       when ${heartbeatRuns.resultJson} is null then null
       else jsonb_strip_nulls(jsonb_build_object(
         'conversationReset', ${heartbeatRuns.resultJson} -> 'conversationReset',
+        'workspaceRestoreFailure', case when ${heartbeatRuns.resultJson} ->> 'workspaceRestoreFailure'
+          in ('restore_permission_denied', 'restore_lock_timeout', 'restore_unsafe_archive', 'restore_failed')
+          then ${heartbeatRuns.resultJson} -> 'workspaceRestoreFailure' end,
+        'workspaceRestorePath', case when length(${heartbeatRuns.resultJson} ->> 'workspaceRestorePath') <= 180
+          then ${heartbeatRuns.resultJson} -> 'workspaceRestorePath' end,
+        'finalResponseRecorded', case when jsonb_typeof(${heartbeatRuns.resultJson} -> 'finalResponseRecorded') = 'boolean'
+          then ${heartbeatRuns.resultJson} -> 'finalResponseRecorded' end,
         'billingType', coalesce(${heartbeatRuns.resultJson} -> 'billingType', ${heartbeatRuns.resultJson} -> 'billing_type'),
         'billing_type', coalesce(${heartbeatRuns.resultJson} -> 'billing_type', ${heartbeatRuns.resultJson} -> 'billingType'),
         'costUsd', coalesce(
@@ -189,6 +197,7 @@ export function activityService(db: Db) {
         status: issues.status,
         title: issues.title,
         description: issues.description,
+        workMode: issues.workMode,
       })
       .from(issues)
       .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)))
@@ -394,6 +403,9 @@ export function activityService(db: Db) {
           invocationSource: heartbeatRuns.invocationSource,
           responsibleUserId: heartbeatRuns.responsibleUserId,
           errorCode: heartbeatRuns.errorCode,
+          error: sql<string | null>`case when ${heartbeatRuns.status} = 'failed'
+            and ${heartbeatRuns.errorCode} = 'native_provider_model_rejected'
+            then left(${heartbeatRuns.error}, 2000) else null end`,
           usageJson: summarizedUsageJson,
           resultJson: summarizedResultJson,
           logBytes: heartbeatRuns.logBytes,
@@ -430,33 +442,21 @@ export function activityService(db: Db) {
             // heartbeat_runs_company_ctx_issue_created_idx (the expression must
             // stay byte-identical to that index), the activity arm through
             // activity_log_entity_type_id_idx.
-            inArray(
-              heartbeatRuns.id,
-              db
-                .select({ runId: heartbeatRuns.id })
-                .from(heartbeatRuns)
-                .where(
-                  and(
-                    eq(heartbeatRuns.companyId, companyId),
-                    sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-                  ),
-                )
-                .union(
-                  db
-                    // `run_id` is nullable in the schema; the isNotNull filter
-                    // below makes the non-null union row type true.
-                    .select({ runId: sql<string>`${activityLog.runId}` })
-                    .from(activityLog)
-                    .where(
-                      and(
-                        eq(activityLog.companyId, companyId),
-                        eq(activityLog.entityType, "issue"),
-                        eq(activityLog.entityId, issueId),
-                        isNotNull(activityLog.runId),
-                      ),
-                    ),
-                ),
-            ),
+            // Raw subquery instead of the query builder's union so callers that pass a
+            // narrowed Db (tests, retry wrappers) keep working with plain select chains.
+            sql`${heartbeatRuns.id} in (
+              select hr.id
+              from ${heartbeatRuns} as hr
+              where hr.company_id = ${companyId}
+                and hr.context_snapshot ->> 'issueId' = ${issueId}
+              union
+              select al.run_id
+              from ${activityLog} as al
+              where al.company_id = ${companyId}
+                and al.entity_type = 'issue'
+                and al.entity_id = ${issueId}
+                and al.run_id is not null
+            )`,
           ),
         )
         .orderBy(desc(heartbeatRuns.createdAt));
@@ -465,7 +465,7 @@ export function activityService(db: Db) {
       const runIds = runs.map((run) => run.runId);
       if (runIds.length === 0) return runs;
 
-      const exhaustionRows = await db
+      const exhaustionRowsQuery = db
         .select({
           runId: heartbeatRunEvents.runId,
           message: heartbeatRunEvents.message,
@@ -480,13 +480,7 @@ export function activityService(db: Db) {
         )
         .orderBy(asc(heartbeatRunEvents.runId), desc(heartbeatRunEvents.id));
 
-      const retryExhaustedReasonByRunId = new Map<string, string>();
-      for (const row of exhaustionRows) {
-        if (!row.message || retryExhaustedReasonByRunId.has(row.runId)) continue;
-        retryExhaustedReasonByRunId.set(row.runId, row.message);
-      }
-
-      const leaseRows = await db
+      const leaseRowsQuery = db
         .select({
           lease: environmentLeases,
           environment: {
@@ -505,6 +499,28 @@ export function activityService(db: Db) {
         )
         .orderBy(desc(environmentLeases.lastUsedAt), desc(environmentLeases.createdAt));
 
+      // Only stored, current plan revisions can support a saved-plan link.
+      // Do not trust an adapter's claim that it wrote a document.
+      const savedPlanQuery = runs.some((run) => hasWorkspaceRestoreFailure(run.resultJson))
+        ? db.select({ revisionId: documentRevisions.id, runId: documentRevisions.createdByRunId })
+          .from(issueDocuments)
+          .innerJoin(documents, and(eq(documents.id, issueDocuments.documentId), eq(documents.companyId, companyId)))
+          .innerJoin(documentRevisions, and(eq(documentRevisions.id, documents.latestRevisionId), eq(documentRevisions.documentId, documents.id), eq(documentRevisions.companyId, companyId)))
+          .where(and(eq(issueDocuments.companyId, companyId), eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, "plan")))
+          .limit(1)
+        : Promise.resolve([]);
+      const [exhaustionRows, leaseRows, executionByRunId, [savedPlan]] = await Promise.all([
+        exhaustionRowsQuery,
+        leaseRowsQuery,
+        executionProjectionsForRuns(db, companyId, runIds, new Date(), { retryDatabaseReads: true }),
+        savedPlanQuery,
+      ]);
+      const retryExhaustedReasonByRunId = new Map<string, string>();
+      for (const row of exhaustionRows) {
+        if (!row.message || retryExhaustedReasonByRunId.has(row.runId)) continue;
+        retryExhaustedReasonByRunId.set(row.runId, row.message);
+      }
+
       const leaseByRunId = new Map<string, (typeof leaseRows)[number]>();
       for (const row of leaseRows) {
         if (row.lease.heartbeatRunId && !leaseByRunId.has(row.lease.heartbeatRunId)) {
@@ -512,7 +528,6 @@ export function activityService(db: Db) {
         }
       }
 
-      const executionByRunId = await executionProjectionsForRuns(db, companyId, runIds);
       return runs.map((run) => {
         const leaseRow = leaseByRunId.get(run.runId);
         const leaseMetadata = leaseRow?.lease.metadata ?? null;
@@ -524,6 +539,15 @@ export function activityService(db: Db) {
               : null;
         return {
           ...run,
+          resultJson: run.resultJson ? {
+            ...run.resultJson,
+            ...(Object.hasOwn(run.resultJson, "workspaceRestorePath") ? {
+              workspaceRestorePath: safeWorkspaceRestorePath(run.resultJson.workspaceRestorePath),
+            } : {}),
+            ...(hasWorkspaceRestoreFailure(run.resultJson) ? {
+              ...(savedPlan?.runId === run.runId ? { savedPlanRevisionId: savedPlan.revisionId } : {}),
+            } : {}),
+          } : null,
           execution: executionByRunId.get(run.runId) ?? null,
           environment: leaseRow
             ? {
