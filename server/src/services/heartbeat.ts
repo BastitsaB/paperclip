@@ -17987,6 +17987,9 @@ export function heartbeatService(
             .catch((error) => {
               if (isExternalChatWaitAuthorizationContention(error))
                 return { kind: "stale" as const, run: null };
+              // Fork (#23): sibling routine_execution issue holds the lock; retry later.
+              if (isUniqueViolation(error, "issues_open_routine_execution_uq"))
+                return { kind: "stale" as const, run: null };
               throw error;
             })
         : null;
@@ -18052,6 +18055,11 @@ export function heartbeatService(
               agentNameKey: normalizeAgentNameKey(agent.name),
             });
           }
+          // Fork (#23): bindClaimedIssueExecution stamps executionRunId inside this savepoint.
+          // When a sibling routine_execution issue already holds the lock, that write fails
+          // with 23505 on issues_open_routine_execution_uq. The savepoint rolls back, the run
+          // stays "queued" and a later scheduling pass retries, instead of the error escaping
+          // and stalling the agent queue.
           return tx.transaction(async (claimTx) => {
             const issueClaim = await lockIssueExecutionClaim(claimTx as unknown as Db);
             if (issueClaim.blocked) return null;
@@ -18060,6 +18068,13 @@ export function heartbeatService(
             )).returning().then((rows) => rows[0] ?? null);
             await bindClaimedIssueExecution(claimTx as unknown as Db, issueClaim.ownsIssue, claimedRun);
             return claimedRun;
+          }).catch((error) => {
+            if (!isUniqueViolation(error, "issues_open_routine_execution_uq")) throw error;
+            logger.info(
+              { runId: run.id, agentId: run.agentId },
+              "claimQueuedRun: deferred run; routine execution lock held by a sibling execution issue",
+            );
+            return null;
           });
         }, false, true);
     if (!claimed) return null;
