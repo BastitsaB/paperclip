@@ -8242,7 +8242,15 @@ export function createToolGatewayService(
       .orderBy(desc(toolActionRequests.createdAt))
       .limit(1);
     if (!match) return null;
-    if (match.actionRequest.status === "failed" && match.invocation.errorCode !== "provider_interaction_required") return null;
+    // Upstream: a failed row matches only while the provider waits for interaction.
+    // Fork: a failure after dispatch (startedAt set) also matches, so the retry surfaces the
+    // stored failure instead of a redundant second approval. A pre-dispatch failure (no
+    // startedAt) never reached the provider and recovers through a fresh approval cycle.
+    if (
+      match.actionRequest.status === "failed" &&
+      match.invocation.errorCode !== "provider_interaction_required" &&
+      !match.invocation.startedAt
+    ) return null;
     // The gateway builds an ask-first request in two steps inside one call: it
     // inserts the row with a null signature and a null expiry, then signs the
     // row and sets the expiry. A concurrent matching call can observe the row in
@@ -8290,19 +8298,6 @@ export function createToolGatewayService(
       });
       return null;
     }
-    // A "failed" row can come from two very different places: a pre-dispatch
-    // validation failure (stale/invalid signature, a legacy pre-execute-on-
-    // approve approval that must stay inert, an approval snapshot that
-    // changed after review, ...) that never reached the provider, or a real
-    // execution attempt that started and then failed (provider error,
-    // timeout, ...). Only the latter represents a decision the human's
-    // approval actually covered. `startedAt` is set immediately before
-    // dispatch and only then, so its absence reliably marks a pre-dispatch
-    // failure. Treat those as no match so the retry recovers through a
-    // fresh approval cycle, same as before this row existed.
-    if (pendingRequest.status === "failed" && !match.invocation.startedAt) {
-      return null;
-    }
     return match;
   }
 
@@ -8314,7 +8309,7 @@ export function createToolGatewayService(
     const match = await matchingAgentActionRequest(input);
     if (!match) return null;
     const { actionRequest, invocation } = match;
-    if (actionRequest.status === "failed") {
+    if (actionRequest.status === "failed" && invocation.errorCode === "provider_interaction_required") {
       throw new ToolGatewayHttpError(409,
         "The provider is waiting for authorization or approval. Continue the existing execution; do not repeat the original call.",
         "provider_interaction_required", {
