@@ -1017,6 +1017,19 @@ async function ensureCopiedFile(target: string, source: string): Promise<void> {
   await fs.copyFile(source, target);
 }
 
+// Fork (#37): API-key and subscription runs of one agent share its managed home. When an agent
+// switches from an API key to the subscription login and the operator home has no auth.json to
+// link, the API-key file this engine wrote would otherwise keep authenticating the subscription
+// run. Remove only a regular file that holds nothing but the key this engine writes.
+async function removeManagedApiKeyAuth(targetAuth: string): Promise<void> {
+  const existing = await fs.lstat(targetAuth).catch(() => null);
+  if (!existing?.isFile()) return;
+  const parsed = await fs.readFile(targetAuth, "utf8").then((raw) => JSON.parse(raw) as unknown).catch(() => null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  const keys = Object.keys(parsed);
+  if (keys.length === 1 && keys[0] === "OPENAI_API_KEY") await fs.rm(targetAuth, { force: true });
+}
+
 async function prepareManagedCodexHome(input: {
   companyId: string;
   sourceHome: string;
@@ -1044,6 +1057,7 @@ async function prepareManagedCodexHome(input: {
   } else {
     const sourceAuth = path.join(sourceHome, "auth.json");
     if (await pathExists(sourceAuth)) await ensureSymlink(targetAuth, sourceAuth);
+    else await removeManagedApiKeyAuth(targetAuth);
   }
 
   for (const name of ["config.json", "config.toml", "instructions.md"]) {

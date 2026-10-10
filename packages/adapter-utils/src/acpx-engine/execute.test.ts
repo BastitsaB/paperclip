@@ -1812,6 +1812,37 @@ describe("shared ACPX engine runtime behavior", () => {
     },
   );
 
+  it("drops a stale API-key auth.json when the agent switches to the subscription login without a host login", async () => {
+    const root = await makeTempRoot();
+    const sourceCodexHome = path.join(root, "source-codex-home");
+    const paperclipHome = path.join(root, "paperclip-home");
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    const managedHome = path.join(
+      paperclipHome, "instances", "test-instance", "companies", "company-1",
+      "acp-engine", "agents", "agent-1", "codex-home",
+    );
+    await fs.mkdir(managedHome, { recursive: true });
+    const managedAuth = path.join(managedHome, "auth.json");
+    await fs.writeFile(managedAuth, JSON.stringify({ OPENAI_API_KEY: "sk-old" }), "utf8");
+
+    vi.stubEnv("CODEX_HOME", sourceCodexHome);
+    vi.stubEnv("PAPERCLIP_HOME", paperclipHome);
+    vi.stubEnv("PAPERCLIP_INSTANCE_ID", "test-instance");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("CODEX_API_KEY", "");
+    try {
+      await runExecutor({
+        agent: "codex",
+        stateDir: path.join(root, "state"),
+        paperclipRuntimeSkills: [],
+        paperclipSkillSync: { desiredSkills: [] },
+      });
+      expect(await pathExists(managedAuth)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("sets GROK_HOME for a Grok run from the company Grok home, and leaves CODEX_HOME unchanged for a Codex run", async () => {
     const root = await makeTempRoot();
     const paperclipHome = path.join(root, "paperclip-home");
