@@ -13933,9 +13933,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         owner,
         // Compare as uuid so the owner lookup uses the primary key. A text
         // comparison on the owner id forced a scan of the whole wakeup table.
-        // Non-uuid payload values match nothing, as they did before.
+        // Only canonical lower-case uuid text matches, exactly as the text comparison did.
         sql`${owner.id} = (case when coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)
-          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
           then coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)::uuid end)`,
       )
       .where(

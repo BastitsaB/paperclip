@@ -5,6 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 export function externalConversationStateSql() {
   // The uncorrelated guard is evaluated once per statement; without an active
   // Slack endpoint the per-issue lookup below cannot match, so it is skipped.
+  // Keep the provider/status filter identical to the endpoint join below.
   return sql<"active" | "waiting" | null>`(case when exists (select 1 from chat_endpoints slack_endpoint
       where slack_endpoint.provider = 'slack' and slack_endpoint.status in ('active', 'verifying'))
     then (
