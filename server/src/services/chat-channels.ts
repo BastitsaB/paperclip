@@ -13889,6 +13889,18 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   async function enqueueInboundWakeupPublications(limit = 50): Promise<number> {
     if (shuttingDown) return 0;
     const retryInserted = await enqueueFailedChatRetryPublications(limit);
+    // Notices only reach endpoints that can still deliver. Without one, skip the
+    // sweep: it runs on every publication pass and would otherwise scan wakeup
+    // history for nothing.
+    const [deliverableEndpoint] = await db
+      .select({ id: chatEndpoints.id })
+      .from(chatEndpoints)
+      .where(inArray(chatEndpoints.status, ["verifying", "active", "paused", "attention"]))
+      .limit(1);
+    if (!deliverableEndpoint) {
+      inboundWakeNoticeCursor = null;
+      return retryInserted;
+    }
     const owner = alias(agentWakeupRequests, "chat_notice_owner");
     const cursor = inboundWakeNoticeCursor;
     const sourceRemoved = sql`exists (select 1 from issue_comments removed_comment
@@ -13919,7 +13931,12 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       )
       .innerJoin(
         owner,
-        sql`${owner.id}::text = coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)`,
+        // Compare as uuid so the owner lookup uses the primary key. A text
+        // comparison on the owner id forced a scan of the whole wakeup table.
+        // Non-uuid payload values match nothing, as they did before.
+        sql`${owner.id} = (case when coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)
+          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          then coalesce(${agentWakeupRequests.payload}->>'coalescedIntoWakeupRequestId', ${agentWakeupRequests.id}::text)::uuid end)`,
       )
       .where(
         and(

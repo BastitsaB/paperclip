@@ -3,7 +3,11 @@ import { and, eq, sql } from "drizzle-orm";
 
 /** Read-only projection; Slack threads do not acquire Agent Chat identities. */
 export function externalConversationStateSql() {
-  return sql<"active" | "waiting" | null>`(
+  // The uncorrelated guard is evaluated once per statement; without an active
+  // Slack endpoint the per-issue lookup below cannot match, so it is skipped.
+  return sql<"active" | "waiting" | null>`(case when exists (select 1 from chat_endpoints slack_endpoint
+      where slack_endpoint.provider = 'slack' and slack_endpoint.status in ('active', 'verifying'))
+    then (
     select case when c.state = 'waiting' and "issues"."status" = 'in_review'
       and "issues"."execution_run_id" is null
       and "issues"."monitor_next_check_at" is null
@@ -34,7 +38,7 @@ export function externalConversationStateSql() {
       and e.provider = 'slack' and e.assigned_agent_id = "issues"."assignee_agent_id"
       and e.status in ('active', 'verifying') and c.state in ('active', 'waiting')
     order by c.created_at desc, c.id desc limit 1
-  )`;
+  ) end)`;
 }
 
 export function nonIdleSlackIssueCondition() {
