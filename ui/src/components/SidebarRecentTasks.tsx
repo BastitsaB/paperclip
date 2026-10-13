@@ -258,6 +258,9 @@ function RecentTasksList({
               // redirects to the identifier URL and reloads every task query.
               to={createIssueDetailPath(entry.identifier ?? entry.id)}
               label={entry.title}
+              trailing={entry.status === "in_review" && entry.externalConversationState === "waiting"
+                ? <span className="text-xs text-muted-foreground">Idle</span> : undefined}
+              trailingLabel={entry.status === "in_review" && entry.externalConversationState === "waiting" ? "Idle" : undefined}
               className={rail ? undefined : "sidebar-action-link pointer-coarse:pr-8"}
               liveCount={liveIssueIds.has(entry.id) ? 1 : undefined}
             />

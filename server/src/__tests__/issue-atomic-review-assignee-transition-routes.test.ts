@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  activityLog,
   agents,
-  agentWakeupRequests,
   companies,
   createDb,
   heartbeatRuns,
@@ -49,13 +48,10 @@ describeEmbeddedPostgres("atomic assignee/review transition on PATCH /api/issues
   }, 30_000);
 
   afterEach(async () => {
-    await db.delete(issueThreadInteractions);
-    await db.delete(issues);
-    await db.delete(activityLog);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(agents);
-    await db.delete(companies);
+    // One TRUNCATE: background wake handling can still insert run events while a
+    // table-by-table delete runs, which then trips the heartbeat_runs foreign key.
+    await db.execute(sql`truncate table heartbeat_run_events, heartbeat_runs, agent_wakeup_requests,
+      issue_thread_interactions, activity_log, issues, agents, companies cascade`);
   });
 
   afterAll(async () => {

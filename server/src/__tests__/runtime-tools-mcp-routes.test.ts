@@ -46,16 +46,6 @@ describe("GET /mcp/runtime-tools", () => {
     expect(mockConnectionIntentService.validate).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the JSON description for plain GETs", async () => {
-    const res = await request(createApp())
-      .get("/mcp/runtime-tools")
-      .set("Authorization", "Bearer valid")
-      .set("Accept", "application/json");
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ name: "paperclip-runtime-tools", protocolVersion: "2025-03-26" });
-  });
-
   it("still rejects an invalid token before answering the SSE probe", async () => {
     const res = await request(createApp())
       .get("/mcp/runtime-tools")

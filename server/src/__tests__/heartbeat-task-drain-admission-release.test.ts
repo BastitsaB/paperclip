@@ -75,12 +75,10 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
     await tempDb?.cleanup();
   });
 
-  async function seedQueuedRun() {
+  async function seedAgentAndIssue() {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
-    const runId = randomUUID();
-    const wakeupRequestId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
@@ -119,6 +117,14 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
       assigneeAgentId: agentId,
       responsibleUserId: "responsible-user",
     });
+
+    return { companyId, agentId, issueId };
+  }
+
+  async function seedQueuedRun() {
+    const { companyId, agentId, issueId } = await seedAgentAndIssue();
+    const runId = randomUUID();
+    const wakeupRequestId = randomUUID();
 
     await db.insert(agentWakeupRequests).values({
       id: wakeupRequestId,
@@ -219,51 +225,104 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
     expect(finished?.status).toBe("succeeded");
   }, 20_000);
 
-  // Wraps db.transaction so the callback's tx object throws the moment code
-  // calls tx.update(failingTable) for the nth time — this makes a real Postgres
-  // transaction roll back exactly like a genuine write failure partway through,
-  // without touching any other table's update path.
-  //
-  // The occurrence is counted per transactional write to that one table, not
-  // per db.transaction() call. Counting transactions made the fixture depend on
-  // how many transactions the production path happens to open in total, so any
-  // added transaction that never touches the table silently shifted the fault
-  // onto a different write and quietly changed what the test asserted. With
-  // (issues, 0) the only transactional issue write on this path fails: the
-  // issue-lock write inside releaseRunClaimedJustBeforeSuppression's
-  // transaction. The stale-run validation transaction completes because it
-  // never writes issues at all - which is why the previous transaction-indexed
-  // form happened to work, and why it broke the moment an unrelated
-  // transaction was added ahead of it.
-  function withFailingTransactionalUpdate(
-    realDb: typeof db,
-    failingTable: unknown,
-    failAtOccurrence: number,
-  ) {
-    let occurrence = 0;
+  it("keeps a wake that arrives during a task drain queued and runs it once the drain lifts", async () => {
+    const { agentId, issueId } = await seedAgentAndIssue();
+    const heartbeat = heartbeatService(db);
+
+    // The drain holds ADMISSION, not the request. The wake lands in the
+    // durable queue, so the restart that clears the process-local drain
+    // resumes it instead of losing it. (Before this, the wake was written
+    // as `skipped` and the issue sat in `todo` with no run and no path.)
+    startTaskDrain({});
+    await heartbeat.wakeup(agentId, {
+      source: "assignment",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId },
+      contextSnapshot: { issueId, wakeReason: "issue_assigned" },
+      requestedByActorType: "system",
+      requestedByActorId: "issue_assignment",
+    });
+    await heartbeat.drainActiveRunExecutions();
+
+    const wakeup = await db
+      .select({
+        status: agentWakeupRequests.status,
+        reason: agentWakeupRequests.reason,
+        payload: agentWakeupRequests.payload,
+      })
+      .from(agentWakeupRequests)
+      .then((rows) => rows[0] ?? null);
+    expect(wakeup).toMatchObject({ status: "queued", reason: "issue_assigned" });
+    expect(wakeup?.payload).not.toHaveProperty("heartbeatSkip");
+    const queuedRuns = await db
+      .select({ id: heartbeatRuns.id, status: heartbeatRuns.status })
+      .from(heartbeatRuns);
+    expect(queuedRuns).toHaveLength(1);
+    expect(queuedRuns[0]).toMatchObject({ status: "queued" });
+    const runId = queuedRuns[0]!.id;
+
+    // Admission stays held for as long as the drain is active, and the
+    // queued row does not count against quiescence: the restart may proceed.
+    await heartbeat.resumeQueuedRuns();
+    await heartbeat.drainActiveRunExecutions();
+    const held = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    expect(held?.status).toBe("queued");
+    expect(getTaskDrainStatus()).toMatchObject({
+      draining: true,
+      activeRuns: 0,
+      pendingWakes: 0,
+      quiescent: true,
+    });
+
+    // The drain lifts (a restart clears it the same way): the queued wake
+    // runs to completion through the normal admission path.
+    stopTaskDrain();
+    await heartbeat.resumeQueuedRuns();
+    await heartbeat.drainActiveRunExecutions();
+    const finished = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    expect(finished?.status).toBe("succeeded");
+    const completedWakeup = await db
+      .select({ status: agentWakeupRequests.status })
+      .from(agentWakeupRequests)
+      .then((rows) => rows[0] ?? null);
+    expect(completedWakeup?.status).toBe("completed");
+  }, 20_000);
+
+  // Inject one rollback only after the test starts task drain. Admission also
+  // uses transactions, so transaction call numbers do not identify release.
+  function withFailingTransactionalUpdate(realDb: typeof db, failingTable: unknown, armed: () => boolean) {
+    let injected = false;
     return new Proxy(realDb, {
       get(target, prop, receiver) {
         if (prop !== "transaction") return Reflect.get(target, prop, receiver);
-        return (fn: (tx: unknown) => Promise<unknown>) => target.transaction((tx) => {
-          const txProxy = new Proxy(tx as object, {
-            get(txTarget, txProp, txReceiver) {
-              if (txProp === "update") {
-                return (table: unknown) => {
-                  if (table === failingTable) {
-                    const seen = occurrence;
-                    occurrence += 1;
-                    if (seen === failAtOccurrence) {
+        return (fn: (tx: unknown) => Promise<unknown>) => {
+          return target.transaction((tx) => {
+            const txProxy = new Proxy(tx as object, {
+              get(txTarget, txProp, txReceiver) {
+                if (txProp === "update") {
+                  return (table: unknown) => {
+                    if (!injected && armed() && table === failingTable) {
+                      injected = true;
                       throw new Error("simulated transactional write failure");
                     }
-                  }
-                  return (txTarget as any).update(table);
-                };
-              }
-              return Reflect.get(txTarget, txProp, txReceiver);
-            },
+                    return (txTarget as any).update(table);
+                  };
+                }
+                return Reflect.get(txTarget, txProp, txReceiver);
+              },
+            });
+            return fn(txProxy);
           });
-          return fn(txProxy);
-        });
+        };
       },
     }) as typeof db;
   }
@@ -273,13 +332,15 @@ describeEmbeddedPostgres("heartbeat task-drain admission release", () => {
     // Fault the release transaction on the issue-lock write, so executeRun's
     // suppression branch catches the failure, logs it, and returns instead
     // of throwing. There is no in-process fallback or retry for this path.
-    const failingDb = withFailingTransactionalUpdate(db, issues, 0);
+    let releaseStarted = false;
+    const failingDb = withFailingTransactionalUpdate(db, issues, () => releaseStarted);
     const heartbeat = heartbeatService(failingDb);
 
     const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
       const payload = event.payload as { runId?: string; status?: string };
       if (event.type === "heartbeat.run.status" && payload.runId === runId && payload.status === "running") {
         startTaskDrain({});
+        releaseStarted = true;
       }
     });
 
