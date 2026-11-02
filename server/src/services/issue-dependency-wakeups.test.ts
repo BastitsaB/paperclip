@@ -194,6 +194,20 @@ describe("findExistingIssueBlockersResolvedWakeForReadyState", () => {
     expect(existing).toBeNull();
   });
 
+  it("lets an in-flight intent wake cover even if a blocker completed after it was requested", async () => {
+    // Ein queued/claimed Wake liest den Stand erst beim Run; ein zweiter Run wäre überflüssig.
+    for (const status of ["queued", "claimed"]) {
+      const existing = await findExistingIssueBlockersResolvedWakeForReadyState(
+        dbWithWakes(
+          [{ id: `wake-${status}`, status, idempotencyKey: intentKey, requestedAt: firstCycle }],
+          [{ completedAt: new Date(firstCycle.getTime() + 60_000) }],
+        ),
+        readyState,
+      );
+      expect(existing?.id).toBe(`wake-${status}`);
+    }
+  });
+
   it("does not let an intent wake for a different blocker set cover", async () => {
     const otherSetKey = buildIssueBlockersResolvedWakeStateKey({
       dependentIssueId,

@@ -186,6 +186,9 @@ function wakeCoversIssueBlockersResolvedReadyState(
 
   if (idempotencyKey === keys.intentKey) {
     if (!IDEMPOTENT_DEPENDENCY_WAKE_STATUS_SET.has(wake.status)) return false;
+    // Ein Wake in Flight (queued/claimed) liest den aktuellen Stand erst beim Run;
+    // ein zweiter Run wäre überflüssig, egal wie der Zeitstempelvergleich ausfiele.
+    if (IN_FLIGHT_DEPENDENCY_WAKE_STATUS_SET.has(wake.status)) return true;
     // Wurde ein Blocker nach diesem Wake erneut erledigt (reopen + done), ist das
     // ein neues Bereit-Ereignis, über das der Agent noch nicht informiert wurde.
     if (!keys.latestBlockerCompletedAt) return true;
