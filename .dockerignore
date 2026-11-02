@@ -43,3 +43,5 @@ packages/paperclip-runner/scripts/*-smoke.mjs
 !packages/paperclip-runner/src/**/*.test.ts
 !packages/paperclip-runner/src/**/*.test.tsx
 secrets/
+
+packages/grok-acp/bin

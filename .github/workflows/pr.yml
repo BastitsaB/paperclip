@@ -12,4 +12,6 @@ jobs:
   ci:
     # Master requires CODEOWNERS review for .github/**, including this workflow.
     # The AWS runner group permits pr-trusted.yml@refs/heads/master.
-    uses: paperclipai/paperclip/.github/workflows/pr-trusted.yml@master
+    # Fork: pinned to the synced upstream release commit. Following upstream master pulls in
+    # CI matrix groups this branch's test scripts do not know yet. Re-pin on every sync.
+    uses: paperclipai/paperclip/.github/workflows/pr-trusted.yml@22a3ea3414e9039a538fbb0374b3cfa7fc4371eb

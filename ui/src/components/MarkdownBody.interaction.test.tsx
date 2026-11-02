@@ -129,6 +129,12 @@ describe("MarkdownBody issue links", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(node.querySelector('a[aria-label="Issue PAP-7: Known task"]')).not.toBeNull();
+    // Upstream loads link details lazily on engagement; engage both links.
+    expect(get).not.toHaveBeenCalled();
+    flushSync(() => {
+      for (const link of node.querySelectorAll<HTMLAnchorElement>('a[data-mention-kind="issue"]')) link.focus();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     // Only the reference without a summary falls back to the per-link GET.
     expect(get.mock.calls.map(([id]) => id)).toEqual(["PAP-8"]);
   });
