@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - Bound full-tree workspace Git scans with process-wide concurrency, queue, timeout, cancellation, coalescing, and short-lived changed-file caching. Saturated or timed-out changed-file requests now return a retryable degraded response, and hidden file-browser panels no longer initiate scans.
+- Stop the `issue_blockers_resolved` wake loop when an agent re-enters `blocked` with every blocker already done. Route, finalize and backstop wakes now use a blocker-set intent key without the blocked cycle; a delivered wake covers that set until a blocker is completed again after it (`completedAt` newer than the wake). Cycle, no-cycle and legacy keys stay readable for the deploy overlap.
 
 ## 0.3.1
 
