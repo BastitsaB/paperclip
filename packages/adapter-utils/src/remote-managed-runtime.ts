@@ -14,6 +14,7 @@ import {
   type SandboxManagedRuntimeAssetRestoreContext,
 } from "./sandbox-managed-runtime.js";
 import { captureDirectorySnapshot } from "./workspace-restore-merge.js";
+import { assertSshWorkspaceWithinSyncLimit } from "./workspace-size-guard.js";
 import type { RuntimeProgressSink } from "./runtime-progress.js";
 
 // The fixed heavy-directory excludes every referenced project drops,
@@ -132,6 +133,9 @@ export async function prepareRemoteManagedRuntime(input: {
       )
     : baseWorkspaceRemoteDir;
   const runtimeRootDir = path.posix.join(workspaceRemoteDir, ".paperclip-runtime", input.adapterKey);
+
+  // Refuse oversized workspaces before the unbounded upload/hash/restore cycle starts.
+  if (syncWorkspace) await assertSshWorkspaceWithinSyncLimit(input.workspaceLocalDir);
 
   const preparedWorkspace = syncWorkspace
     ? await prepareWorkspaceForSshExecution({
