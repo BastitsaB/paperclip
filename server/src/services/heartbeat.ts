@@ -9401,18 +9401,28 @@ export function heartbeatService(
     }
     return cachedWorktreeRunExecutionOverride;
   };
-  const getSchedulingSuppression = async () => {
+  // Nur die runtime-/env-basierte Suppression (inkl. Worktree-Override), ohne
+  // globalen Not-Aus. Eigene Funktion, weil der Wakeup-Enqueue-Pfad diese
+  // Instanz-Suppression respektieren muss, den Not-Aus aber bewusst NICHT
+  // (siehe Enqueue-Pfad in enqueueWakeup).
+  const getEnvSchedulingSuppression = async () => {
     const override = await resolveWorktreeRunExecutionOverride();
-    const envSuppression = resolveHeartbeatSchedulingSuppression(runtimeEnv, {
+    return resolveHeartbeatSchedulingSuppression(runtimeEnv, {
       allowWorktreeRunExecution: override.allowed,
     });
+  };
+  const getSchedulingSuppression = async () => {
+    const envSuppression = await getEnvSchedulingSuppression();
     if (envSuppression.suppressed) return envSuppression;
     // Global emergency stop (MAI-890/MAI-1035): a DB-backed, explicitly
     // triggered/resumed kill switch layered on top of the env-based
     // suppression above. Reusing this single chokepoint wires the stop into
-    // every path that already respects scheduling suppression (manual
-    // wakeups, the heartbeat timer/cron scan, fan-out/assignment wakeups, and
-    // scheduled-retry promotion) without touching each call site. Bypasses
+    // every path that starts or periodically schedules runs (heartbeat
+    // timer/cron scan, queued-run start/resume, periodic recovery sweeps incl.
+    // scheduled-retry promotion, executeRun). Event wakeups (comment,
+    // assignment, routine dispatch, manual) deliberately do NOT use this
+    // check: they are persisted as queued during the stop and started after
+    // resume (see enqueueWakeup). Bypasses
     // the service's read cache deliberately: the approved design requires
     // the stop to pause admission immediately, so this one check always hits
     // the DB rather than risking a stale cached read for up to the cache's
@@ -26322,7 +26332,15 @@ export function heartbeatService(
       });
     };
 
-    const schedulingSuppression = await getSchedulingSuppression();
+    // Bewusst nur die env-/Instanz-Suppression, NICHT der globale Not-Aus:
+    // Wurde der Weckruf hier waehrend des Not-Aus als skipped verworfen, holte
+    // ihn nach clearEmergencyStop() niemand nach (07.11.2026: 25 Kommentar-,
+    // Zuweisungs- und Routine-Weckrufe in 24 h verloren). Stattdessen wird er
+    // normal als queued angelegt (inkl. Coalescing je Vorgang); den Start
+    // verhindern startNextQueuedRunForAgent (Suppression) und admitOne()
+    // (autoritativ). Nach dem Aufheben holt resumeQueuedRuns im periodischen
+    // Scheduler-Tick die Runs ab.
+    const schedulingSuppression = await getEnvSchedulingSuppression();
     if (schedulingSuppression.suppressed) {
       await writeSkippedHeartbeatRequest("heartbeat.scheduling_suppressed", {
         reason: schedulingSuppression.reason,
