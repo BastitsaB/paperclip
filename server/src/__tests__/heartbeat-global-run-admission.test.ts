@@ -12,6 +12,8 @@ import {
   globalRunAdmission,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueComments,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -122,22 +124,35 @@ describeEmbeddedPostgres("global run admission wired into heartbeat start paths 
       model: "test-model",
     }));
     runningProcesses.clear();
-    await db.delete(activityLog);
-    await db.delete(heartbeatRunEvents);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(agentRuntimeState);
-    await db.delete(agents);
-    await db.delete(globalRunAdmission);
-    await db.delete(companySkills);
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        await db.delete(companies);
-        break;
-      } catch (error) {
-        if (attempt === 4) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 50));
+    // Issue-gebundene Runs stossen nach dem Abschluss noch asynchrone
+    // Nacharbeiten an (Issue-/Run-Updates); ein Delete kann damit kurz in einen
+    // Deadlock laufen. Daher jede Tabelle mit kurzem Retry leeren (wie zuvor
+    // schon companies).
+    const deleteWithRetry = async (table: Parameters<typeof db.delete>[0]) => {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await db.delete(table);
+          return;
+        } catch (error) {
+          if (attempt === 4) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
       }
+    };
+    for (const table of [
+      activityLog,
+      issueComments,
+      issues,
+      heartbeatRunEvents,
+      heartbeatRuns,
+      agentWakeupRequests,
+      agentRuntimeState,
+      agents,
+      globalRunAdmission,
+      companySkills,
+      companies,
+    ]) {
+      await deleteWithRetry(table);
     }
   });
 
@@ -170,46 +185,71 @@ describeEmbeddedPostgres("global run admission wired into heartbeat start paths 
     return { companyId, agentId };
   }
 
-  it("blocks a manual/on-demand wakeup while the global emergency stop is active, and lets it through once resumed", async () => {
+  async function seedIssue(companyId: string, agentId: string) {
+    const issueId = randomUUID();
+    const prefix = `I${issueId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Not-Aus-Weckruf",
+      status: "todo",
+      priority: "medium",
+      responsibleUserId: "responsible-user",
+      assigneeAgentId: agentId,
+      issueNumber: 1,
+      identifier: `${prefix}-1`,
+    });
+    return issueId;
+  }
+
+  async function runStatus(runId: string) {
+    return db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0]?.status ?? null);
+  }
+
+  // Owner-Entscheidung 3a (07.11.2026): Ereignis-Weckrufe werden waehrend des
+  // Not-Aus nicht mehr als skipped verworfen, sondern als queued angelegt und
+  // erst nach dem Aufheben gestartet.
+  it("queues (does not drop) a manual/on-demand wakeup while the global emergency stop is active, and starts it once resumed", async () => {
     const { agentId } = await seedAgent();
     await admission.activateEmergencyStop({ reason: "MAI-890 drill", actor: { type: "user", id: "board-user" } });
 
-    const blockedWake = await heartbeat.wakeup(agentId, {
+    const queuedWake = await heartbeat.wakeup(agentId, {
       source: "on_demand",
       triggerDetail: "manual",
       reason: "manual_invoke",
     });
-    expect(blockedWake).toBeNull();
+    expect(queuedWake).not.toBeNull();
+    expect(await runStatus(queuedWake!.id)).toBe("queued");
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
 
-    const runsWhileStopped = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns);
-    expect(runsWhileStopped).toHaveLength(0);
+    const skipped = await db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.status, "skipped"));
+    expect(skipped).toHaveLength(0);
+
+    // Der Queue-Resume-Sweep darf waehrend des Not-Aus nichts starten.
+    await heartbeat.resumeQueuedRuns();
+    expect(await runStatus(queuedWake!.id)).toBe("queued");
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
 
     await admission.clearEmergencyStop();
+    // In Produktion ruft der periodische Scheduler-Tick (index.ts)
+    // resumeQueuedRuns auf; hier simuliert der direkte Aufruf diesen Tick.
+    await heartbeat.resumeQueuedRuns();
 
-    // The emergency-stop check always reads the DB fresh (see
-    // getSchedulingSuppression in heartbeat.ts) rather than the service's
-    // short-TTL cache, precisely so resume — like activation — takes effect
-    // immediately rather than waiting out a cache window.
-    const resumedWake = await heartbeat.wakeup(agentId, {
-      source: "on_demand",
-      triggerDetail: "manual",
-      reason: "manual_invoke",
-    });
-    expect(resumedWake).not.toBeNull();
-
-    await waitForCondition(async () => {
-      const run = await db
-        .select({ status: heartbeatRuns.status })
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.id, resumedWake!.id))
-        .then((rows) => rows[0] ?? null);
-      return run?.status === "succeeded";
-    });
+    const started = await waitForCondition(async () => (await runStatus(queuedWake!.id)) === "succeeded")
+    expect(started).toBe(true);
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks a fan-out/assignment-triggered wakeup while the global emergency stop is active", async () => {
-    const { agentId } = await seedAgent();
-    const issueId = randomUUID();
+  it("queues comment and assignment wakeups for an issue while the global emergency stop is active, coalesced per issue, and runs them after resume", async () => {
+    const { agentId, companyId } = await seedAgent();
+    const issueId = await seedIssue(companyId, agentId);
     await admission.activateEmergencyStop({ reason: "MAI-890 drill", actor: { type: "agent", id: randomUUID() } });
 
     const assignmentWake = await heartbeat.wakeup(agentId, {
@@ -217,15 +257,48 @@ describeEmbeddedPostgres("global run admission wired into heartbeat start paths 
       triggerDetail: "system",
       reason: "issue_assigned",
       payload: { issueId },
-      contextSnapshot: { issueId, wakeReason: "issue_assigned" },
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
     });
-    expect(assignmentWake).toBeNull();
+    expect(assignmentWake).not.toBeNull();
 
-    const runs = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns);
-    expect(runs).toHaveLength(0);
+    const commentId = randomUUID();
+    await db.insert(issueComments).values({
+      id: commentId,
+      companyId,
+      issueId,
+      authorUserId: "board-user",
+      body: "Bitte weitermachen.",
+    });
+    const commentWake = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId, commentId },
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_commented", wakeCommentId: commentId },
+      requestedByActorType: "system",
+      requestedByActorId: "comment_wake",
+    });
+    expect(commentWake).not.toBeNull();
+
+    // Coalescing je Vorgang greift weiter: beide Weckrufe landen in EINEM
+    // gequeueten Run statt zwei Runs fuer denselben Vorgang.
+    const runsWhileStopped = await db
+      .select({ id: heartbeatRuns.id, status: heartbeatRuns.status })
+      .from(heartbeatRuns);
+    expect(runsWhileStopped).toHaveLength(1);
+    expect(runsWhileStopped[0]!.status).toBe("queued");
+    expect(commentWake!.id).toBe(assignmentWake!.id);
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+
+    await admission.clearEmergencyStop();
+    await heartbeat.resumeQueuedRuns();
+
+    const started = await waitForCondition(async () => (await runStatus(assignmentWake!.id)) === "succeeded")
+    expect(started).toBe(true);
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks the timer/cron scheduling scan while the global emergency stop is active", async () => {
+  it("keeps suppressing the timer/cron scheduling scan while the global emergency stop is active", async () => {
     await admission.activateEmergencyStop({ reason: "MAI-890 drill", actor: { type: "user", id: "board-user" } });
 
     const result = await heartbeat.tickTimers(new Date());
@@ -269,26 +342,36 @@ describeEmbeddedPostgres("global run admission wired into heartbeat start paths 
     // Emergency stop flips on AFTER the run is already admitted/running.
     await admission.activateEmergencyStop({ reason: "MAI-890 drill mid-flight", actor: { type: "user", id: "board-user" } });
 
-    // A second, new wakeup for the same agent is correctly blocked...
-    const blockedSecondWake = await heartbeat.wakeup(agentId, {
-      source: "on_demand",
-      triggerDetail: "manual",
-      reason: "manual_invoke",
+    // A second, new issue-bound wakeup for the same agent is persisted as its
+    // own queued run, not dropped (an issue-less manual wake would coalesce
+    // into the running run instead)...
+    const issueId = await seedIssue(companyId, agentId);
+    const secondWake = await heartbeat.wakeup(agentId, {
+      source: "assignment",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId },
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
     });
-    expect(blockedSecondWake).toBeNull();
+    expect(secondWake).not.toBeNull();
+    expect(secondWake!.id).not.toBe(wake!.id);
+    expect(await runStatus(secondWake!.id)).toBe("queued");
 
-    // ...but the already-admitted run is left alone to finish its current step.
+    // ...the already-admitted run is left alone to finish its current step...
     finishRun();
 
-    const drained = await waitForCondition(async () => {
-      const run = await db
-        .select({ status: heartbeatRuns.status })
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.id, wake!.id))
-        .then((rows) => rows[0] ?? null);
-      return run?.status === "succeeded";
-    });
+    const drained = await waitForCondition(async () => (await runStatus(wake!.id)) === "succeeded")
     expect(drained).toBe(true);
+
+    // ...and finishing it must not start the next queued run while the stop
+    // is still active (executeRun's own-agent follow-up dispatch is gated).
+    expect(await runStatus(secondWake!.id)).toBe("queued");
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(1);
+
+    await admission.clearEmergencyStop();
+    await heartbeat.resumeQueuedRuns();
+    const resumed = await waitForCondition(async () => (await runStatus(secondWake!.id)) === "succeeded")
+    expect(resumed).toBe(true);
   });
 
   it("enforces the global cap across two different agents, and re-checks the cap on resume rather than lifting it", async () => {
