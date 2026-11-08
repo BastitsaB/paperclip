@@ -95,6 +95,42 @@ describe("remote managed runtime", () => {
     expect(restoredAuth).toBe('{"token":"remote"}\n');
   });
 
+  it("refuses an oversized synced workspace before any upload starts", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-remote-runtime-too-large-"));
+    cleanupDirs.push(rootDir);
+    const workspaceDir = path.join(rootDir, "workspace");
+    await mkdir(path.join(workspaceDir, "wt-1"), { recursive: true });
+    await writeFile(path.join(workspaceDir, "wt-1", "blob.bin"), Buffer.alloc(2 * 1024 * 1024));
+
+    const previous = process.env.PAPERCLIP_SSH_WORKSPACE_SYNC_MAX_MB;
+    process.env.PAPERCLIP_SSH_WORKSPACE_SYNC_MAX_MB = "1";
+    try {
+      await expect(
+        prepareRemoteManagedRuntime({
+          spec: {
+            host: "127.0.0.1",
+            port: 2222,
+            username: "fixture",
+            remoteWorkspacePath: "/app",
+            remoteCwd: "/app",
+            privateKey: "PRIVATE KEY",
+            knownHosts: "KNOWN HOSTS",
+            strictHostKeyChecking: true,
+          },
+          runId: "run-too-large",
+          adapterKey: "claude",
+          workspaceLocalDir: workspaceDir,
+          workspaceRemoteDir: "/app",
+        }),
+      ).rejects.toThrow(/SSH workspace sync refused/);
+    } finally {
+      if (previous === undefined) delete process.env.PAPERCLIP_SSH_WORKSPACE_SYNC_MAX_MB;
+      else process.env.PAPERCLIP_SSH_WORKSPACE_SYNC_MAX_MB = previous;
+    }
+    expect(prepareWorkspaceForSshExecution).not.toHaveBeenCalled();
+    expect(syncDirectoryToSsh).not.toHaveBeenCalled();
+  });
+
   it("stages each additional project into its own isolated SSH dir, isolating one failure", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-remote-runtime-additional-"));
     cleanupDirs.push(rootDir);
