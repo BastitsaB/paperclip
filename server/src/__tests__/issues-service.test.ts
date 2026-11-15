@@ -2925,9 +2925,9 @@ describeEmbeddedPostgres("issueService.findOpenHandBackParent", () => {
   }
 
   it("finds the open parent created by the target and assigned to the actor (A→B→A)", async () => {
-    const { delegatorId, actorId, midId } = await seedChain();
+    const { companyId, delegatorId, actorId, midId } = await seedChain();
 
-    const hit = await svc.findOpenHandBackParent(midId, delegatorId, actorId);
+    const hit = await svc.findOpenHandBackParent(companyId, midId, delegatorId, actorId);
     expect(hit?.id).toBe(midId);
   });
 
@@ -2948,20 +2948,34 @@ describeEmbeddedPostgres("issueService.findOpenHandBackParent", () => {
       identifier: "CHAIN-3",
     });
 
-    expect(await svc.findOpenHandBackParent(leafId, delegatorId, actorId)).toBeNull();
+    expect(await svc.findOpenHandBackParent(companyId, leafId, delegatorId, actorId)).toBeNull();
   });
 
   it("allows the target when the parent is not assigned to the actor", async () => {
-    const { delegatorId, midId } = await seedChain();
+    const { companyId, delegatorId, midId } = await seedChain();
 
-    expect(await svc.findOpenHandBackParent(midId, delegatorId, randomUUID())).toBeNull();
+    expect(await svc.findOpenHandBackParent(companyId, midId, delegatorId, randomUUID())).toBeNull();
   });
 
   it("ignores a closed parent", async () => {
-    const { delegatorId, actorId, midId } = await seedChain();
+    const { companyId, delegatorId, actorId, midId } = await seedChain();
     await db.update(issues).set({ status: "done" }).where(eq(issues.id, midId));
 
-    expect(await svc.findOpenHandBackParent(midId, delegatorId, actorId)).toBeNull();
+    expect(await svc.findOpenHandBackParent(companyId, midId, delegatorId, actorId)).toBeNull();
+  });
+
+  it("ignores self-assignment (actor equals target)", async () => {
+    const { companyId, actorId, midId } = await seedChain();
+    // Parent von actor erstellt und actor zugewiesen: ohne Selbst-Ausschluss ein Treffer.
+    await db.update(issues).set({ createdByAgentId: actorId }).where(eq(issues.id, midId));
+
+    expect(await svc.findOpenHandBackParent(companyId, midId, actorId, actorId)).toBeNull();
+  });
+
+  it("does not match a parent that belongs to another company", async () => {
+    const { delegatorId, actorId, midId } = await seedChain();
+
+    expect(await svc.findOpenHandBackParent(randomUUID(), midId, delegatorId, actorId)).toBeNull();
   });
 });
 

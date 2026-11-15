@@ -303,7 +303,7 @@ describe("agent delegation cycle guard", () => {
     expect(res.body.error).toContain("Delegation cycle");
     expect(res.body.details).toMatchObject({ code: "delegation_cycle" });
     expect(mockIssueService.createChild).not.toHaveBeenCalled();
-    expect(mockIssueService.findOpenHandBackParent).toHaveBeenCalledWith(parent.id, IDLE_AGENT_ID, AGENT_ACTOR_ID);
+    expect(mockIssueService.findOpenHandBackParent).toHaveBeenCalledWith("company-1", parent.id, IDLE_AGENT_ID, AGENT_ACTOR_ID);
   });
 
   it("allows the same child when the guard finds no direct hand-back (creator further up the chain)", async () => {
@@ -324,6 +324,69 @@ describe("agent delegation cycle guard", () => {
 
     expect(res.status).toBe(201);
     expect(mockIssueService.createChild).toHaveBeenCalled();
+  });
+
+  it("allows an agent to assign a child to itself (no hand-back lookup)", async () => {
+    const parent = makeIssue();
+    mockIssueService.getById.mockResolvedValue(parent);
+    mockIssueService.createChild.mockResolvedValue({
+      issue: makeIssue({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", parentId: parent.id, assigneeAgentId: AGENT_ACTOR_ID }),
+      parentBlockerAdded: false,
+    });
+
+    const res = await request(createApp(agentActor()))
+      .post(`/api/issues/${parent.id}/children`)
+      .send({
+        title: "Self subtask",
+        description: "Mine",
+        assigneeAgentId: AGENT_ACTOR_ID,
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockIssueService.findOpenHandBackParent).not.toHaveBeenCalled();
+  });
+
+  it("refuses a top-level create with parentId handed straight back to the parent's creator", async () => {
+    const parent = makeIssue();
+    mockIssueService.getById.mockResolvedValue(parent);
+    mockIssueService.findOpenHandBackParent.mockResolvedValue({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      identifier: "PAP-100",
+    });
+
+    const res = await request(createApp(agentActor()))
+      .post("/api/companies/company-1/issues")
+      .send({
+        title: "Hand it back",
+        description: "Bounce",
+        parentId: parent.id,
+        assigneeAgentId: IDLE_AGENT_ID,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.details).toMatchObject({ code: "delegation_cycle" });
+    expect(mockIssueService.create).not.toHaveBeenCalled();
+    expect(mockIssueService.findOpenHandBackParent).toHaveBeenCalledWith("company-1", parent.id, IDLE_AGENT_ID, AGENT_ACTOR_ID);
+  });
+
+  it("allows a top-level create with parentId when no hand-back is found, and one without parent", async () => {
+    const parent = makeIssue();
+    mockIssueService.getById.mockResolvedValue(parent);
+    mockIssueService.create.mockResolvedValue(
+      makeIssue({ id: "ffffffff-ffff-4fff-8fff-ffffffffffff", parentId: parent.id, assigneeAgentId: IDLE_AGENT_ID }),
+    );
+
+    const withParent = await request(createApp(agentActor()))
+      .post("/api/companies/company-1/issues")
+      .send({ title: "Legit", description: "Fine", parentId: parent.id, assigneeAgentId: IDLE_AGENT_ID });
+    expect(withParent.status).toBe(201);
+
+    mockIssueService.findOpenHandBackParent.mockClear();
+    const noParent = await request(createApp(boardActor()))
+      .post("/api/companies/company-1/issues")
+      .send({ title: "Root", description: "Fine", assigneeAgentId: IDLE_AGENT_ID });
+    expect(noParent.status).toBe(201);
+    expect(mockIssueService.findOpenHandBackParent).not.toHaveBeenCalled();
   });
 
   it("does not consult the guard for board actors", async () => {

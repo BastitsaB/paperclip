@@ -8323,17 +8323,24 @@ export function issueService(db: Db) {
      * target) is a legitimate assignee for new work further down. The old
      * whole-chain check rejected those and left ~400 issues without a
      * delivery path. Longer rings (A→B→C→A) are not detected on purpose.
+     *
+     * Self-assignment (`actorAgentId === targetAgentId`) is no hand-back and
+     * never matches. `companyId` scopes the lookup so a parent id from
+     * another company cannot produce a hit.
      */
     findOpenHandBackParent: async (
+      companyId: string,
       parentIssueId: string,
       targetAgentId: string,
       actorAgentId: string,
     ): Promise<{ id: string; identifier: string | null } | null> => {
+      if (targetAgentId === actorAgentId) return null;
       const [row] = await db
         .select({ id: issues.id, identifier: issues.identifier })
         .from(issues)
         .where(
           and(
+            eq(issues.companyId, companyId),
             eq(issues.id, parentIssueId),
             eq(issues.createdByAgentId, targetAgentId),
             eq(issues.assigneeAgentId, actorAgentId),

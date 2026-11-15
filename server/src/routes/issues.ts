@@ -7276,6 +7276,7 @@ export function issueRoutes(
    * work. Humans are unaffected, and closed parents do not count.
    */
   async function assertNoAgentDelegationCycle(input: {
+    companyId: string;
     actorType: string;
     actorAgentId: string | null | undefined;
     parentIssueId: string | null | undefined;
@@ -7283,7 +7284,11 @@ export function issueRoutes(
   }) {
     if (input.actorType !== "agent") return;
     if (!input.actorAgentId || !input.parentIssueId || !input.assigneeAgentId) return;
+    // Selbstzuweisung ist keine Rückgabe: ohne diesen Ausschluss würde ein
+    // Agent, der einen Subtask an sich selbst vergibt, fälschlich 409 bekommen.
+    if (input.actorAgentId === input.assigneeAgentId) return;
     const parent = await svc.findOpenHandBackParent(
+      input.companyId,
       input.parentIssueId,
       input.assigneeAgentId,
       input.actorAgentId,
@@ -7294,6 +7299,8 @@ export function issueRoutes(
         "Complete the remaining work in your own issue, leave the child unassigned, or escalate to a board operator — do not delegate the work back to the agent that delegated it to you.",
       {
         code: "delegation_cycle",
+        // Name ist ein Rest der früheren Ahnenketten-Prüfung; enthält jetzt die
+        // ID des direkten Parents. Bleibt wegen API-Kompatibilität unverändert.
         ancestorIssueId: parent.id,
         assigneeAgentId: input.assigneeAgentId,
       },
@@ -11704,6 +11711,7 @@ export function issueRoutes(
           { actorType: req.actor.type },
         );
       await assertNoAgentDelegationCycle({
+        companyId,
         actorType: req.actor.type,
         actorAgentId: req.actor.agentId,
         parentIssueId:
@@ -12121,6 +12129,7 @@ export function issueRoutes(
           { actorType: req.actor.type },
         );
       await assertNoAgentDelegationCycle({
+        companyId: parent.companyId,
         actorType: req.actor.type,
         actorAgentId: req.actor.agentId,
         parentIssueId: parent.id,
