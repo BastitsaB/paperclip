@@ -7267,31 +7267,41 @@ export function issueRoutes(
   }
 
   /**
-   * Refuse an agent creating a child issue assigned to the agent that created
-   * a still-open ancestor in the same chain. That shape is a delegation cycle
-   * (A delegates to B, B delegates the same work back to A): each agent lacks
-   * something the other assumed it had, the chain of blocked issues grows,
-   * and no one tells the human. Humans are unaffected, and closed ancestors
-   * do not count — re-engaging the creator of finished work is normal.
+   * Refuse an agent handing a child issue straight back to the agent that
+   * created the (still-open) parent it is working on: A delegates to B, B
+   * delegates the same work back to A. Each agent lacks something the other
+   * assumed it had, the chain of blocked issues grows, and no one tells the
+   * human. Only this direct hand-back counts — a creator further up the chain
+   * (requester, approver, escalation target) may legitimately receive new
+   * work. Humans are unaffected, and closed parents do not count.
    */
   async function assertNoAgentDelegationCycle(input: {
+    companyId: string;
     actorType: string;
+    actorAgentId: string | null | undefined;
     parentIssueId: string | null | undefined;
     assigneeAgentId: string | null | undefined;
   }) {
     if (input.actorType !== "agent") return;
-    if (!input.parentIssueId || !input.assigneeAgentId) return;
-    const ancestor = await svc.findOpenAncestorCreatedByAgent(
+    if (!input.actorAgentId || !input.parentIssueId || !input.assigneeAgentId) return;
+    // Selbstzuweisung ist keine Rückgabe: ohne diesen Ausschluss würde ein
+    // Agent, der einen Subtask an sich selbst vergibt, fälschlich 409 bekommen.
+    if (input.actorAgentId === input.assigneeAgentId) return;
+    const parent = await svc.findOpenHandBackParent(
+      input.companyId,
       input.parentIssueId,
       input.assigneeAgentId,
+      input.actorAgentId,
     );
-    if (!ancestor) return;
+    if (!parent) return;
     throw conflict(
-      `Delegation cycle: ${ancestor.identifier ?? "an ancestor issue"} in this chain was created by the agent this child would be assigned to. ` +
+      `Delegation cycle: ${parent.identifier ?? "the parent issue"} was created by the agent this child would be assigned to and is assigned to you. ` +
         "Complete the remaining work in your own issue, leave the child unassigned, or escalate to a board operator — do not delegate the work back to the agent that delegated it to you.",
       {
         code: "delegation_cycle",
-        ancestorIssueId: ancestor.id,
+        // Name ist ein Rest der früheren Ahnenketten-Prüfung; enthält jetzt die
+        // ID des direkten Parents. Bleibt wegen API-Kompatibilität unverändert.
+        ancestorIssueId: parent.id,
         assigneeAgentId: input.assigneeAgentId,
       },
     );
@@ -11701,7 +11711,9 @@ export function issueRoutes(
           { actorType: req.actor.type },
         );
       await assertNoAgentDelegationCycle({
+        companyId,
         actorType: req.actor.type,
+        actorAgentId: req.actor.agentId,
         parentIssueId:
           typeof effectiveParentId === "string" ? effectiveParentId : null,
         assigneeAgentId: normalizedAssigneeAgentId ?? null,
@@ -12117,7 +12129,9 @@ export function issueRoutes(
           { actorType: req.actor.type },
         );
       await assertNoAgentDelegationCycle({
+        companyId: parent.companyId,
         actorType: req.actor.type,
+        actorAgentId: req.actor.agentId,
         parentIssueId: parent.id,
         assigneeAgentId: normalizedAssigneeAgentId ?? null,
       });
