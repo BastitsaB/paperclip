@@ -8313,56 +8313,35 @@ export function issueService(db: Db) {
     },
 
     /**
-     * Walk the full parent chain from `parentIssueId` (inclusive) looking for
-     * a still-open ancestor created by `agentId`. Used to refuse agent
-     * delegation cycles: an agent assigning a new child to the agent that
-     * created an open ancestor is handing the same work back to its own
-     * delegator (A→B→A hot-potato). One recursive query covers the entire
-     * chain regardless of depth; `UNION` (not `UNION ALL`) deduplicates
-     * revisited rows, so a parent graph corrupted into a loop terminates
-     * instead of recursing forever.
+     * Detect a direct hand-back: the parent issue is open, assigned to the
+     * agent creating the child (`actorAgentId`) and was created by the agent the
+     * child would go to (`targetAgentId`). That is the A→B→A hot-potato — B
+     * returns the very work A delegated to it.
+     *
+     * Deliberately only the direct parent, not the whole ancestor chain: an
+     * agent that created an issue higher up (requester, approver, escalation
+     * target) is a legitimate assignee for new work further down. The old
+     * whole-chain check rejected those and left ~400 issues without a
+     * delivery path. Longer rings (A→B→C→A) are not detected on purpose.
      */
-    findOpenAncestorCreatedByAgent: async (
+    findOpenHandBackParent: async (
       parentIssueId: string,
-      agentId: string,
-    ): Promise<{
-      id: string;
-      identifier: string | null;
-      parentId: string | null;
-      createdByAgentId: string | null;
-      status: string;
-    } | null> => {
-      const rows = await db.execute(sql`
-        WITH RECURSIVE ancestors(id, parent_id) AS (
-          SELECT id, parent_id FROM issues WHERE id = ${parentIssueId}
-          UNION
-          SELECT parent.id, parent.parent_id
-          FROM issues parent
-          JOIN ancestors ON parent.id = ancestors.parent_id
+      targetAgentId: string,
+      actorAgentId: string,
+    ): Promise<{ id: string; identifier: string | null } | null> => {
+      const [row] = await db
+        .select({ id: issues.id, identifier: issues.identifier })
+        .from(issues)
+        .where(
+          and(
+            eq(issues.id, parentIssueId),
+            eq(issues.createdByAgentId, targetAgentId),
+            eq(issues.assigneeAgentId, actorAgentId),
+            notInArray(issues.status, ["done", "cancelled"]),
+          ),
         )
-        SELECT i.id, i.identifier, i.parent_id, i.created_by_agent_id, i.status
-        FROM issues i
-        JOIN ancestors a ON a.id = i.id
-        WHERE i.created_by_agent_id = ${agentId}
-          AND i.status NOT IN ('done', 'cancelled')
-        LIMIT 1
-      `);
-      const first = (Array.isArray(rows) ? rows[0] : null) as Record<
-        string,
-        unknown
-      > | null;
-      if (!first) return null;
-      return {
-        id: String(first.id),
-        identifier:
-          typeof first.identifier === "string" ? first.identifier : null,
-        parentId: typeof first.parent_id === "string" ? first.parent_id : null,
-        createdByAgentId:
-          typeof first.created_by_agent_id === "string"
-            ? first.created_by_agent_id
-            : null,
-        status: String(first.status),
-      };
+        .limit(1);
+      return row ?? null;
     },
 
     getById: async (raw: string) => {

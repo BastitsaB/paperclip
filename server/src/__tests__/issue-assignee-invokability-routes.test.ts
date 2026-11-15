@@ -15,7 +15,7 @@ const agentStatusById: Record<string, string> = {
 
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
-  findOpenAncestorCreatedByAgent: vi.fn(),
+  findOpenHandBackParent: vi.fn(),
   update: vi.fn(),
   create: vi.fn(),
   createChild: vi.fn(),
@@ -203,8 +203,8 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
 describe("issue assignee invokability guard", () => {
   beforeEach(() => {
     mockIssueService.getById.mockReset();
-    mockIssueService.findOpenAncestorCreatedByAgent.mockReset();
-    mockIssueService.findOpenAncestorCreatedByAgent.mockResolvedValue(null);
+    mockIssueService.findOpenHandBackParent.mockReset();
+    mockIssueService.findOpenHandBackParent.mockResolvedValue(null);
     mockIssueService.update.mockReset();
     mockIssueService.create.mockReset();
     mockIssueService.createChild.mockReset();
@@ -277,21 +277,18 @@ describe("issue assignee invokability guard", () => {
 describe("agent delegation cycle guard", () => {
   beforeEach(() => {
     mockIssueService.getById.mockReset();
-    mockIssueService.findOpenAncestorCreatedByAgent.mockReset();
-    mockIssueService.findOpenAncestorCreatedByAgent.mockResolvedValue(null);
+    mockIssueService.findOpenHandBackParent.mockReset();
+    mockIssueService.findOpenHandBackParent.mockResolvedValue(null);
     mockIssueService.create.mockReset();
     mockIssueService.createChild.mockReset();
   });
 
-  it("refuses an agent child assigned to the creator of an open ancestor", async () => {
+  it("refuses an agent child handed straight back to the creator of its open parent", async () => {
     const parent = makeIssue();
     mockIssueService.getById.mockResolvedValue(parent);
-    mockIssueService.findOpenAncestorCreatedByAgent.mockResolvedValue({
+    mockIssueService.findOpenHandBackParent.mockResolvedValue({
       id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       identifier: "PAP-100",
-      parentId: null,
-      createdByAgentId: IDLE_AGENT_ID,
-      status: "in_progress",
     });
 
     const res = await request(createApp(agentActor()))
@@ -306,10 +303,10 @@ describe("agent delegation cycle guard", () => {
     expect(res.body.error).toContain("Delegation cycle");
     expect(res.body.details).toMatchObject({ code: "delegation_cycle" });
     expect(mockIssueService.createChild).not.toHaveBeenCalled();
-    expect(mockIssueService.findOpenAncestorCreatedByAgent).toHaveBeenCalledWith(parent.id, IDLE_AGENT_ID);
+    expect(mockIssueService.findOpenHandBackParent).toHaveBeenCalledWith(parent.id, IDLE_AGENT_ID, AGENT_ACTOR_ID);
   });
 
-  it("allows the same child when no open ancestor was created by the assignee", async () => {
+  it("allows the same child when the guard finds no direct hand-back (creator further up the chain)", async () => {
     const parent = makeIssue();
     mockIssueService.getById.mockResolvedValue(parent);
     mockIssueService.createChild.mockResolvedValue({
@@ -346,6 +343,6 @@ describe("agent delegation cycle guard", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(mockIssueService.findOpenAncestorCreatedByAgent).not.toHaveBeenCalled();
+    expect(mockIssueService.findOpenHandBackParent).not.toHaveBeenCalled();
   });
 });

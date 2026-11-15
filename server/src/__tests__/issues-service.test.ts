@@ -2848,7 +2848,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
   });
 });
 
-describeEmbeddedPostgres("issueService.findOpenAncestorCreatedByAgent", () => {
+describeEmbeddedPostgres("issueService.findOpenHandBackParent", () => {
   let db!: ReturnType<typeof createDb>;
   let svc!: ReturnType<typeof issueService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -2873,23 +2873,29 @@ describeEmbeddedPostgres("issueService.findOpenAncestorCreatedByAgent", () => {
   async function seedChain() {
     const companyId = randomUUID();
     const delegatorId = randomUUID();
+    const actorId = randomUUID();
     await db.insert(companies).values({
       id: companyId,
       name: "Chain Co",
       issuePrefix: `C${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       requireBoardApprovalForNewAgents: false,
     });
-    await db.insert(agents).values({
-      id: delegatorId,
-      companyId,
-      name: "Delegator",
-      role: "engineer",
-      status: "idle",
-      adapterType: "codex_local",
-      adapterConfig: {},
-      runtimeConfig: {},
-      permissions: {},
-    });
+    await db.insert(agents).values(
+      [
+        [delegatorId, "Delegator"],
+        [actorId, "Actor"],
+      ].map(([id, name]) => ({
+        id: id!,
+        companyId,
+        name: name!,
+        role: "engineer",
+        status: "idle",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      })),
+    );
     const rootId = randomUUID();
     const midId = randomUUID();
     await db.insert(issues).values([
@@ -2910,62 +2916,52 @@ describeEmbeddedPostgres("issueService.findOpenAncestorCreatedByAgent", () => {
         priority: "medium",
         parentId: rootId,
         createdByAgentId: delegatorId,
+        assigneeAgentId: actorId,
         issueNumber: 2,
         identifier: "CHAIN-2",
       },
     ]);
-    return { companyId, delegatorId, rootId, midId };
+    return { companyId, delegatorId, actorId, rootId, midId };
   }
 
-  it("finds an open ancestor created by the agent, at any depth", async () => {
-    const { delegatorId, midId } = await seedChain();
+  it("finds the open parent created by the target and assigned to the actor (A→B→A)", async () => {
+    const { delegatorId, actorId, midId } = await seedChain();
 
-    const direct = await svc.findOpenAncestorCreatedByAgent(midId, delegatorId);
-    expect(direct?.id).toBe(midId);
-
-    const other = await svc.findOpenAncestorCreatedByAgent(midId, randomUUID());
-    expect(other).toBeNull();
+    const hit = await svc.findOpenHandBackParent(midId, delegatorId, actorId);
+    expect(hit?.id).toBe(midId);
   });
 
-  it("ignores closed ancestors created by the agent", async () => {
+  it("allows the target when it created an ancestor further up, not the direct parent", async () => {
+    const { companyId, delegatorId, actorId, midId } = await seedChain();
+    // Target created `mid`; the actor works one level deeper on `leaf`
+    // (requester/approver pattern, e.g. MAI-8654 → MAI-8663 → child).
+    const leafId = randomUUID();
+    await db.insert(issues).values({
+      id: leafId,
+      companyId,
+      title: "Leaf",
+      status: "in_progress",
+      priority: "medium",
+      parentId: midId,
+      assigneeAgentId: actorId,
+      issueNumber: 3,
+      identifier: "CHAIN-3",
+    });
+
+    expect(await svc.findOpenHandBackParent(leafId, delegatorId, actorId)).toBeNull();
+  });
+
+  it("allows the target when the parent is not assigned to the actor", async () => {
     const { delegatorId, midId } = await seedChain();
+
+    expect(await svc.findOpenHandBackParent(midId, delegatorId, randomUUID())).toBeNull();
+  });
+
+  it("ignores a closed parent", async () => {
+    const { delegatorId, actorId, midId } = await seedChain();
     await db.update(issues).set({ status: "done" }).where(eq(issues.id, midId));
 
-    expect(await svc.findOpenAncestorCreatedByAgent(midId, delegatorId)).toBeNull();
-  });
-
-  it("finds the ancestor through an arbitrarily deep chain", async () => {
-    const { companyId, delegatorId, midId } = await seedChain();
-    // Extend the chain 60 levels below the delegator-created ancestor so the
-    // match sits far above the new child's parent.
-    let parentId = midId;
-    for (let index = 0; index < 60; index += 1) {
-      const childId = randomUUID();
-      await db.insert(issues).values({
-        id: childId,
-        companyId,
-        title: `Deep child ${index}`,
-        status: "in_progress",
-        priority: "medium",
-        parentId,
-        issueNumber: index + 10,
-        identifier: `CHAIN-${index + 10}`,
-      });
-      parentId = childId;
-    }
-
-    const found = await svc.findOpenAncestorCreatedByAgent(parentId, delegatorId);
-    expect(found?.id).toBe(midId);
-  });
-
-  it("terminates on a corrupted parent-graph cycle", async () => {
-    const { delegatorId, rootId, midId } = await seedChain();
-    // Corrupt the graph: root's parent points back at mid.
-    await db.update(issues).set({ parentId: midId }).where(eq(issues.id, rootId));
-
-    const found = await svc.findOpenAncestorCreatedByAgent(midId, delegatorId);
-    expect(found?.id).toBe(midId);
-    expect(await svc.findOpenAncestorCreatedByAgent(midId, randomUUID())).toBeNull();
+    expect(await svc.findOpenHandBackParent(midId, delegatorId, actorId)).toBeNull();
   });
 });
 
