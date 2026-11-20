@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { MarkdownBody } from "@/components/MarkdownBody";
+import { InteractionPromptText } from "@/components/InteractionPromptText";
 import type { MentionOption } from "@/components/MarkdownEditor";
 import { WorkspaceFileLink } from "@/components/WorkspaceFileLink";
 import { Button } from "@/components/ui/button";
@@ -623,7 +624,9 @@ function RuntimeQuestionHistory({
                   {question.header}
                 </p>
               ) : null}
-              <p className="text-foreground">{question.prompt}</p>
+              <div className="text-foreground">
+                <InteractionPromptText linkIssueReferences={false}>{question.prompt}</InteractionPromptText>
+              </div>
             </div>
           ))}
           <p className="text-xs text-muted-foreground">
@@ -675,7 +678,9 @@ function RuntimeQuestionReceipt({
           <p className="text-sm font-medium text-foreground">
             {item.questionSet?.title ?? "Runtime input"}
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">{item.prompt}</p>
+          <div className="mt-1 text-sm text-muted-foreground">
+            <InteractionPromptText linkIssueReferences={false}>{item.prompt}</InteractionPromptText>
+          </div>
         </div>
         <RuntimeQuestionHistory item={item} />
       </div>

@@ -1697,3 +1697,32 @@ describe("IssueThreadInteractionCard resolver audience", () => {
     ).not.toBeNull();
   });
 });
+
+describe("IssueThreadInteractionCard structured prompts", () => {
+  // Owner report 20.11.2026: agent questions arrived as one unbroken text wall.
+  const structuredPrompt = "Decide the rollout.\n\nOptions:\n\n- keep the scan\n- loosen the classifier";
+
+  it("renders question prompts and help text with paragraphs and lists", () => {
+    const [first, ...rest] = pendingAskUserQuestionsInteraction.payload.questions;
+    const host = renderCard({
+      interaction: { ...pendingAskUserQuestionsInteraction, payload: { ...pendingAskUserQuestionsInteraction.payload,
+        questions: [{ ...first!, prompt: structuredPrompt, helpText: "First line.\n\nSecond paragraph." }, ...rest] } },
+      onSubmitInteractionAnswers: vi.fn(),
+    });
+    const prompt = host.querySelector(`[id="${pendingAskUserQuestionsInteraction.id}-${first!.id}-prompt"]`)!;
+    expect(prompt.querySelectorAll("p").length).toBeGreaterThanOrEqual(2);
+    expect(Array.from(prompt.querySelectorAll("li")).map(item => item.textContent)).toEqual(["keep the scan", "loosen the classifier"]);
+    expect(host.textContent).toContain("Second paragraph.");
+    expect(host.innerHTML).not.toContain("- keep the scan");
+  });
+
+  it("renders a confirmation prompt with list structure", () => {
+    const host = renderCard({
+      interaction: { ...pendingRequestConfirmationInteraction, payload: { ...pendingRequestConfirmationInteraction.payload, prompt: structuredPrompt } },
+      onAcceptInteraction: vi.fn(),
+      onRejectInteraction: vi.fn(),
+    });
+    expect(Array.from(host.querySelectorAll("li")).map(item => item.textContent)).toEqual(
+      expect.arrayContaining(["keep the scan", "loosen the classifier"]));
+  });
+});
