@@ -12,6 +12,7 @@ import type {
 } from "@paperclipai/adapter-utils";
 import type { MentionOption } from "@/components/MarkdownEditor";
 import { MarkdownBody } from "@/components/MarkdownBody";
+import { InteractionPromptText } from "@/components/InteractionPromptText";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -216,9 +217,9 @@ export function QuestionResponseSummary({
                   {question.header}
                 </span>
               ) : null}
-              <span className="block text-sm text-foreground">
-                {question.prompt}
-              </span>
+              <div className="block text-sm text-foreground">
+                <InteractionPromptText linkIssueReferences={false}>{question.prompt}</InteractionPromptText>
+              </div>
             </dt>
             <dd className="mt-0.5 text-foreground">
               {values.length > 0 ? values.join(", ") : "No answer"}
@@ -289,7 +290,7 @@ function QuestionFormForRequest({
   const [working, setWorking] = useState<"submit" | "cancel" | null>(null);
   const [inputUploading, setInputUploading] = useState(false);
   const [error, setError] = useState<FormError | null>(null);
-  const promptRef = useRef<HTMLParagraphElement>(null);
+  const promptRef = useRef<HTMLDivElement>(null);
   const previousPage = useRef(page);
 
   useEffect(() => {
@@ -561,18 +562,19 @@ function QuestionFormForRequest({
             {question.header}
           </p>
         ) : null}
-        <p
+        {/* Agent questions carry paragraphs and lists; plain text collapsed them into one block. */}
+        <div
           ref={promptRef}
           tabIndex={-1}
           id={`${id}-${question.id}-prompt`}
           className="text-sm font-medium leading-5 text-foreground"
         >
-          {question.prompt}
-        </p>
+          <InteractionPromptText linkIssueReferences={false}>{question.prompt}</InteractionPromptText>
+        </div>
         {question.helpText ? (
-          <p className="mt-1 text-xs leading-4 text-muted-foreground">
-            {question.helpText}
-          </p>
+          <div className="mt-1 text-xs leading-4 text-muted-foreground">
+            <InteractionPromptText linkIssueReferences={false}>{question.helpText}</InteractionPromptText>
+          </div>
         ) : null}
       </div>
       {question.answerMode === "text" ? (

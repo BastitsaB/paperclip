@@ -2341,6 +2341,41 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
   line-height: 1.6;
 }
 
+/* Agent question text in compact cards keeps the wrapper's type scale and colour. */
+.paperclip-markdown.paperclip-markdown-inherit {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  --tw-prose-body: currentColor;
+  --tw-prose-bold: currentColor;
+  --tw-prose-bullets: currentColor;
+  --tw-prose-counters: currentColor;
+}
+
+.paperclip-markdown.paperclip-markdown-inherit :where(p, ul, ol, blockquote) {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.paperclip-markdown.paperclip-markdown-inherit :where(h1, h2, h3, h4) {
+  margin-top: 0.5em;
+  margin-bottom: 0.25em;
+  color: inherit;
+  font-size: inherit;
+}
+
+.paperclip-markdown.paperclip-markdown-inherit :where(strong, b) {
+  color: inherit;
+}
+
+.paperclip-markdown.paperclip-markdown-inherit > :first-child {
+  margin-top: 0;
+}
+
+.paperclip-markdown.paperclip-markdown-inherit > :last-child {
+  margin-bottom: 0;
+}
+
 .paperclip-markdown.paperclip-markdown-on-accent {
   color: inherit;
   --tw-prose-body: currentColor;

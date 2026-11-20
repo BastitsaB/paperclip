@@ -439,11 +439,12 @@ describe("TaskChatInteractionCard", () => {
 
     render({ type: "custom", key: "github:paperclipai/paperclip-desktop:pull:16" });
     expect(container.textContent).not.toContain("github:paperclipai");
-    const prompt = Array.from(container.querySelectorAll("p")).find((node) =>
+    // The prompt is Markdown now: paragraphs stay separate blocks instead of pre-line text.
+    const prompt = Array.from(container.querySelectorAll(".paperclip-markdown-inherit")).find((node) =>
       node.textContent?.startsWith("Pick the drafts"),
-    );
+    )?.parentElement;
     expect(prompt?.className).not.toContain("flex-1");
-    expect(prompt?.className).toContain("whitespace-pre-line");
+    expect(prompt?.querySelectorAll("p")).toHaveLength(2);
     expect(prompt?.parentElement?.className).not.toContain("justify-between");
 
     render({

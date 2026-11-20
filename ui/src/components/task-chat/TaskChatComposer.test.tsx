@@ -32,6 +32,8 @@ const mdxEditorMockState = vi.hoisted(() => ({
   } | null,
 }));
 
+// QuestionForm renders prompts through MarkdownBody, which needs the app ThemeProvider; layout tests here do not.
+vi.mock("@/components/MarkdownBody", () => ({ MarkdownBody: ({ children }: { children: string }) => <div>{children}</div> }));
 vi.mock("@mdxeditor/editor", async () => {
   const React = await import("react");
 

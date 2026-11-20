@@ -34,6 +34,7 @@ import { cn, formatDateTime, formatShortDate } from "../lib/utils";
 import { InteractionPreparationNotice } from "./InteractionPreparationNotice";
 import { InteractionAudienceLine } from "./InteractionAudienceLine";
 import { MarkdownBody, type MarkdownExternalReferenceMap } from "./MarkdownBody";
+import { InteractionPromptText } from "./InteractionPromptText";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
@@ -1248,7 +1249,7 @@ function AskUserQuestionsCard({
               className="rounded-2xl border border-border/70 bg-background/82 p-4 shadow-(--shadow-extract-9)"
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <div className="text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
                     Question {index + 1}
                   </div>
@@ -1256,12 +1257,12 @@ function AskUserQuestionsCard({
                     id={`${interaction.id}-${question.id}-prompt`}
                     className="mt-1 text-sm font-semibold text-foreground"
                   >
-                    {question.prompt}
+                    <InteractionPromptText externalReferences={externalReferences}>{question.prompt}</InteractionPromptText>
                   </div>
                   {question.helpText ? (
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {question.helpText}
-                    </p>
+                    <div className="mt-1 text-sm leading-6 text-muted-foreground">
+                      <InteractionPromptText externalReferences={externalReferences}>{question.helpText}</InteractionPromptText>
+                    </div>
                   ) : null}
                 </div>
                 <TaskField
@@ -1449,7 +1450,7 @@ function AskUserQuestionsCard({
                 className="rounded-2xl border border-border/70 bg-background/82 p-4"
               >
                 <div className="text-sm font-semibold text-foreground">
-                  {question.prompt}
+                  <InteractionPromptText externalReferences={externalReferences}>{question.prompt}</InteractionPromptText>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {labels.length > 0 ? (
@@ -2667,7 +2668,7 @@ function RequestConfirmationCard({
       {interaction.status === "pending" ? (
         <div className="space-y-3 rounded-sm border border-border/70 bg-background/75 p-4">
           <div className="text-sm leading-6 text-foreground">
-            {interaction.payload.prompt}
+            <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
           </div>
           {interaction.payload.detailsMarkdown ? (
             <div className="border-t border-border/60 pt-3 text-sm">
@@ -3037,7 +3038,9 @@ function RequestCheckboxConfirmationCard({
         {/* Show each piece of state once: a connection-authorization prompt is
             the same sentence as the card title, so repeating it here is noise. */}
         {interaction.payload.prompt === interaction.title ? null : (
-          <div className="text-sm leading-6 text-foreground">{interaction.payload.prompt}</div>
+          <div className="text-sm leading-6 text-foreground">
+            <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
+          </div>
         )}
         {interaction.payload.detailsMarkdown ? (
           <div className="border-t border-border/60 pt-3 text-sm">
@@ -3385,7 +3388,9 @@ function RequestItemVerdictsCard({
       {/* Prompt + details (S1) */}
       <div className="space-y-3 rounded-sm border border-border/70 bg-background/75 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm leading-6 text-foreground">{payload.prompt}</div>
+          <div className="min-w-0 flex-1 text-sm leading-6 text-foreground">
+            <InteractionPromptText externalReferences={externalReferences}>{payload.prompt}</InteractionPromptText>
+          </div>
           <VerdictProgressBadge progress={progress} pendingReason={invalidDraftIds.size > 0} />
         </div>
         {payload.detailsMarkdown ? (

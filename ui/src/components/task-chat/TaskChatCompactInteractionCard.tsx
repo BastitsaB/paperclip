@@ -30,6 +30,7 @@ import { InteractionPreparationNotice } from "@/components/InteractionPreparatio
 import { IssueThreadInteractionCard } from "@/components/IssueThreadInteractionCard";
 import { ConnectionIntentInteractionBody } from "@/features/connections/ConnectionIntentInteractionBody";
 import { MarkdownBody } from "@/components/MarkdownBody";
+import { InteractionPromptText } from "@/components/InteractionPromptText";
 import type { MentionOption } from "@/components/MarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -410,11 +411,13 @@ function ReceiptDisclosure({
                   {question.header}
                 </p>
               ) : null}
-              <p className="text-sm text-foreground">{question.prompt}</p>
+              <div className="text-sm text-foreground">
+                <InteractionPromptText externalReferences={externalReferences}>{question.prompt}</InteractionPromptText>
+              </div>
               {question.helpText ? (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {question.helpText}
-                </p>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  <InteractionPromptText externalReferences={externalReferences}>{question.helpText}</InteractionPromptText>
+                </div>
               ) : null}
               <p className="mt-1 text-sm font-medium text-foreground">
                 Answer: {values.length > 0 ? values.join(", ") : "No answer"}
@@ -431,7 +434,9 @@ function ReceiptDisclosure({
       .map((option) => option.label);
     request = (
       <div>
-        <p className="text-sm text-foreground">{interaction.payload.prompt}</p>
+        <div className="text-sm text-foreground">
+          <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
+        </div>
         {interaction.status === "accepted" ? (
           <p className="mt-1 text-sm font-medium text-foreground">
             Answer:{" "}
@@ -458,7 +463,9 @@ function ReceiptDisclosure({
     );
     request = (
       <div>
-        <p className="text-sm text-foreground">{interaction.payload.prompt}</p>
+        <div className="text-sm text-foreground">
+          <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
+        </div>
         {decidedItems.length > 0 ? (
           <ul className="mt-2 grid gap-1 text-sm">
             {decidedItems.map((item) => {
@@ -520,7 +527,9 @@ function ReceiptDisclosure({
   } else {
     request = (
       <div className="grid gap-2">
-        <p className="text-sm text-foreground">{interaction.payload.prompt}</p>
+        <div className="text-sm text-foreground">
+          <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
+        </div>
         {interaction.payload.detailsMarkdown ? (
           <div className="text-sm">
             <MarkdownBody externalReferences={externalReferences}>
@@ -1155,9 +1164,9 @@ function CheckboxConfirmationCard({
   return (
     <div>
       <div className="space-y-2">
-        <p className="whitespace-pre-line break-words text-sm leading-5 text-foreground">
-          {interaction.payload.prompt}
-        </p>
+        <div className="break-words text-sm leading-5 text-foreground">
+          <InteractionPromptText externalReferences={externalReferences}>{interaction.payload.prompt}</InteractionPromptText>
+        </div>
         <CompactTarget interaction={interaction} />
       </div>
       <div
