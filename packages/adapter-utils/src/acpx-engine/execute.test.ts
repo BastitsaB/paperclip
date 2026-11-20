@@ -3978,7 +3978,8 @@ describe("ACP activity diagnostics", () => {
       runId: "stalled-mcp-tool",
       // A usage update after the call starts must not count as tool progress.
       events: [
-        { type: "tool_call", toolCallId: "private-mcp", title: "mcp.private-linear:get-issue", kind: "other", status: "in_progress" },
+        // Codex reports MCP calls with kind `execute`, like shell commands.
+        { type: "tool_call", toolCallId: "private-mcp", title: "mcp.private-linear:get-issue", kind: "execute", status: "in_progress" },
         { type: "tool_call", tag: "tool_call_update", toolCallId: "private-mcp", title: "tool call", status: "in_progress" },
         { type: "status", text: "usage updated: 1/2", tag: "usage_update", used: 1, size: 2 },
       ],
@@ -3988,14 +3989,15 @@ describe("ACP activity diagnostics", () => {
     // The pending MCP call keeps the silent-turn check out of it.
     expect(cancelReasons).toEqual(["paperclip stalled tool watchdog"]);
     expect(result.errorCode).toBe("acpx_tool_stalled");
-    expect(result.resultJson).toMatchObject({ status: "failed", acpStalledToolKind: "other" });
+    expect(result.resultJson).toMatchObject({ status: "failed", acpStalledToolKind: "execute", acpStalledToolMcp: true });
     expect(JSON.stringify(result.resultJson)).not.toContain("private");
   }, 15_000);
 
   it("leaves a Codex turn alone while a non-MCP tool call runs long without updates", async () => {
     const { result, cancelReasons } = await runSilentTurn({
       runId: "long-shell-tool",
-      events: [{ type: "tool_call", toolCallId: "build", title: "pnpm build", kind: "execute", status: "in_progress" }],
+      // A shell command whose name starts like an MCP title is still a shell command.
+      events: [{ type: "tool_call", toolCallId: "build", title: "mcp.sh build --all", kind: "execute", status: "in_progress" }],
       silenceMs: 10_000_000,
       deps: { stalledMcpToolTimeoutMs: 5000, silentTurnTimeoutMs: 5000 },
       config: { timeoutSec: 1 },
@@ -4004,6 +4006,28 @@ describe("ACP activity diagnostics", () => {
     expect(cancelReasons).toHaveLength(1);
     expect(cancelReasons[0]).not.toMatch(/watchdog/);
     expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("acpx_timeout");
+  }, 15_000);
+
+  it("ends a turn that stays silent from its start", async () => {
+    const { result, cancelReasons } = await runSilentTurn({
+      runId: "silent-from-start", events: [], silenceMs: 6000, deps: { silentTurnTimeoutMs: 5000 },
+    });
+    expect(cancelReasons).toEqual(["paperclip silent turn watchdog"]);
+    expect(result.errorCode).toBe("acpx_turn_silent");
+  }, 15_000);
+
+  it("leaves a silent turn alone when its tool inventory is incomplete", async () => {
+    const { result, cancelReasons } = await runSilentTurn({
+      runId: "silent-incomplete-inventory",
+      // A flattened client-side receipt cannot prove that nothing is pending.
+      events: [{ type: "status", text: "terminal/output ok", tag: "session_info_update" }],
+      silenceMs: 10_000_000,
+      deps: { silentTurnTimeoutMs: 5000 },
+      config: { timeoutSec: 1 },
+    });
+    expect(cancelReasons).toHaveLength(1);
+    expect(cancelReasons[0]).not.toMatch(/watchdog/);
     expect(result.errorCode).toBe("acpx_timeout");
   }, 15_000);
 
@@ -4034,6 +4058,9 @@ describe("silent-turn and MCP stall bounds", () => {
     expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: 600 }, 0)).toBe(600_000);
     expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: -1 }, 0)).toBe(0);
     expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: 600 }, ACPX_STALLED_TOOL_TIMEOUT_MS)).toBe(0);
+    // An explicit general opt-out also keeps the MCP default off.
+    expect(resolveStalledMcpToolTimeoutMs({ stalledToolTimeoutSec: 0 }, 0)).toBe(0);
+    expect(resolveStalledMcpToolTimeoutMs({ stalledToolTimeoutSec: 0, stalledMcpToolTimeoutSec: 600 }, 0)).toBe(600_000);
   });
 
   it("recognizes Codex and Claude MCP tool titles", () => {
@@ -4041,6 +4068,8 @@ describe("silent-turn and MCP stall bounds", () => {
     expect(isMcpToolTitle("mcp__linear__get_issue")).toBe(true);
     expect(isMcpToolTitle("tool call")).toBe(false);
     expect(isMcpToolTitle("git show origin/develop:mcp.json")).toBe(false);
+    expect(isMcpToolTitle("mcp.sh build")).toBe(false);
+    expect(isMcpToolTitle("mcp.py")).toBe(false);
     expect(isMcpToolTitle(undefined)).toBe(false);
   });
 });

@@ -315,7 +315,7 @@ export function collectRunFailureDiagnostics(run: Run, options: RunFailureReport
     "acpLastEventAgeMs", "acpObservedEventCount", "acpPendingToolCount",
     "acpLastEventAgeAtStopMs", "acpOldestPendingToolAgeAtStopMs", "acpStalledToolSilentMs",
     "acpPendingToolPermissionRequestedCount", "acpSettledSameKindToolCount",
-    "acpSettledSameKindToolPermissionRequestedCount",
+    "acpSettledSameKindToolPermissionRequestedCount", "acpSilentTurnMs",
   ]) {
     const value = read(result, field);
     if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) execution[field] = value;
@@ -330,6 +330,9 @@ export function collectRunFailureDiagnostics(run: Run, options: RunFailureReport
   if (typeof stalledToolPermissionRequested === "boolean") {
     execution.acpStalledToolPermissionRequested = stalledToolPermissionRequested;
   }
+  // Separates the MCP-only bound from the general stalled-tool watchdog; both report acpx_tool_stalled.
+  const stalledToolMcp = read(result, "acpStalledToolMcp");
+  if (typeof stalledToolMcp === "boolean") execution.acpStalledToolMcp = stalledToolMcp;
   const toolInventoryComplete = read(result, "acpToolInventoryComplete");
   if (typeof toolInventoryComplete === "boolean") execution.acpToolInventoryComplete = toolInventoryComplete;
   const restoreFailure = read(result, "workspaceRestoreFailure");

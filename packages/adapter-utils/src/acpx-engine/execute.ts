@@ -1556,6 +1556,10 @@ export function resolveStalledMcpToolTimeoutMs(
   if (typeof configured === "number" && Number.isFinite(configured)) {
     return configured > 0 ? Math.round(configured * 1000) : 0;
   }
+  // An explicit `stalledToolTimeoutSec` (including 0) is a deliberate opt-out
+  // of tool watching; the MCP default must not silently re-enable it.
+  const general = config.stalledToolTimeoutSec;
+  if (typeof general === "number" && Number.isFinite(general)) return 0;
   return ACPX_STALLED_MCP_TOOL_TIMEOUT_MS;
 }
 
@@ -1572,9 +1576,16 @@ export function resolveSilentTurnTimeoutMs(config: Record<string, unknown>): num
   return ACPX_SILENT_TURN_TIMEOUT_MS;
 }
 
-/** ACP tool titles of MCP calls: Codex `mcp.<server>:<tool>`, Claude `mcp__<server>__<tool>`. */
+/**
+ * ACP tool titles of MCP calls: Codex `mcp.<server>:<tool>`, Claude
+ * `mcp__<server>__<tool>`. Codex reports MCP calls with kind `execute`, like
+ * shell commands, whose title is the command line; the whole title must
+ * therefore be one token so a command such as `mcp.sh build` never matches.
+ */
 export function isMcpToolTitle(title: string | undefined): boolean {
-  return typeof title === "string" && /^mcp(\.|__)/.test(title.trim());
+  if (typeof title !== "string") return false;
+  const value = title.trim();
+  return /^mcp\.[^\s:]+:[^\s]+$/.test(value) || /^mcp__[^\s]+__[^\s]+$/.test(value);
 }
 
 function normalizeRequestedThinkingEffort(config: Record<string, unknown>): string {
@@ -4219,6 +4230,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       pendingPermissionRequested: number;
       settledSameKind: number;
       settledSameKindPermissionRequested: number;
+      mcp: boolean;
     } | null = null;
     // Set when the same watchdog ends a turn that emitted no ACP event and had
     // no pending tool call for the silent-turn bound (a stalled model stream).
@@ -5190,7 +5202,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             }
             if (settleGuardMs <= 0) return;
             if (lastToolSettledAt !== null && checkedAt - lastToolSettledAt < settleGuardMs) return;
-            let oldest: { toolCallId: string; kind?: string; silentMs: number } | null = null;
+            let oldest: { toolCallId: string; kind?: string; silentMs: number; mcp: boolean } | null = null;
             let pendingPermissionRequested = 0;
             for (const [toolCallId, tool] of interruptionTools) {
               if (!isPendingAcpTool(tool)) continue;
@@ -5200,7 +5212,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
               if (toolTimeoutMs <= 0) continue;
               const silentMs = checkedAt - tool.lastUpdateAt;
               if (silentMs >= toolTimeoutMs && (!oldest || silentMs > oldest.silentMs)) {
-                oldest = { toolCallId, kind: tool.kind, silentMs };
+                oldest = { toolCallId, kind: tool.kind, silentMs, mcp: tool.mcp === true };
               }
             }
             if (!oldest) return;
@@ -5220,6 +5232,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
               pendingPermissionRequested,
               settledSameKind,
               settledSameKindPermissionRequested,
+              mcp: oldest.mcp,
             };
             turnStopRequestedAt = checkedAt;
             pendingToolsAtStop = [...interruptionTools.values()].filter(isPendingAcpTool);
@@ -5536,6 +5549,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
                   acpPendingToolPermissionRequestedCount: stalledTool.pendingPermissionRequested,
                   acpSettledSameKindToolCount: stalledTool.settledSameKind,
                   acpSettledSameKindToolPermissionRequestedCount: stalledTool.settledSameKindPermissionRequested,
+                  acpStalledToolMcp: stalledTool.mcp,
                 }
               : {}),
             ...(failureDiagnostic ? { terminalSessionFailure: failureDiagnostic } : {}),

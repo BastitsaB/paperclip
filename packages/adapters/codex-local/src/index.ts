@@ -248,6 +248,8 @@ Operational fields:
 - nonInteractivePermissions (string, optional): ACP non-interactive permission fallback when engine="acp"; deny or fail
 - stateDir (string, optional): ACP state directory override when engine="acp"
 - warmHandleIdleMs (number, optional): warm ACP process idle timeout when engine="acp"; defaults to 0
+- silentTurnTimeoutSec (number, optional, default 1200): when engine="acp", end the turn as failed ("acpx_turn_silent") after this many seconds without any ACP event and without a pending tool call; 0 disables it
+- stalledMcpToolTimeoutSec (number, optional, default 1800): when engine="acp", end the turn as failed ("acpx_tool_stalled") when a pending MCP tool call gets no ACP update for this many seconds; other tool calls stay unbounded; 0 disables it, and an explicit stalledToolTimeoutSec replaces it
 
 Notes:
 - filesystemScope and networkScope are spawn-level confinement and are orthogonal to Codex approval/sandbox flags. Both require Bubblewrap on the host and explicit engine="cli"; default or explicit ACP is rejected because ACP confinement is not yet supported. networkScope="allowlist" injects HTTP_PROXY/HTTPS_PROXY for the CLI while its private network namespace blocks direct sockets, so every required provider/API hostname must be listed explicitly.
