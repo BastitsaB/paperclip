@@ -2778,6 +2778,9 @@ export function heartbeatService(
           const cancelled = await setRunStatusIfRunning(run.id, "cancelled", {
             finishedAt: new Date(), errorCode: "legacy_disposition_repair_suppressed",
             error: `Disposition repair suppressed: ${repairBlock}`,
+            // The adapter has not been invoked yet. Recording that lets the
+            // legacy classifier release the task instead of holding later wakes.
+            resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
           });
           if (cancelled.updated) {
             await setWakeupStatus(run.wakeupRequestId, "skipped", { finishedAt: new Date(), error: repairBlock });

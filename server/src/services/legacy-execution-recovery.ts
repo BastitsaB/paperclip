@@ -3,7 +3,7 @@ import { hasRequiredWorkspaceRecovery, preserveWorkspaceRestoreRecoveryMetadata,
 import { hasUnrestoredRemoteWorkspace, preserveLegacyWorkspaceRestoreSources, type LegacyWorkspaceRestoreSource } from "./legacy-workspace-restore-recovery.js";
 import { isPreDispatchReviewWaitVerified } from "./pre-dispatch-review-wait.js";
 import { isPreDispatchExecutionWaitVerified } from "./pre-dispatch-execution-wait.js";
-import { hasWorkspaceRestoreFailure } from "@paperclipai/shared";
+import { EXECUTION_RECONCILIATION_CAUSES, hasWorkspaceRestoreFailure } from "@paperclipai/shared";
 import { normalizeMaxTurnStopReason } from "./heartbeat-stop-metadata.js";
 import { claimedAdapterType, hasConversationContinuationPolicy } from "./conversation-continuation.js";
 import { canonicalExecutionUuid } from "./execution-identity.js";
@@ -16,9 +16,12 @@ import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
 import { logActivity } from "./activity-log.js";
 import { isSupersededConversationRun } from "./agent-conversations.js";
 import { issueService } from "./issues.js";
+import { logger } from "../middleware/logger.js";
 
 type Run = typeof heartbeatRuns.$inferSelect;
 export const LEGACY_RECOVERY_CAUSE = "legacy_execution_requires_reconciliation";
+/** Written only by the heartbeat dispatch gate, before the adapter is invoked. */
+export const LEGACY_DISPOSITION_REPAIR_SUPPRESSED = "legacy_disposition_repair_suppressed";
 
 /** Error families describe availability, not whether earlier actions happened. */
 export function legacyExecutionNeedsReconciliation(
@@ -48,6 +51,12 @@ export function legacyExecutionNeedsReconciliation(
       evidence?.kind === "ai_connection_wait" && evidence.providerWorkStarted === false) return false;
   if (run.status === "cancelled" && run.errorCode === "workspace_busy" &&
       evidence?.kind === "workspace_wait" && evidence.providerWorkStarted === false) return false;
+  // A suppressed disposition repair is cancelled at the dispatch gate, before
+  // the adapter runs. Its repair attempt counts against the retry budget below,
+  // so without this exemption the task got a replay=blocked hold and every later
+  // comment or assignment wake stayed deferred behind a run that never acted.
+  if (run.status === "cancelled" && run.errorCode === LEGACY_DISPOSITION_REPAIR_SUPPRESSED &&
+      evidence?.kind === "bootstrap" && evidence.providerWorkStarted === false) return false;
   // Setup owns the bounded retry budget for temporary workspace scans. Its
   // exhaustion needs workspace repair, not reconciliation of provider actions
   // that the bootstrap evidence proves never started. Keep unknown outcomes held.
@@ -228,6 +237,12 @@ export async function terminalizeLegacyExecution(input: {
                     ${issueRecoveryActions.evidence}->'explicitUserContinuation'->>'commentId'
               )`,
             ),
+            // A released suppressed-repair hold is a recorded decision; periodic
+            // sweeps of the same terminal run must not reinstate it.
+            and(
+              sql`${issueRecoveryActions.evidence}->>'runId' = ${run.id}`,
+              sql`${issueRecoveryActions.evidence} ? 'dispositionRepairSuppressedSettledAt'`,
+            ),
             and(
               sql`${issueRecoveryActions.evidence}->>'runId' = ${run.id}`,
               or(sql`${issueRecoveryActions.evidence}->>'workspaceRestoreFailure' = 'restore_unsafe_archive'`,
@@ -344,5 +359,110 @@ export async function recordRequiredWorkspaceRestoreFailure(db: Db, run: Run, ev
   if (!hasWorkspaceRestoreFailure(evidence)) return;
   return terminalizeLegacyExecution({ db, run, status: run.status,
     recordRestoreFailureOnly: true, patch: { resultJson: evidence }, workspaceRestoreSource: source,
+  });
+}
+
+const SUPERSEDED_NOTE = "A new failure with a different identity superseded this recovery action.";
+
+/** Releases holds recorded for suppressed disposition repairs before the
+ * dispatch gate stored bootstrap evidence. The error code has a single writer
+ * that runs before the adapter is invoked; the run must additionally show no
+ * process identity, no process start, no native finalization and no open
+ * lease. A missing PID alone is never treated as proof that a provider exited.
+ *
+ * Releasing permits new wakes only. The source run keeps its classification,
+ * so the stranded-queue drain still releases instead of promoting the old
+ * deferred wakes; the next explicit wake adopts them. Closed tasks are left
+ * alone because promoting their old comment wakes would reopen them. */
+export async function settleSuppressedDispositionRepairHolds(db: Db, limit = 50): Promise<number> {
+  // Proof conditions live in the candidate query so holds that can never be
+  // released do not occupy the batch or take row locks on every sweep.
+  const candidates = await db.select({ id: issueRecoveryActions.id }).from(issueRecoveryActions)
+    .innerJoin(issues, and(eq(issues.companyId, issueRecoveryActions.companyId), eq(issues.id, issueRecoveryActions.sourceIssueId)))
+    .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.companyId, issueRecoveryActions.companyId),
+      sql`${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'`))
+    .where(and(
+      eq(issueRecoveryActions.cause, LEGACY_RECOVERY_CAUSE),
+      sql`${issueRecoveryActions.evidence}->>'originalFailureCode' = ${LEGACY_DISPOSITION_REPAIR_SUPPRESSED}`,
+      suppressedRepairHoldStillBlocks(),
+      sql`${issues.status} not in ('done', 'cancelled')`,
+      eq(heartbeatRuns.runtimeMode, "legacy"), eq(heartbeatRuns.status, "cancelled"),
+      eq(heartbeatRuns.errorCode, LEGACY_DISPOSITION_REPAIR_SUPPRESSED),
+      isNull(heartbeatRuns.processPid), isNull(heartbeatRuns.processGroupId), isNull(heartbeatRuns.processStartedAt),
+    )).orderBy(issueRecoveryActions.createdAt).limit(limit);
+  let settled = 0;
+  for (const candidate of candidates) {
+    try {
+      if (await settleSuppressedDispositionRepairHold(db, candidate.id)) settled++;
+    } catch (err) {
+      // A lock timeout on one task must not stall the remaining candidates;
+      // the hold stays in force and the next sweep retries it.
+      logger.warn({ err, recoveryActionId: candidate.id }, "Suppressed disposition repair hold remains pending");
+    }
+  }
+  return settled;
+}
+
+function suppressedRepairHoldStillBlocks() {
+  return or(inArray(issueRecoveryActions.status, ["active", "escalated"]),
+    sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`);
+}
+
+async function settleSuppressedDispositionRepairHold(db: Db, holdId: string): Promise<boolean> {
+  return db.transaction(async tx => {
+    await tx.execute(
+      sql`select set_config('statement_timeout', '15000', true), set_config('lock_timeout', '1000', true)`,
+    );
+    const [snapshot] = await tx.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, holdId)).limit(1);
+    const runId = snapshot?.evidence.runId;
+    if (!snapshot || typeof runId !== "string") return false;
+    // Same task -> run -> recovery action lock order as the disposition sweep.
+    const [task] = await tx.select().from(issues).where(and(
+      eq(issues.companyId, snapshot.companyId), eq(issues.id, snapshot.sourceIssueId),
+    )).for("update");
+    const [run] = await tx.select().from(heartbeatRuns).where(and(
+      eq(heartbeatRuns.companyId, snapshot.companyId), sql`${heartbeatRuns.id}::text = ${runId}`,
+    )).for("update");
+    if (!task || ["done", "cancelled"].includes(task.status) || !run || run.runtimeMode !== "legacy" ||
+        run.status !== "cancelled" || run.errorCode !== LEGACY_DISPOSITION_REPAIR_SUPPRESSED ||
+        run.processPid || run.processGroupId || run.processStartedAt ||
+        (run.nativeIssueId ?? run.issueId ?? run.contextSnapshot?.issueId) !== task.id ||
+        hasWorkspaceRestoreFailure(run.resultJson) || hasRequiredWorkspaceRecovery(run.resultJson)) return false;
+    const [native] = await tx.select({ id: nativeRunFinalizations.runId }).from(nativeRunFinalizations)
+      .where(eq(nativeRunFinalizations.runId, run.id)).limit(1);
+    const [lease] = await tx.select({ id: environmentLeases.id }).from(environmentLeases).where(and(
+      eq(environmentLeases.companyId, run.companyId), eq(environmentLeases.heartbeatRunId, run.id),
+      or(isNull(environmentLeases.releasedAt), eq(environmentLeases.status, "pending_cleanup"), eq(environmentLeases.cleanupStatus, "failed")),
+    )).limit(1);
+    // Creating this hold cancelled any active hold of another identity. If that
+    // was an open reconciliation duty, releasing this one would silently drop it.
+    const [displaced] = await tx.select({ id: issueRecoveryActions.id }).from(issueRecoveryActions).where(and(
+      eq(issueRecoveryActions.companyId, snapshot.companyId), eq(issueRecoveryActions.sourceIssueId, task.id),
+      inArray(issueRecoveryActions.cause, [...EXECUTION_RECONCILIATION_CAUSES]),
+      eq(issueRecoveryActions.status, "cancelled"), eq(issueRecoveryActions.resolutionNote, SUPERSEDED_NOTE),
+      sql`${issueRecoveryActions.id} <> ${snapshot.id}`,
+      sql`${issueRecoveryActions.resolvedAt} between ${snapshot.createdAt.toISOString()}::timestamptz - interval '5 seconds'
+        and ${snapshot.createdAt.toISOString()}::timestamptz + interval '5 seconds'`,
+    )).limit(1);
+    if (native || lease || displaced) return false;
+    const now = new Date();
+    const [hold] = await tx.update(issueRecoveryActions).set({
+      status: "resolved", outcome: "false_positive", resolvedAt: now, updatedAt: now,
+      wakePolicy: null, monitorPolicy: null,
+      resolutionNote: "The disposition repair was cancelled at the dispatch gate before the adapter started. New wakes may run; nothing was replayed.",
+      // Keep the automatic decision's history; only its replay verdict changes.
+      evidence: sql`jsonb_set(${issueRecoveryActions.evidence}, '{automaticRecovery,replay}', '"allowed"'::jsonb, false) ||
+        ${JSON.stringify({ dispositionRepairSuppressedSettledAt: now.toISOString() })}::jsonb`,
+    }).where(and(
+      eq(issueRecoveryActions.id, snapshot.id), eq(issueRecoveryActions.cause, LEGACY_RECOVERY_CAUSE),
+      sql`${issueRecoveryActions.evidence}->>'runId' = ${run.id}`, suppressedRepairHoldStillBlocks(),
+    )).returning({ id: issueRecoveryActions.id });
+    if (!hold) return false;
+    await logActivity(tx as unknown as Db, { companyId: run.companyId, actorType: "system", actorId: "system",
+      action: "issue.recovery_action_resolved", entityType: "issue", entityId: task.id, agentId: run.agentId, runId: run.id,
+      details: { reason: "disposition_repair_suppressed_before_dispatch", recoveryActionIds: [hold.id], replay: "not_performed",
+        deferredWakes: "left_for_next_explicit_wake" },
+    });
+    return true;
   });
 }
