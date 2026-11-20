@@ -65,6 +65,16 @@ it("retains the hold until the provider actually acknowledges cancellation", () 
   }
 });
 
+// The acpx watchdogs end a stalled conversation turn as an ordinary failure.
+// The server stamps conversation runs with the continuation policy, so such a
+// failure retries instead of placing a reconciliation hold on the issue.
+it.each(["acpx_turn_silent", "acpx_tool_stalled"])("retries a conversation turn the %s watchdog ended", (errorCode) => {
+  expect(legacyExecutionNeedsReconciliation({
+    runtimeMode: "legacy", status: "failed", errorCode,
+    resultJson: { conversationContinuation: "continue_conversation_v1", status: "failed" },
+  })).toBe(false);
+});
+
 it("retries a busy AI subscription only when no provider work started", () => {
    const waiting = { runtimeMode: "legacy", status: "cancelled", errorCode: "ai_connection_busy", scheduledRetryAttempt: 10,
      resultJson: { executionRecovery: { kind: "ai_connection_wait", providerWorkStarted: false } } };
