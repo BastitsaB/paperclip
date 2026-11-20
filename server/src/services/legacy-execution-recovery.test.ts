@@ -107,3 +107,19 @@ it("recognizes only an unclaimed pre-dispatch review wait receipt", () => {
     { resultJson: { ...run.resultJson, workspaceRestoreFailure: "restore_unsafe_archive" } },
   ]) expect(isPreDispatchReviewWait({ ...run, ...patch })).toBe(false);
 });
+
+it("does not hold a disposition repair the dispatch gate cancelled before the adapter started", () => {
+  const suppressed = { runtimeMode: "legacy", status: "cancelled", errorCode: "legacy_disposition_repair_suppressed",
+    scheduledRetryAttempt: 2, resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } } };
+  expect(legacyExecutionNeedsReconciliation(suppressed)).toBe(false);
+  // Without the gate's evidence a missing PID alone proves nothing.
+  expect(legacyExecutionNeedsReconciliation({ ...suppressed, resultJson: {} })).toBe(true);
+  expect(legacyExecutionNeedsReconciliation({ ...suppressed, resultJson: {
+    executionRecovery: { kind: "bootstrap", providerWorkStarted: true },
+  } })).toBe(true);
+  expect(legacyExecutionNeedsReconciliation({ ...suppressed, status: "failed" })).toBe(true);
+  expect(legacyExecutionNeedsReconciliation({ ...suppressed, errorCode: "cancelled" })).toBe(true);
+  expect(legacyExecutionNeedsReconciliation({ ...suppressed, resultJson: {
+    ...suppressed.resultJson, workspaceRestoreFailure: "restore_unsafe_archive",
+  } })).toBe(true);
+});

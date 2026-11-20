@@ -28,6 +28,7 @@ import { isSupersededConversationRun } from "./agent-conversations.js";
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
 import { readSystemRecovery } from "./system-recovery-state.js";
+import { settleSuppressedDispositionRepairHolds } from "./legacy-execution-recovery.js";
 
 /** An operator records observed outcomes; this is not permission to blindly retry. */
 export async function validateExecutionReconciliation(input: {
@@ -417,6 +418,13 @@ export async function settleUnrecoverableExecutions(
   now = new Date(),
   options: { failpoint?: (phase: "persisted") => void } = {},
 ) {
+  // Runs before the disposition below so an active hold from a suppressed
+  // repair is released as a false positive instead of being settled as blocked.
+  try {
+    await settleSuppressedDispositionRepairHolds(db);
+  } catch (err) {
+    logger.warn({ err }, "Suppressed disposition repair holds remain pending");
+  }
   // Fold obsolete conversation holds without waking historical work on upgrade.
   // Keep their evidence and record the policy change in the task's activity log.
   const obsoleteConversationHold = obsoleteExecutionConversationHold();
