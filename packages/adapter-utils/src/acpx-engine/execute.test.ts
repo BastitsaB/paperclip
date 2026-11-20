@@ -32,8 +32,11 @@ import {
   createAcpxEngineExecutor,
   findAncestorBin,
   geminiVersionSupportsNativeAcpFlag,
+  isMcpToolTitle,
   parseGeminiVersionParts,
   referencedSourceContentSignature,
+  resolveSilentTurnTimeoutMs,
+  resolveStalledMcpToolTimeoutMs,
   resolveStalledToolTimeoutMs,
   rewriteGeminiAcpFlagForVersion,
   summarizeAcpStopActivity,
@@ -43,6 +46,8 @@ import {
 import {
   ACPX_CLAUDE_MCP_TOOL_TIMEOUT_MS,
   ACPX_HANDSHAKE_TIMEOUT_MS,
+  ACPX_SILENT_TURN_TIMEOUT_MS,
+  ACPX_STALLED_MCP_TOOL_TIMEOUT_MS,
   ACPX_STALLED_TOOL_MARGIN_MS,
   ACPX_STALLED_TOOL_TIMEOUT_MS,
 } from "./constants.js";
@@ -3897,6 +3902,147 @@ describe("ACP activity diagnostics", () => {
     expect(result.timedOut).toBe(true);
     expect(result.errorCode).toBe("acpx_timeout");
   }, 15_000);
+
+  // Drives one turn whose events stop after `events`, then advances the clock
+  // by `silenceMs` and waits for the host to cancel or time out the turn.
+  async function runSilentTurn(input: {
+    runId: string;
+    events: Array<Record<string, unknown>>;
+    silenceMs: number;
+    deps?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+  }) {
+    const root = await makeTempRoot();
+    const cwd = path.join(root, "worktree");
+    await fs.mkdir(cwd, { recursive: true });
+    let currentNow = 1000;
+    let releaseTurn: (() => void) | null = null;
+    const turnCancelled = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    const cancelReasons: Array<string | undefined> = [];
+    const logs: string[] = [];
+    const execute = createAcpxEngineExecutor({
+      now: () => currentNow,
+      stalledToolCheckIntervalMs: 5,
+      ...input.deps,
+      createRuntime: () => ({
+        ...buildRuntime(),
+        startTurn: () => ({
+          events: (async function* () {
+            for (const event of input.events) yield event;
+            currentNow += input.silenceMs;
+            await turnCancelled;
+          })(),
+          result: turnCancelled.then(() => ({ status: "cancelled", stopReason: "cancelled" })),
+          cancel: async ({ reason }: { reason?: string }) => {
+            cancelReasons.push(reason);
+            releaseTurn?.();
+          },
+        }),
+      }) as never,
+    });
+    const result = await execute({
+      runId: input.runId, agent: { id: "agent-1", companyId: "company-1" }, runtime: {},
+      config: {
+        agent: "codex", agentCommand: "node ./fake-acp.js", stateDir: path.join(root, "state"), cwd,
+        ...input.config,
+      },
+      context: {}, onMeta: async () => {}, onLog: async (_stream: string, text: string) => { logs.push(text); },
+    } as never);
+    return { result, cancelReasons, logs };
+  }
+
+  it("ends a turn as a failure when its model stream goes silent with no pending tool call", async () => {
+    const { result, cancelReasons, logs } = await runSilentTurn({
+      runId: "silent-turn",
+      // The stream stops mid-sentence; an earlier tool call already finished.
+      events: [
+        { type: "tool_call", toolCallId: "call-1", title: "mcp.linear:list-issues", status: "in_progress" },
+        { type: "tool_call", tag: "tool_call_update", toolCallId: "call-1", status: "completed" },
+        { type: "text_delta", text: "Die Listenbeschreibungen", stream: "output" },
+      ],
+      silenceMs: 6000,
+      deps: { silentTurnTimeoutMs: 5000 },
+    });
+    expect(cancelReasons).toEqual(["paperclip silent turn watchdog"]);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("acpx_turn_silent");
+    expect(result.errorMessage).toContain("no pending tool call");
+    expect(result.resultJson).toMatchObject({ status: "failed", acpSilentTurnMs: 6000, acpPendingToolCount: 0 });
+    expect(result.resultJson).not.toHaveProperty("acpStalledToolKind");
+    expect(logs.join("")).toContain("[paperclip] The turn emitted no event and had no pending tool call for 6s; ending the turn.");
+  }, 15_000);
+
+  it("ends a Codex turn whose MCP call hangs, without the general stalled-tool bound", async () => {
+    const { result, cancelReasons } = await runSilentTurn({
+      runId: "stalled-mcp-tool",
+      // A usage update after the call starts must not count as tool progress.
+      events: [
+        { type: "tool_call", toolCallId: "private-mcp", title: "mcp.private-linear:get-issue", kind: "other", status: "in_progress" },
+        { type: "tool_call", tag: "tool_call_update", toolCallId: "private-mcp", title: "tool call", status: "in_progress" },
+        { type: "status", text: "usage updated: 1/2", tag: "usage_update", used: 1, size: 2 },
+      ],
+      silenceMs: 6000,
+      deps: { stalledMcpToolTimeoutMs: 5000, silentTurnTimeoutMs: 1000 },
+    });
+    // The pending MCP call keeps the silent-turn check out of it.
+    expect(cancelReasons).toEqual(["paperclip stalled tool watchdog"]);
+    expect(result.errorCode).toBe("acpx_tool_stalled");
+    expect(result.resultJson).toMatchObject({ status: "failed", acpStalledToolKind: "other" });
+    expect(JSON.stringify(result.resultJson)).not.toContain("private");
+  }, 15_000);
+
+  it("leaves a Codex turn alone while a non-MCP tool call runs long without updates", async () => {
+    const { result, cancelReasons } = await runSilentTurn({
+      runId: "long-shell-tool",
+      events: [{ type: "tool_call", toolCallId: "build", title: "pnpm build", kind: "execute", status: "in_progress" }],
+      silenceMs: 10_000_000,
+      deps: { stalledMcpToolTimeoutMs: 5000, silentTurnTimeoutMs: 5000 },
+      config: { timeoutSec: 1 },
+    });
+    // Only the wall-clock timeout ended this turn.
+    expect(cancelReasons).toHaveLength(1);
+    expect(cancelReasons[0]).not.toMatch(/watchdog/);
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("acpx_timeout");
+  }, 15_000);
+
+  it("does not end a silent turn when the adapter config disables the silent-turn bound", async () => {
+    const { result, cancelReasons } = await runSilentTurn({
+      runId: "silent-turn-off",
+      events: [{ type: "text_delta", text: "…", stream: "output" }],
+      silenceMs: 10_000_000,
+      config: { silentTurnTimeoutSec: 0, timeoutSec: 1 },
+    });
+    expect(cancelReasons).toHaveLength(1);
+    expect(cancelReasons[0]).not.toMatch(/watchdog/);
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("acpx_timeout");
+  }, 15_000);
+});
+
+describe("silent-turn and MCP stall bounds", () => {
+  it("defaults the silent-turn bound and lets the adapter config override or disable it", () => {
+    expect(resolveSilentTurnTimeoutMs({})).toBe(ACPX_SILENT_TURN_TIMEOUT_MS);
+    expect(resolveSilentTurnTimeoutMs({ silentTurnTimeoutSec: 900 })).toBe(900_000);
+    expect(resolveSilentTurnTimeoutMs({ silentTurnTimeoutSec: 0 })).toBe(0);
+    expect(resolveSilentTurnTimeoutMs({ silentTurnTimeoutSec: "900" })).toBe(ACPX_SILENT_TURN_TIMEOUT_MS);
+  });
+
+  it("bounds MCP calls only where the general stalled-tool watchdog is off", () => {
+    expect(resolveStalledMcpToolTimeoutMs({}, 0)).toBe(ACPX_STALLED_MCP_TOOL_TIMEOUT_MS);
+    expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: 600 }, 0)).toBe(600_000);
+    expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: -1 }, 0)).toBe(0);
+    expect(resolveStalledMcpToolTimeoutMs({ stalledMcpToolTimeoutSec: 600 }, ACPX_STALLED_TOOL_TIMEOUT_MS)).toBe(0);
+  });
+
+  it("recognizes Codex and Claude MCP tool titles", () => {
+    expect(isMcpToolTitle("mcp.paperclip-assigned.mcp.app-gallery-linear:get-issue")).toBe(true);
+    expect(isMcpToolTitle("mcp__linear__get_issue")).toBe(true);
+    expect(isMcpToolTitle("tool call")).toBe(false);
+    expect(isMcpToolTitle("git show origin/develop:mcp.json")).toBe(false);
+    expect(isMcpToolTitle(undefined)).toBe(false);
+  });
 });
 
 describe("resolveStalledToolTimeoutMs", () => {
