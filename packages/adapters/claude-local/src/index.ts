@@ -87,6 +87,7 @@ ACP fields (only when engine="acp"):
 - nonInteractivePermissions (string, optional, default "deny"): fallback when the ACP agent asks for input outside an interactive session
 - warmHandleIdleMs (number, optional, default 0): keep the ACP process warm for this many ms after a successful run
 - stalledToolTimeoutSec (number, optional, default 1800): end the turn as failed ("acpx_tool_stalled") when a pending tool call gets no ACP update for this many seconds; 0 disables it. The default stays at least 15 minutes above MCP_TOOL_TIMEOUT and BASH_MAX_TIMEOUT_MS
+- silentTurnTimeoutSec (number, optional, default 1200): end the turn as failed ("acpx_turn_silent") after this many seconds without any ACP event and without a pending tool call; 0 disables it
 
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds

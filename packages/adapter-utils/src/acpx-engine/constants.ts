@@ -49,6 +49,17 @@ export const ACPX_STALLED_TOOL_TIMEOUT_MS = 30 * 60 * 1000;
 export const ACPX_STALLED_TOOL_MARGIN_MS = 15 * 60 * 1000;
 export const ACPX_STALLED_TOOL_CHECK_INTERVAL_MS = 60_000;
 export const ACPX_TOOL_STALLED_ERROR_CODE = "acpx_tool_stalled";
+// Non-Claude agents (Codex) have no host-known tool bounds, so the general
+// stalled-tool watchdog stays off for them: a long build or test command may
+// legitimately run without ACP updates. An MCP call is a request/response
+// round trip that ends in seconds; one that gets no update for this long is
+// hung (observed: Linear MCP calls holding Codex turns for up to 4h).
+export const ACPX_STALLED_MCP_TOOL_TIMEOUT_MS = 30 * 60 * 1000;
+// A turn with no ACP event at all and no pending tool call for this long has
+// a stalled model stream (observed: a Codex text stream stopping mid-sentence
+// for hours). Thought deltas and usage updates count as events.
+export const ACPX_SILENT_TURN_TIMEOUT_MS = 20 * 60 * 1000;
+export const ACPX_TURN_SILENT_ERROR_CODE = "acpx_turn_silent";
 
 // The closed ACP `ToolKind` enum. Run diagnostics may report these labels for
 // pending tool calls; tool titles, names, and inputs never leave the run.

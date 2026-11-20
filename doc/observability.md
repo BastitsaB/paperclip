@@ -1175,8 +1175,21 @@ same cancel and fail-fast deadline as a duplex channel loss. The run fails with
 watchdog fired. A live subagent's Task call keeps receiving heartbeats, so only
 a call that itself went silent trips the watchdog. A background subagent's Task
 call completes when the subagent starts, so the watchdog watches that subagent's
-own tool calls instead. Other ACP agents are watched only when
-`stalledToolTimeoutSec` is set.
+own tool calls instead. Other ACP agents get the general watchdog only when
+`stalledToolTimeoutSec` is set. Without it, only their pending MCP calls (tool
+title `mcp.<server>:<tool>` or `mcp__<server>__<tool>`) are bounded, after 30
+minutes (`stalledMcpToolTimeoutSec`; 0 disables it, and an explicit
+`stalledToolTimeoutSec`, including 0, replaces it): Codex reports shell commands
+and MCP calls with the same kind, and a build may legitimately run long without
+updates. Such a stop also fails with `acpx_tool_stalled` and records
+`acpStalledToolMcp: true`.
+
+Every ACP turn also ends when it emits no ACP event at all and has no pending
+tool call for 20 minutes (`silentTurnTimeoutSec`; 0 disables it), through the
+same cancel and fail-fast deadline. Thought deltas and usage updates count as
+events. A turn whose tool inventory is incomplete is left to the other bounds.
+The run fails with `acpx_turn_silent` and records `acpSilentTurnMs`. Conversation
+adapters retry it as a continued conversation, without a reconciliation hold.
 
 The engine also observes ACP permission requests without deciding them; ACPX's
 permission mode still decides each one. A stalled run records

@@ -472,6 +472,13 @@ describe("run failure diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("private");
   });
 
+  it("includes the silent-turn time and whether the stalled call was an MCP call", () => {
+    const result = sanitizeRunFailureDiagnostics(collectRunFailureDiagnostics(run({ resultJson: {
+      acpSilentTurnMs: 1_200_000, acpStalledToolMcp: true,
+    } }), {}));
+    expect(result.execution).toEqual({ acpSilentTurnMs: 1_200_000, acpStalledToolMcp: true });
+  });
+
   it.each(["other,execute", "private lookup", "", "Other", ["other"], 1])(
     "omits a stalled tool kind that is not one closed label (%j)", (value) => {
       const result = collectRunFailureDiagnostics(run({ resultJson: { acpStalledToolKind: value } }), {});
@@ -493,7 +500,7 @@ describe("run failure diagnostics", () => {
         acpToolInventoryComplete: value, acpLastEventAgeAtStopMs: value, acpOldestPendingToolAgeAtStopMs: value,
         acpStalledToolSilentMs: value, acpStalledToolPermissionRequested: value,
         acpPendingToolPermissionRequestedCount: value, acpSettledSameKindToolCount: value,
-        acpSettledSameKindToolPermissionRequestedCount: value,
+        acpSettledSameKindToolPermissionRequestedCount: value, acpSilentTurnMs: value, acpStalledToolMcp: value,
       } }), {});
       expect(result.execution).toEqual({});
     },
